@@ -5,7 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 
-# 토픽 명세가 확정되면 msg/*.msg를 추가하고 아래 주석을 푼다
+# 토픽 명세 확정 후 msg/*.msg 추가, 아래 주석 해제
 # rosidl_generate_interfaces(${PROJECT_NAME}
 #   "msg/LaneInfo.msg"
 #   DEPENDENCIES std_msgs
