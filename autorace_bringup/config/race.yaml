@@ -1,0 +1,15 @@
+# 최상위 키는 노드 이름과 정확히 같아야 한다 (다르면 파라미터가 조용히 무시됨)
+camera_node:
+  ros__parameters: {}
+
+lidar_node:
+  ros__parameters: {}
+
+estop_node:
+  ros__parameters: {}
+
+decision_node:
+  ros__parameters: {}
+
+control_node:
+  ros__parameters: {}
