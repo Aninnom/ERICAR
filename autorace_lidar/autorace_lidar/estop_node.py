@@ -1,6 +1,15 @@
+  # autorace_bringup/config/race.yaml 에다가 파라미터 넣기...
+  # estop_node:
+  #   ros__parameters:
+  #     stop_dist: 0.35
+  #     release_dist: 0.50
+  #     half_width: 0.20
+
+
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
@@ -48,7 +57,8 @@ class EstopNode(Node):
         self._last_reason = ''
 
         self._pub = self.create_publisher(Bool, estop_topic, 10)
-        self.create_subscription(LaserScan, scan_topic, self._on_scan, 10)
+        self.create_subscription(
+            LaserScan, scan_topic, self._on_scan, qos_profile_sensor_data)
         self.create_timer(1.0 / rate, self._publish_state)
 
         self.get_logger().info(
