@@ -4,15 +4,18 @@
 
 ## 1. 소프트웨어 확인
 
-- [ ] OS·ROS 버전: `lsb_release -a`, `echo $ROS_DISTRO` (예상: 22.04, humble)
-- [ ] 차체 모드 Ackermann 여부 (전면 LED 초록)
-- [ ] `ros2 launch wego teleop_launch.py` 후 `ros2 topic list`에 `/limo/ack_cmd` 존재 여부
-  - 없으면 통합 런치가 Differential 드라이버 실행 중 → `limo_base_ackerman.launch.py` 확인
-- [ ] `/scan`, `/camera/color/image_raw`, `/odom`, `/odometry/filtered` 발행 여부
+10/12 수령 당일 점검 완료 항목은 [x] 표시. 결과는 아래 "수령 당일 확인 결과" 참고
+
+- [x] OS·ROS 버전: Ubuntu 22.04.5, ROS 2 Humble
+- [x] 차체 모드 Ackermann (전면 걸쇠 긴 선 앞쪽, LED 초록)
+- [x] Ackermann 드라이버로 `/limo/ack_cmd` 확인 (`teleop_launch.py`는 Differential 드라이버라 사용 금지)
+- [x] `/scan` 10 Hz, `/camera/color/image_raw` 약 28 Hz, `/odom` 50 Hz
+- [ ] `/odometry/filtered` (EKF) 발행 여부와 입력 odom 토픽 확인
+- [ ] 시스템 시계 동기화 (수령 당시 Jan 1, 와이파이 연결 후 확인)
 
 ## 2. 하드웨어 보정
 
-- [ ] 조종기 SWB 상단(자동 모드)에서 직진 명령 → 휘면 앱에서 조향 영점 보정
+- [ ] 조향 영점 보정 (수령 당일 출발 시 앞바퀴 왼쪽 쏠림 확인) → 앱 Calibration 후 아래 명령으로 직진 확인
   ```bash
   ros2 topic pub -r 10 /limo/ack_cmd ackermann_msgs/msg/AckermannDrive "{steering_angle: 0.0, speed: 0.2}"
   ```
@@ -31,6 +34,15 @@
 
 - [ ] 위고 예제 그대로 실행 (`limo_ros2_application track_application_launch.py`)
 - [ ] 트랙 한 바퀴 rosbag 녹화 (카메라, 라이다, odom)
+
+## 수령 당일 확인 결과 (10/12, 02번 LM-003702)
+
+- 구성품 전부, 외관 이상 없음, 배터리 12.7 V, error_code 0
+- 상판 "Renewed Used-Bad" 메모 → 현장 문의 결과 문제없음, 반납 때까지 유지
+- 조종기 주행(4륜, 조향, 회전, 후진) 정상, 소음 거의 없음
+- `/limo/ack_cmd` 명령으로 전진·후진·조향 정상, steering_angle + = 왼쪽, 명령 끊기면 정지
+- 드라이버 실행: `ros2 launch limo_base limo_base_ackerman.launch.py`
+- 원격 접속: 휴대폰 핫스팟에 차·노트북 연결 후 `ssh wego@<차 IP>`, 터미널 환경 선택은 1(Global)
 
 ## 5. 우리 코드
 

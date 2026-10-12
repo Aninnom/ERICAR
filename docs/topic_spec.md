@@ -27,12 +27,15 @@
 |---|---|---|---|
 | `/camera/color/image_raw` | 드라이버 → camera_node | `sensor_msgs/Image` | 제공 |
 | `/scan` | 드라이버 → lidar_node, estop_node | `sensor_msgs/LaserScan` | 제공, QoS Best Effort |
-| `/odom` | 드라이버 → decision_node, control_node | `nav_msgs/Odometry` | 제공 |
+| `/odom` | 드라이버 → decision_node, control_node | `nav_msgs/Odometry` | 제공, 50 Hz (Ackermann 드라이버 기준 실측) |
+| `/limo_status` | 드라이버 → (필요한 노드) | `limo_msgs/LimoStatus` | 제공, motion_mode·battery_voltage·error_code |
 | (회의 결정) | camera_node → decision_node | | |
 | (회의 결정) | lidar_node → decision_node | | |
 | (회의 결정) | estop_node → control_node | | |
 | (회의 결정) | decision_node → control_node | | |
-| `/limo/ack_cmd` | control_node → 드라이버 | `ackermann_msgs/AckermannDrive` | speed m/s, steering_angle rad (약 ±0.42) |
+| `/limo/ack_cmd` | control_node → 드라이버 | `ackermann_msgs/AckermannDrive` | speed m/s, steering_angle rad (약 ±0.42, + = 왼쪽, 실차 확인) |
+
+드라이버는 `limo_base_ackerman.launch.py` 기준 (`wego teleop_launch.py`의 기본 드라이버는 Differential용이라 Ackermann에서 오도메트리 미계산)
 
 ## 미정 사항
 
