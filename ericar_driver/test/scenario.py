@@ -5,6 +5,7 @@
 차량은 발행된 명령으로 자전거 모델 적분. 결과는 발행 메시지 기록.
 
 실행: python3 test/scenario.py --write   (기준값 갱신)
+노면 표시 색은 params.py 차선 색 범위 중앙값 → 차선 색 변경 PR은 기준값 갱신 필요
 """
 import hashlib
 import json
@@ -31,8 +32,17 @@ STOP_LINES = [3.0, 7.0, 13.0, 18.0]  # 보행자, (갈림길 구간 통과용), 
 OBSTACLE = (10.0, 10.3)  # 차로 중앙 정적 장애물 구간 s (차선 변경 경로 실행용)
 
 
-def render(camera, s, y, psi, curve):
-    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 흰색"""
+def paint_bgr():
+    """노면 표시 색: params.py 차선 색 범위(HSV)의 중앙값. 차선 색 설정이 바뀌어도 시험 장면이 따라감"""
+    import cv2
+    from ericar_driver.params import ANSWER_CONFIG
+    lane = ANSWER_CONFIG['lane']
+    hsv = [(a + b) // 2 for a, b in zip(lane['white_min'], lane['white_max'])]
+    return cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2BGR)[0, 0]
+
+
+def render(camera, s, y, psi, curve, paint):
+    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 색칠"""
     v, u = np.indices((H, W), dtype=np.float64)
     focal = W / (2 * math.tan(math.radians(camera['hfov_deg']) / 2))
     p, z, cx = camera['pitch'], camera['z'], camera['x']
@@ -53,7 +63,7 @@ def render(camera, s, y, psi, curve):
         white |= (ws >= line) & (ws < line + 0.03) & (np.abs(wl) < LANE_LINES[-1])
     white &= np.isfinite(forward) & (forward < 4.0)
     image = np.full((H, W, 3), 60, np.uint8)
-    image[white] = 235
+    image[white] = paint
     return image
 
 
@@ -104,11 +114,12 @@ def run(config_path):
         config = yaml.safe_load(open(config_path))
         camera, wheelbase = config['robot']['camera'], config['robot']['wheelbase']
         steps = int(DURATION / DT)
+        paint = paint_bgr()
         for k in range(steps):
             t = k * DT
             fake_ros.Clock.now_s = 100.0 + t
             stamp = fake_ros.Header(100.0 + t)
-            image = render(camera, sim['s'], sim['y'], sim['psi'], curve)
+            image = render(camera, sim['s'], sim['y'], sim['psi'], curve, paint)
             node.subscriptions[config['topics']['image']](fake_ros.Msg(header=stamp, array=image))
             if k % 2 == 0:
                 n, amin, inc, ranges = scan_ranges(sim['s'], sim['y'])

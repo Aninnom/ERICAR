@@ -31,7 +31,7 @@
 python3 ericar_driver/test/test_regression.py
 ```
 
-numpy, opencv, pyyaml 필요. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록.
+numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록.
 
 ## 원본 대비 실차 수정
 
