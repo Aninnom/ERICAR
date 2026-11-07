@@ -39,14 +39,23 @@ def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, confi
     """Validate scan data and expose measured local obstacle clusters."""
     values = np.asarray(ranges, dtype=float)
     angles = angle_min + np.arange(len(values)) * angle_increment
+    if config.get('zero_is_no_return', False):
+        # 실차 YDLidar는 반사가 없는 방향을 inf가 아니라 0으로 보낸다(한 프레임의 50~60%).
+        # 그대로 두면 valid_fraction<0.5, front=0이 되어 속도가 항상 0으로 묶이므로 inf와 같게 취급한다.
+        # 주의: 최소 측정거리보다 가까운 물체도 0으로 올 수 있다.
+        values = np.where(values == 0.0, np.inf, values)
     # Positive infinity is a valid no-return. NaN/negative/zero is unknown and unsafe.
     clean = np.where(np.isposinf(values), range_max, values)
     valid = np.isfinite(clean) & (clean >= range_min)
     clean = np.where(valid, np.minimum(clean, range_max), 0.0)
     def minimum(center, half):
         delta = np.arctan2(np.sin(angles - center), np.cos(angles - center))
-        sector = clean[np.abs(delta) < half]
-        return float(np.min(sector)) if len(sector) else 0.0
+        in_sector = np.abs(delta) < half
+        sector = clean[in_sector & valid]
+        # 무효 점이 절반 이상인 구간은 안전하게 0(막힘)으로 본다.
+        if len(sector) and np.mean(valid[in_sector]) >= .5:
+            return float(np.min(sector))
+        return 0.0
     front = minimum(0.0, config['front_half_angle'])
     rear = minimum(math.pi, config['front_half_angle'])
     hits = valid & (clean < min(range_max, config.get('planning_point_range', 3.0)))

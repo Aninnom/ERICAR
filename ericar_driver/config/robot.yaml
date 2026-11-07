@@ -33,3 +33,4 @@ robot:
     z: 0.16  # 실측 필요
     range_min: 0.06
     range_max: 12.0
+    zero_is_no_return: true  # YDLidar는 무반사를 0으로 보냄(프레임의 50~60%). false면 0을 막힘으로 보고 정지
