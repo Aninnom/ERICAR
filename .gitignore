@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .vscode/
 .DS_Store
+
+# 모델 가중치
+*.pt
