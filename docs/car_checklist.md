@@ -47,4 +47,4 @@
 ## 5. 우리 코드
 
 - [ ] `~/autorace_ws/src`에 레포 clone, 차량에서 직접 빌드
-- [ ] `wego_ws` source → `autorace_ws` source 순서로 실행
+- [ ] `wego_ws` source → `autorace_ws` source 순서로 실행 (빌드·실행은 루트 README)
