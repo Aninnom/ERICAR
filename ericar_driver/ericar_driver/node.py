@@ -19,28 +19,28 @@ def main(config_path=None):
     # Keep ROS imports here so pure perception/control tests run without ROS installed.
     import rclpy
     from rclpy.node import Node
-    from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.signals import SignalHandlerOptions
-    from ackermann_msgs.msg import AckermannDriveStamped
+    from ackermann_msgs.msg import AckermannDrive
     from sensor_msgs.msg import Image, LaserScan
     from nav_msgs.msg import Odometry
     from std_msgs.msg import String
     from cv_bridge import CvBridge
+    from ament_index_python.packages import get_package_share_directory
 
+    # 인자: [설정 yaml] [모델 .pt]. 생략 시 패키지 config/robot.yaml, ~/models/best.pt
+    args = sys.argv[1:sys.argv.index('--ros-args')] if '--ros-args' in sys.argv else sys.argv[1:]
     if config_path is None:
-        if len(sys.argv) != 2:
-            raise SystemExit('사용법: scripts/answer.sh configs/config.yaml')
-        config_path = sys.argv[1]
-    path = Path(config_path).resolve()
+        config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
+    path = Path(config_path).expanduser().resolve()
     config = yaml.safe_load(path.read_text())
     config['answer'] = ANSWER_CONFIG
     c = config['answer']
     detector = None
     if c['detector']['enabled']:
-        weights = Path(__file__).with_name('best.pt')
+        weights = Path(args[1] if len(args) > 1 else '~/models/best.pt').expanduser()
         if not weights.is_file():
-            raise SystemExit(f'YOLO 모델이 없습니다: {weights}\nanswer.py 옆에 best.pt 파일을 넣으세요.')
+            raise SystemExit(f'YOLO 모델이 없습니다: {weights}\n두 번째 인자로 경로를 주거나 ~/models/best.pt에 두세요.')
         from ultralytics import YOLO
         detector = YOLO(str(weights))
         import torch
@@ -49,11 +49,12 @@ def main(config_path=None):
         detector.add_callback('on_predict_start', lambda _: torch.set_num_threads(threads))
         expected = set(YOLO_CLASSES)
         if set(detector.names.values()) != expected:
-            raise SystemExit('모델의 클래스 이름은 answer.py의 YOLO_CLASSES 8종과 같아야 합니다. best.pt를 확인하세요.')
+            raise SystemExit(f'모델 클래스 {sorted(detector.names.values())}가 params.py의 YOLO_CLASSES 8종과 다름')
 
     class AnswerNode(Node):
         def __init__(self):
-            super().__init__('orda_answer', parameter_overrides=[Parameter('use_sim_time', value=True)])
+            # 실차: 시스템 시계 사용 (시뮬 원본은 use_sim_time 고정)
+            super().__init__('ericar_driver')
             self.bridge = CvBridge()
             self.driver = Driver(config)
             self.vision = LaneVision(c['lane'], config['robot']['camera'], config['robot']['front_axle_x'])
@@ -73,7 +74,8 @@ def main(config_path=None):
             self.stop_event = threading.Event()
             self.last_state = ''
             topics = config['topics']
-            self.publisher = self.create_publisher(AckermannDriveStamped, topics['drive'], 10)
+            # 실차 드라이버는 /limo/ack_cmd의 AckermannDrive만 수신 (시뮬은 /drive, Stamped)
+            self.publisher = self.create_publisher(AckermannDrive, topics['drive'], 10)
             self.status = self.create_publisher(String, topics.get('status', '/answer/status'), 10)
             self.debug = self.create_publisher(Image, topics.get('debug_image', '/answer/debug_image'), qos_profile_sensor_data)
             self.debug_stamp = -1e9
@@ -146,11 +148,11 @@ def main(config_path=None):
                 self.stop_event.wait(1.0 / c['detector']['rate_hz'])
 
         def publish(self, speed, steering):
-            message = AckermannDriveStamped()
-            message.header.stamp = self.get_clock().now().to_msg()
-            message.header.frame_id = 'base_link'
-            message.drive.speed = float(speed)
-            message.drive.steering_angle = float(steering)
+            # 최종 한계 적용: 주차 시간표 등 개별 제어기가 실차 한계를 넘는 경우 방지
+            robot = config['robot']
+            message = AckermannDrive()
+            message.speed = float(clip(speed, -robot['max_speed'], robot['max_speed']))
+            message.steering_angle = float(clip(steering, -robot['max_steering'], robot['max_steering']))
             self.publisher.publish(message)
 
         def control(self):

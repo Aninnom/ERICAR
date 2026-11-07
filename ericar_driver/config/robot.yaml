@@ -1,0 +1,35 @@
+# 실차 설정. 주행 파라미터는 ericar_driver/params.py
+# 값 출처: 멘토 시뮬 config.yaml의 robot 블록. "실측 필요" 표시는 시뮬 값 그대로라 실차 측정 후 교체
+
+environment:
+  cpu_threads: 2
+
+topics:
+  image: /camera/color/image_raw
+  scan: /scan
+  odometry: /odom
+  drive: /limo/ack_cmd
+  debug_image: /answer/debug_image
+  detections: /answer/detections
+  status: /answer/status
+
+robot:
+  name: limo
+  wheelbase: 0.2  # 제조사 표기 200 mm
+  width: 0.22  # 실측 필요
+  length: 0.322  # 실측 필요
+  max_speed: 0.6
+  max_steering: 0.42  # 실차 한계 약 ±0.42 rad (시뮬 0.52)
+  front_axle_x: 0.2  # base_link(뒷바퀴 축) → 앞바퀴 축
+  camera:
+    hfov_deg: 71.0  # 규정집 FOV 약 71°
+    x: 0.23  # 실측 필요
+    y: 0.0
+    z: 0.23  # 실측 필요, 차선 BEV 변환에 직접 영향
+    pitch: 0.2  # 실측 필요 (rad, 아래쪽 +), 차선 BEV 변환에 직접 영향
+  lidar:
+    x: 0.1  # 실측 필요
+    y: 0.0
+    z: 0.16  # 실측 필요
+    range_min: 0.06
+    range_max: 12.0
