@@ -16,20 +16,17 @@ ANSWER_CONFIG = {
         'shutdown_timeout': 5.0,
     },
     'lane': {
-        'white_min': [0, 0, 165], 'white_max': [179, 85, 255], 'view_width': 2.4, 'near': 0.2,
-        'far': 1.7, 'width_px': 480, 'height_px': 420, 'lane_width': 0.55, 'windows': 12, 'margin': 0.17,
-        'minimum_pixels': 25, 'lookahead': 0.65, 'lost_grace': 1.2,
-        'smoothing': 0.55, 'stop_min_width': 0.32, 'stop_max_thickness': 0.13,
-        'component_min_height': 0.24, 'fit_min_span': 0.16, 'abnormal_fit_residual': 0.035,
-        'histogram_band_height': 0.12, 'max_missing_windows': 1, 'dash_min_height': 0.12,
-        'dash_max_aspect': 0.25, 'dash_heading_max_angle': 1.2, 'dash_heading_length_cap': 0.3,
-        'dash_heading_angle_tolerance': 0.1, 'dash_heading_min_components': 2,
-        'dash_heading_support_ratio': 0.6, 'identity_gate': 0.45, 'histogram_smooth_pixels': 9,
-        'minimum_peak': 4, 'max_peaks': 8, 'peak_suppression_ratio': 0.75, 'target_history_weight': 0.35,
-        'pair_width_min_ratio': 0.7, 'pair_width_max_ratio': 1.75, 'pair_width_weight': 0.3,
-        'fit_minimum_windows': 3, 'solid_row_fraction': 0.85, 'fit_samples': 50,
-        'stop_lane_width_ratio': 0.38, 'stop_row_coverage': 0.7, 'stop_edge_margin_pixels': 2,
-        'closed_hole_min_area': 0.003,
+        # [실차] 트랙 차선 색에 맞게. 흰색: [0,0,165]~[179,85,255] / 노란색 예시: [15,80,100]~[35,255,255]
+        'white_min': [0, 0, 165], 'white_max': [179, 85, 255],
+        # 버드아이뷰 범위(m): 좌우 폭, 차 앞 가까운 끝·먼 끝, 픽셀 크기
+        'view_width': 2.4, 'near': 0.2, 'far': 1.7, 'width_px': 480, 'height_px': 420,
+        'lane_width': 0.55,          # [실차] 트랙 차로 폭 실측(m)
+        'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
+        'lookahead': 0.65,           # 차 앞 몇 m 지점의 차로 중앙을 목표로 할지
+        'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지
+        'smoothing': 0.55,           # 1에 가까울수록 이번 프레임을 더 믿음
+        'stop_min_width': 0.32, 'stop_max_thickness': 0.13,   # 정지선 최소 길이·최대 두께(m)
+        'abnormal_fit_residual': 0.035, 'solid_row_fraction': 0.85,
     },
     'pid': {
         'kp': 1.3, 'ki': 0.03, 'kd': 0.11, 'integral_limit': 0.25, 'derivative_alpha': 0.25,
