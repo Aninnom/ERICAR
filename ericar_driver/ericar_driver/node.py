@@ -36,6 +36,8 @@ def main(config_path=None):
     config = yaml.safe_load(path.read_text())
     config['answer'] = ANSWER_CONFIG
     c = config['answer']
+    # 실차 라이다(0 = 무반사) 대응. robot.yaml의 robot.lidar.zero_is_no_return, 없으면 기존 동작.
+    c['lidar']['zero_is_no_return'] = bool(config['robot']['lidar'].get('zero_is_no_return', False))
     detector = None
     if c['detector']['enabled']:
         weights = Path(args[1] if len(args) > 1 else '~/models/best.pt').expanduser()
