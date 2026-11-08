@@ -134,9 +134,11 @@ class DriverNode(Node):
 
     def publish(self, speed, steering):
         # 최종 한계 적용: 주차 시간표 등 개별 제어기가 실차 한계를 넘는 경우 방지
+        # 조향 영점 보정은 판단 결과(조향 0 = 직진)에 더한 뒤 한계 적용
         robot = self.config['robot']
         message = AckermannDrive()
         message.speed = float(clip(speed, -robot['max_speed'], robot['max_speed']))
+        steering += robot.get('steering_offset', 0.0)
         message.steering_angle = float(clip(steering, -robot['max_steering'], robot['max_steering']))
         self.publisher.publish(message)
 

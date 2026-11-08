@@ -163,7 +163,13 @@ def run(config_path):
     params.ANSWER_CONFIG['detector']['enabled'] = False
     from ericar_driver import node as node_module
     sys.argv = [sys.argv[0]]
-    node_module.main(config_path=str(HERE.parent / 'config' / 'robot.yaml'))
+    # 차량별 조향 영점 보정은 판단 로직과 무관 → 시험은 보정 0 (합성 차량은 쏠림 없음)
+    import tempfile
+    config = yaml.safe_load(open(config_path))
+    config['robot']['steering_offset'] = 0.0
+    with tempfile.NamedTemporaryFile('w', suffix='.yaml', delete=False) as f:
+        yaml.safe_dump(config, f, allow_unicode=True)
+    node_module.main(config_path=f.name)
     return records
 
 
