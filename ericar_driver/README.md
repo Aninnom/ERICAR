@@ -23,6 +23,19 @@
 
 지그재그(서행 유도선)·보행자·신호등·서행·갈림길은 `driver.py`와 `lane_vision.py` 안에 있음.
 
+## 실차 개발 도구 (`tools/`)
+
+| 도구 | 용도 | 실행 (차, 터미널 환경 1) |
+|---|---|---|
+| `calibrate_camera.py` | 카메라 높이·기울기 보정 (직선 차로 사진), 줄자로 정지선 거리 검증 | `python3 tools/calibrate_camera.py --capture 5` / `--capture 3 --verify 0.30` |
+| `debug_view.py` | 카메라 + BEV 차선 마스크·곡선 + 상태·제어값을 브라우저로 | `python3 tools/debug_view.py` → `http://<차 IP>:8080` |
+
+차선만 시험할 때는 YOLO 없이 실행 (표지판 미션 비활성, 모델 불필요)
+
+```bash
+ros2 launch ericar_driver driver.launch.py yolo:=false
+```
+
 ## 회귀 시험 (맥·차, ROS 불필요)
 
 공통 파일 수정 후 동작이 바뀌지 않았는지 확인. 도면 치수로 합성한 3차로 영상·라이다·표지판으로 보행자 → 차선 변경 → 신호등 → 주차까지 노드 전체 실행 후 기준값과 비교 (약 15초)
