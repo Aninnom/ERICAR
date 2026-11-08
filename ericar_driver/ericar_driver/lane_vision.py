@@ -94,7 +94,7 @@ class LaneVision:
             # 실선이면 위아래로 끊김이 거의 없음 → 차선 변경 금지 판단에 사용
             solid[side] = len(np.unique(py)) / (np.ptp(py) + 1) > c['solid_row_fraction']
 
-        result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
+        result = dict(valid=False, error=0.0, heading=0.0, curvature=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
                       mask=bird, lane_mask=lane_mask, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
@@ -114,10 +114,15 @@ class LaneVision:
             center = float(np.mean(centers))
             if self.previous_center is not None:
                 center = c['smoothing'] * center + (1 - c['smoothing']) * self.previous_center
-            self.previous_center = center
+            # 두 선을 모두 찾았을 때만 기억. 한 선만이면 좌우 판단이 틀릴 수 있고, 틀린 중심을 기억하면
+            # 다음 시작점 탐색이 그 자리에 고정되어 계속 한 선만 잡힘 (11/8 실차: 오차 +0.55 m 고정)
+            self.previous_center = center if len(fits) == 2 else None
             # 차로 방향(rad, + 왼쪽): 전방 1m 갈 때 차선이 좌우로 얼마나 움직이는지
             heading = math.atan(float(np.mean(slopes)) / scale / dy)
-            result.update(valid=True, error=(w / 2 - center) / scale, heading=heading,
+            # 곡률(1/m, + 왼쪽): 2차식 x = a·행² + ... 의 a는 곡선 전체에서 부호 일정 →
+            # heading(가까운 끝 기울기)과 달리 "가까이 직선, 멀리 휨"에서도 휘는 방향이 뒤집히지 않음
+            curvature = float(np.mean([-2 * f[0] / dy ** 2 / scale for f in fits.values()]))
+            result.update(valid=True, error=(w / 2 - center) / scale, heading=heading, curvature=curvature,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
                           center_px=center, forward=c['lookahead'])
 

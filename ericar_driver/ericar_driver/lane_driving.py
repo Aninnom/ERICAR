@@ -11,6 +11,7 @@ class LaneDriving:
         self.c, self.robot = config, robot
         self.pid = PID(config['pid'])
         self.steering = 0.0
+        self.curvature = 0.0
         self.last_seen = -1e9
 
     def update(self, lane, now, dt, slow=False):
@@ -20,8 +21,11 @@ class LaneDriving:
             error = lane['error']
             distance = lane.get('forward', c['lane']['lookahead'])
             geometric = math.atan2(2*self.robot['wheelbase']*error, distance**2+error**2)
-            # 차로 방향 앞먹임: 카메라 시야가 짧아 코너 휨이 오차에 늦게 반영 → 방향(heading)으로 미리 조향
-            ahead = c['pid'].get('heading_gain', 0.0)*lane['heading']
+            # 곡률 앞먹임: 카메라 시야가 짧아 코너 휨이 오차에 늦게 반영 → 차선 곡률로 미리 조향
+            # 반지름 R 원호를 따라가는 조향 = atan(휠베이스/R) = atan(휠베이스·곡률)
+            a = c['pid'].get('curvature_smoothing', 0.5)
+            self.curvature = a*clip(lane.get('curvature', 0.0), -3.0, 3.0)+(1-a)*self.curvature
+            ahead = c['pid'].get('curvature_gain', 0.0)*math.atan(self.robot['wheelbase']*self.curvature)
             self.steering = clip(geometric+ahead+c['pid']['feedback_gain']*self.pid.update(error, dt),
                                  -self.robot['max_steering'], self.robot['max_steering'])
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*
