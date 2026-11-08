@@ -24,10 +24,17 @@ class LaneDriving:
             # 곡률 앞먹임: 카메라 시야가 짧아 코너 휨이 오차에 늦게 반영 → 차선 곡률로 미리 조향
             # 반지름 R 원호를 따라가는 조향 = atan(휠베이스/R) = atan(휠베이스·곡률)
             a = c['pid'].get('curvature_smoothing', 0.5)
-            self.curvature = a*clip(lane.get('curvature', 0.0), -3.0, 3.0)+(1-a)*self.curvature
+            k = c['pid'].get('max_curvature', 3.0)
+            self.curvature = a*clip(lane.get('curvature', 0.0), -k, k)+(1-a)*self.curvature
             ahead = c['pid'].get('curvature_gain', 0.0)*math.atan(self.robot['wheelbase']*self.curvature)
-            self.steering = clip(geometric+ahead+c['pid']['feedback_gain']*self.pid.update(error, dt),
-                                 -self.robot['max_steering'], self.robot['max_steering'])
+            if lane.get('pursuit'):
+                # 목표점이 차로 중앙선 위(lane_vision.pursuit_target) → pure pursuit만.
+                # 곡률 앞먹임·PID는 같은 정보를 중복 반영하므로 제외
+                self.pid.reset()
+                self.steering = clip(geometric, -self.robot['max_steering'], self.robot['max_steering'])
+            else:
+                self.steering = clip(geometric+ahead+c['pid']['feedback_gain']*self.pid.update(error, dt),
+                                     -self.robot['max_steering'], self.robot['max_steering'])
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*
                     abs(self.steering)/self.robot['max_steering']))
         if slow or lane['abnormal'] or not lane['valid']:
