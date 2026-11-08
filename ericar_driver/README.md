@@ -29,6 +29,9 @@
 |---|---|---|
 | `calibrate_camera.py` | 카메라 높이·기울기 보정 (직선 차로 사진), 줄자로 정지선 거리 검증 | `python3 tools/calibrate_camera.py --capture 5` / `--capture 3 --verify 0.30` |
 | `debug_view.py` | 카메라 + BEV 차선 마스크·곡선 + 상태·제어값을 브라우저로 | `bringup.launch.py`가 자동 실행. 단독: `python3 tools/debug_view.py` → `http://<차 IP>:8080` |
+| `bag_timeline.py` | 녹화 주행 구간 시계열 (거리·방향·조향·오차·검출 선) | `python3 tools/bag_timeline.py ~/bags/<이름>` |
+| `bag_frames.py` | 녹화 지정 시각 카메라 + BEV 창·곡선·목표점 한 장 | `python3 tools/bag_frames.py ~/bags/<이름> 29.0,30.6` → `/tmp/frames.jpg` |
+| `replay_bag.py` | 녹화 영상을 지금 코드에 다시 넣어 결과 CSV (수정 전후 비교) | `python3 tools/replay_bag.py ~/bags/<이름> > after.csv` |
 
 차선만 시험할 때는 YOLO 없이 실행 (표지판 미션 비활성, 모델 불필요)
 
