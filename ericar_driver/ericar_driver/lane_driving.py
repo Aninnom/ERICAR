@@ -20,7 +20,9 @@ class LaneDriving:
             error = lane['error']
             distance = lane.get('forward', c['lane']['lookahead'])
             geometric = math.atan2(2*self.robot['wheelbase']*error, distance**2+error**2)
-            self.steering = clip(geometric+c['pid']['feedback_gain']*self.pid.update(error, dt),
+            # 차로 방향 앞먹임: 카메라 시야가 짧아 코너 휨이 오차에 늦게 반영 → 방향(heading)으로 미리 조향
+            ahead = c['pid'].get('heading_gain', 0.0)*lane['heading']
+            self.steering = clip(geometric+ahead+c['pid']['feedback_gain']*self.pid.update(error, dt),
                                  -self.robot['max_steering'], self.robot['max_steering'])
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*
                     abs(self.steering)/self.robot['max_steering']))
