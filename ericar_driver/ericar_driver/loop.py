@@ -140,7 +140,7 @@ class ControlLoop:
         # Telemetry follows the actual published command, including safety stops.
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
-            keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
+            keys = ('valid', 'error', 'heading', 'curvature', 'center_px', 'forward', 'windows',
                     'fits', 'fit_spans', 'center_fit', 'fit_near', 'fit_far')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,

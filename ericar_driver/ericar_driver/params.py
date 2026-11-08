@@ -21,10 +21,10 @@ ANSWER_CONFIG = {
         # 수동 노출 300 기준 노란 선 H 19~39, S 중앙 138, V 중앙 68 → 어두워도 색상으로 구분. 트랙 바닥 H 110대
         'white_min': [18, 40, 50], 'white_max': [40, 255, 255],
         # 버드아이뷰 범위(m): 좌우 폭, 차 앞 가까운 끝·먼 끝, 픽셀 크기
-        'view_width': 2.4, 'near': 0.2, 'far': 1.7, 'width_px': 480, 'height_px': 420,
+        'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
         'lane_width': 0.55,          # [실차] 트랙 차로 폭 실측(m)
         'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
-        'lookahead': 0.65,           # 차 앞 몇 m 지점의 차로 중앙을 목표로 할지
+        'lookahead': 0.9,           # 차 앞 몇 m 지점의 차로 중앙을 목표로 할지
         'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지
         'smoothing': 0.55,           # 1에 가까울수록 이번 프레임을 더 믿음
         'stop_min_width': 0.32, 'stop_max_thickness': 0.13,   # 정지선 최소 길이·최대 두께(m)
@@ -33,7 +33,8 @@ ANSWER_CONFIG = {
     'pid': {
         'kp': 1.3, 'ki': 0.03, 'kd': 0.11, 'integral_limit': 0.25, 'derivative_alpha': 0.25,
         'feedback_gain': 0.35,
-        'heading_gain': 0.6,  # 차로 방향(rad) → 조향 앞먹임. 0이면 원본 동작. 11/8 코너 진입 시 heading 0.3~0.5, 직선 흔들림 0.01
+        # 곡률 앞먹임 배율. 0이면 원본 동작. 11/8 실측: 직선 곡률 0±0.03 /m, R0.6 코너 접근 −1.59 /m → −0.31 rad
+        'curvature_gain': 0.5, 'curvature_smoothing': 0.5,
     },
     'lidar': {
         'emergency_distance': 0.18, 'front_half_angle': 0.3,
