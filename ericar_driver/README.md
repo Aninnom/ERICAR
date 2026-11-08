@@ -12,7 +12,8 @@
 | `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유) | 유경 |
 | `cones.py` | 라바콘 | 유경 |
 | `lane_change.py` | 3차선 정적 장애물 (라이다 감지 후 차선 변경) | 유경 |
-| `node.py` | 센서 수신, YOLO, `/limo/ack_cmd` 발행 | 공통 |
+| `node.py` | ROS 입출력: 센서 수신, YOLO, `/limo/ack_cmd` 발행 | 공통 |
+| `loop.py` | 제어 주기 1회 계산 (센서 상태 → 차선 → 판단), 설정 검사. ROS 의존 없음 | 공통 |
 | `driver.py` | 미션 순서·센서 상태·최종 결정 | 공통 |
 | `common.py` | 값 제한, PID | 공통 |
 | `params.py` | 주행 파라미터. 담당 구역만 수정 | 각자 |
@@ -21,6 +22,16 @@
 공통 파일은 수정 전 팀 공유.
 
 지그재그(서행 유도선)·보행자·신호등·서행·갈림길은 `driver.py`와 `lane_vision.py` 안에 있음.
+
+## 회귀 시험 (맥·차, ROS 불필요)
+
+공통 파일 수정 후 동작이 바뀌지 않았는지 확인. 도면 치수로 합성한 3차로 영상·라이다·표지판으로 보행자 → 차선 변경 → 신호등 → 주차까지 노드 전체 실행 후 기준값과 비교 (약 15초)
+
+```bash
+python3 ericar_driver/test/test_regression.py
+```
+
+numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록.
 
 ## 원본 대비 실차 수정
 

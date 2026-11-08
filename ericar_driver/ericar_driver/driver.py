@@ -1,4 +1,4 @@
-"""미션 선택·센서 상태·최종 속도/조향 결정"""
+"""미션 선택·최종 속도/조향 결정"""
 # 출처: hello-osy/2026-orda-mentoring src/orda_sim/orda_sim/answer.py (613c9b4)
 
 from .common import clip
@@ -6,23 +6,6 @@ from .cones import ConeDriving
 from .lane_change import LaneChange
 from .lane_driving import LaneDriving
 from .parking import Parking
-
-
-def sensor_status(config, state, ages, available):
-    """Require the inputs used by this state, keeping lidar/odometry mandatory."""
-    timed_parking = state in ('parking_sequence', 'parked')
-    required_camera = not timed_parking or config['parking'].get('require_camera_during_sequence', False)
-    ready = (available['scan'] and 0 <= ages['scan'] < config['sensor_timeout'] and
-             0 <= ages['odometry'] < config['odometry_timeout'])
-    if required_camera:
-        ready = ready and available['image'] and 0 <= ages['image'] < config['sensor_timeout']
-        if config['detector']['enabled']:
-            ready = ready and available['detector'] and 0 <= ages['detector'] < config['detector']['timeout']
-    else:
-        # The timed sequence must have been entered through camera alignment.
-        ready = ready and available['lane']
-    return bool(ready), required_camera
-
 
 
 class Driver:
