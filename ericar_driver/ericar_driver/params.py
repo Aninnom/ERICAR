@@ -50,7 +50,7 @@ ANSWER_CONFIG = {
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
-        'approach_timeout': 15.0, 'stop_line_memory': 8.0, 'line_missing_timeout': 2.0,
+        'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1, 'enforce_order': True,
         'sequence': ['slow', 'pedestrian', 'fork', 'traffic', 'parking'], 'fork_distance': 5.0,
         'fork_wait_for_obstacles': True, 'fork_clear_distance': 0.1, 'pedestrian_require_line': True,
@@ -60,6 +60,7 @@ ANSWER_CONFIG = {
         'require_camera_during_sequence': False, 'enabled': True, 'align_timeout': 24.0,
         'align_speed': 0.08, 'line_distance': 0.15, 'distance_tolerance': 0.025,
         'lateral_tolerance': 0.035, 'heading_tolerance': 0.09, 'stable_seconds': 0.6,
+        'obstacle_wait': 2.0,  # 시간표 중 장애물로 멈춰 기다리는 최대 누적 시간(s). 넘으면 접촉 감점 감수하고 진행
         'sequence': [
             {'seconds': 2.1, 'speed': 0.12, 'steering': 0},
             {'seconds': 6.65, 'speed': -0.1, 'steering': -0.5},

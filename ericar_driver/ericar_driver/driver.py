@@ -7,6 +7,12 @@ from .lane_change import LaneChange
 from .lane_driving import LaneDriving
 from .parking import Parking
 
+# 정지 미션 시간 초과 후 같은 표지판에 바로 다시 반응하지 않도록 쿨다운을 거는 표지판
+MISSION_SIGNS = {
+    'pedestrian': ['pedestrian'],
+    'traffic': ['traffic_red', 'traffic_yellow', 'traffic_green'],
+}
+
 
 class Driver:
     """공통: 표지판·정지선 상태를 관리하고 담당별 제어기의 출력을 선택한다."""
@@ -25,7 +31,9 @@ class Driver:
         self.fork_pending, self.fork_clear_distance = False, 0.0
         self.fork_request = 0
         self.traffic_stop_completed = False
-        self.stage_index = 0
+        # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션부터 시작 (node.py --start-stage)
+        sequence = self.c['missions']['sequence']
+        self.stage_index = sequence.index(self.c['missions'].get('start_stage') or sequence[0])
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
 
     @property
@@ -43,7 +51,20 @@ class Driver:
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
         if self.state == 'parking_sequence':
-            self.transition('fault: sensor lost during parking', now)
+            # 센서가 돌아올 때까지 시간표를 멈춘다 (영구 정지하면 주차 0점)
+            self.parking.pause(now)
+
+    def leave_mission(self, mission, now):
+        """정지 미션 시간 초과: 영구 정지(fault) 대신 차선 주행으로 돌아간다.
+
+        미션 단계는 넘기지 않는다. 다음 미션 표지판이 이미 보이는 위치(예: 신호등 옆 주차 표지판)에서
+        곧장 다음 미션에 들어가는 오작동을 막기 위함. 재출발은 launch의 start_stage로 한다.
+        같은 표지판에 바로 다시 들어가지 않도록 쿨다운만 건다.
+        """
+        for name in MISSION_SIGNS.get(mission, []):
+            self.cooldowns[name] = now + self.c['missions']['sign_cooldown']
+        self.line_distance = None
+        self.transition('lane', now)
 
     def stage(self):
         sequence = self.c['missions']['sequence']
@@ -146,11 +167,13 @@ class Driver:
             crossing_on_green = (self.state == 'traffic_approach' and green_only and
                                  (not m.get('traffic_require_stop', True) or self.traffic_stop_completed))
             if now - self.state_started > m['approach_timeout']:
-                self.transition('fault: stop line not reached', now)
+                # 정지선에 도달하지 못함: 멈춰 있지 않고 차선 주행으로 복귀 (미션 단계는 유지)
+                self.leave_mission(self.state.replace('_approach', ''), now)
+                return speed
             if self.line_distance is None:
+                # 정지선이 아직 안 보이면 멈추지 않고 저속으로 다가가며 찾는다.
+                # (멈춰 있으면 정지선이 계속 안 보여 결국 시간 초과 실패)
                 speed = min(speed, m['stop_approach_speed'])
-                if now - self.state_started > m['line_missing_timeout']:
-                    speed = 0.0
             elif crossing_on_green:
                 # Seeing green far away is not mission completion. Keep watching
                 # red/yellow until the measured front axle crosses this stripe.
@@ -221,9 +244,16 @@ class Driver:
                 self.advance('parking')
         # 모든 담당의 제어 결과에 공통으로 적용하는 최종 정지 조건.
         clearance = scan['front'] if speed >= 0 else scan['rear']
-        if scan['valid_fraction'] < .5 or clearance < self.c['lidar']['emergency_distance']:
-            if self.state == 'parking_sequence':
-                self.transition('fault: obstacle during parking', now)
+        blocked = scan['valid_fraction'] < .5 or clearance < self.c['lidar']['emergency_distance']
+        if blocked and self.state == 'parking_sequence':
+            # 주차 중: 영구 정지 대신 시간표를 멈추고 기다린다. 일정 시간 넘게 막혀 있으면
+            # (실차 후방 사각으로 rear가 항상 0인 경우 포함) 접촉 감점(-1)을 감수하고 진행한다.
+            self.parking.obstacle_wait += dt
+            if self.parking.obstacle_wait < self.c['parking'].get('obstacle_wait', 2.0):
+                self.parking.pause(now)
+            else:
+                blocked = False
+        if blocked:
             speed = 0.0
         if self.state.startswith('fault') or self.state == 'parked':
             speed = 0.0
