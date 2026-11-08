@@ -134,9 +134,11 @@ class DriverNode(Node):
 
     def publish(self, speed, steering):
         # 최종 한계 적용: 주차 시간표 등 개별 제어기가 실차 한계를 넘는 경우 방지
+        # 조향 영점 보정은 판단 결과(조향 0 = 직진)에 더한 뒤 한계 적용
         robot = self.config['robot']
         message = AckermannDrive()
         message.speed = float(clip(speed, -robot['max_speed'], robot['max_speed']))
+        steering += robot.get('steering_offset', 0.0)
         message.steering_angle = float(clip(steering, -robot['max_steering'], robot['max_steering']))
         self.publisher.publish(message)
 
@@ -161,13 +163,27 @@ class DriverNode(Node):
             self.status.publish(String(data=out.status))
 
 
+def parse_args(argv):
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false]. --ros-args 이후는 ROS 몫"""
+    args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
+    yolo = True
+    if '--yolo' in args:
+        i = args.index('--yolo')
+        yolo = args[i + 1].lower() not in ('false', '0', 'no', 'off')
+        args = args[:i] + args[i + 2:]
+    return args, yolo
+
+
 def main(config_path=None):
-    # 인자: [설정 yaml] [모델 .pt]. 생략 시 패키지 config/robot.yaml, ~/models/best.pt
-    args = sys.argv[1:sys.argv.index('--ros-args')] if '--ros-args' in sys.argv else sys.argv[1:]
+    # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용
+    args, yolo = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
     c = config['answer']
+    if not yolo:
+        # 차선 시험용: 표지판 미션 없이 주행. 센서 상태 확인에서도 YOLO 제외
+        c['detector']['enabled'] = False
     detector, threads = None, 2
     if c['detector']['enabled']:
         detector, threads = load_detector(config, args[1] if len(args) > 1 else '~/models/best.pt')

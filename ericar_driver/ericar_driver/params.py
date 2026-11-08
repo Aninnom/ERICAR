@@ -17,7 +17,9 @@ ANSWER_CONFIG = {
     },
     'lane': {
         # [실차] 트랙 차선 색에 맞게. 흰색: [0,0,165]~[179,85,255] / 노란색 예시: [15,80,100]~[35,255,255]
-        'white_min': [0, 0, 165], 'white_max': [179, 85, 255],
+        # 차선 = 노란색, 정지선·횡단보도·노면 표시 = 흰색 (11/8 현수막 확인). 키 이름은 lane_vision 호환용
+        # 수동 노출 300 기준 노란 선 H 19~39, S 중앙 138, V 중앙 68 → 어두워도 색상으로 구분. 트랙 바닥 H 110대
+        'white_min': [18, 40, 50], 'white_max': [40, 255, 255],
         # 버드아이뷰 범위(m): 좌우 폭, 차 앞 가까운 끝·먼 끝, 픽셀 크기
         'view_width': 2.4, 'near': 0.2, 'far': 1.7, 'width_px': 480, 'height_px': 420,
         'lane_width': 0.55,          # [실차] 트랙 차로 폭 실측(m)
@@ -31,6 +33,7 @@ ANSWER_CONFIG = {
     'pid': {
         'kp': 1.3, 'ki': 0.03, 'kd': 0.11, 'integral_limit': 0.25, 'derivative_alpha': 0.25,
         'feedback_gain': 0.35,
+        'heading_gain': 0.6,  # 차로 방향(rad) → 조향 앞먹임. 0이면 원본 동작. 11/8 코너 진입 시 heading 0.3~0.5, 직선 흔들림 0.01
     },
     'lidar': {
         'emergency_distance': 0.18, 'front_half_angle': 0.3,

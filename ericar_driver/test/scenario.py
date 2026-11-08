@@ -30,6 +30,8 @@ LANE_LINES = [-0.78, -0.26, 0.26, 0.78]  # 3차로 (도면 선 중심 간격 0.5
 LINE = 0.02
 STOP_LINES = [3.0, 7.0, 13.0, 18.0]  # 보행자, (갈림길 구간 통과용), 신호등, 주차 기준
 OBSTACLE = (10.0, 10.3)  # 차로 중앙 정적 장애물 구간 s (차선 변경 경로 실행용)
+# 시험 기준 카메라 (멘토 시뮬 값). 실차 보정값과 무관하게 고정 → 보정해도 기준값 유지
+REFERENCE_CAMERA = dict(hfov_deg=71.0, x=0.23, y=0.0, z=0.23, pitch=0.2)
 
 
 def paint_bgr():
@@ -112,7 +114,7 @@ def run(config_path):
 
     def spin(node):
         config = yaml.safe_load(open(config_path))
-        camera, wheelbase = config['robot']['camera'], config['robot']['wheelbase']
+        camera, wheelbase = REFERENCE_CAMERA, config['robot']['wheelbase']
         steps = int(DURATION / DT)
         paint = paint_bgr()
         for k in range(steps):
@@ -163,7 +165,14 @@ def run(config_path):
     params.ANSWER_CONFIG['detector']['enabled'] = False
     from ericar_driver import node as node_module
     sys.argv = [sys.argv[0]]
-    node_module.main(config_path=str(HERE.parent / 'config' / 'robot.yaml'))
+    # 차량별 조향 영점 보정은 판단 로직과 무관 → 시험은 보정 0 (합성 차량은 쏠림 없음)
+    import tempfile
+    config = yaml.safe_load(open(config_path))
+    config['robot']['steering_offset'] = 0.0
+    config['robot']['camera'] = dict(REFERENCE_CAMERA)
+    with tempfile.NamedTemporaryFile('w', suffix='.yaml', delete=False) as f:
+        yaml.safe_dump(config, f, allow_unicode=True)
+    node_module.main(config_path=f.name)
     return records
 
 
