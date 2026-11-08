@@ -81,6 +81,8 @@ class LaneVision:
         starts = self.find_starts(lane_mask, lane_px, fork_bias)
         ys, xs = lane_mask.nonzero()
         fits, spans, residuals, windows, solid = {}, {}, [], [], {}
+        near_curvatures = []
+        near_row = self.row_at(c.get('curvature_far', c['far']))  # 이 행 아래(가까운 쪽)만 곡률 계산
         for side, x in starts.items():
             picked = self.sliding_window(ys, xs, x, h, scale, side, windows)
             if len(picked) < 3 * c['minimum_pixels']:
@@ -93,6 +95,11 @@ class LaneVision:
             residuals.append(float(np.sqrt(np.mean((px - np.polyval(fit, py)) ** 2))) / scale)
             # 실선이면 위아래로 끊김이 거의 없음 → 차선 변경 금지 판단에 사용
             solid[side] = len(np.unique(py)) / (np.ptp(py) + 1) > c['solid_row_fraction']
+            # 곡률은 가까운 구간 점만으로 따로 맞춤: 먼 곳 휨까지 보면 코너 수 초 전부터 꺾음.
+            # 차선 위치·정지선은 기존 범위(far) 유지
+            close = py >= near_row
+            if close.sum() >= 2 * c['minimum_pixels'] and np.ptp(py[close]) >= 0.16 * h:
+                near_curvatures.append(-2 * np.polyfit(py[close], px[close], 2)[0])
 
         result = dict(valid=False, error=0.0, heading=0.0, curvature=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
@@ -121,7 +128,7 @@ class LaneVision:
             heading = math.atan(float(np.mean(slopes)) / scale / dy)
             # 곡률(1/m, + 왼쪽): 2차식 x = a·행² + ... 의 a는 곡선 전체에서 부호 일정 →
             # heading(가까운 끝 기울기)과 달리 "가까이 직선, 멀리 휨"에서도 휘는 방향이 뒤집히지 않음
-            curvature = float(np.mean([-2 * f[0] / dy ** 2 / scale for f in fits.values()]))
+            curvature = float(np.mean(near_curvatures)) / dy ** 2 / scale if near_curvatures else 0.0
             result.update(valid=True, error=(w / 2 - center) / scale, heading=heading, curvature=curvature,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
                           center_px=center, forward=c['lookahead'])

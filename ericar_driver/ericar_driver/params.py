@@ -22,6 +22,7 @@ ANSWER_CONFIG = {
         'white_min': [18, 40, 50], 'white_max': [40, 255, 255],
         # 버드아이뷰 범위(m): 좌우 폭, 차 앞 가까운 끝·먼 끝, 픽셀 크기
         'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
+        'curvature_far': 1.1,  # 곡률 계산 범위(m). 11/8 녹화: 1.7이면 코너 6초 전, 1.1이면 약 1.8초 전부터 조향
         'lane_width': 0.55,          # [실차] 트랙 차로 폭 실측(m)
         'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
         'lookahead': 0.9,           # 차 앞 몇 m 지점의 차로 중앙을 목표로 할지
@@ -34,7 +35,7 @@ ANSWER_CONFIG = {
         'kp': 1.3, 'ki': 0.03, 'kd': 0.11, 'integral_limit': 0.25, 'derivative_alpha': 0.25,
         'feedback_gain': 0.35,
         # 곡률 앞먹임 배율. 0이면 원본 동작. 11/8 실측: 직선 곡률 0±0.03 /m, R0.6 코너 접근 −1.59 /m → −0.31 rad
-        'curvature_gain': 0.5, 'curvature_smoothing': 0.5,
+        'curvature_gain': 0.8, 'curvature_smoothing': 0.5,
     },
     'lidar': {
         'emergency_distance': 0.18, 'front_half_angle': 0.3,
