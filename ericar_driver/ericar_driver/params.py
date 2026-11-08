@@ -16,16 +16,14 @@ ANSWER_CONFIG = {
         'shutdown_timeout': 5.0,
     },
     'lane': {
-        # [실차] 트랙 차선 색에 맞게. 흰색: [0,0,165]~[179,85,255] / 노란색 예시: [15,80,100]~[35,255,255]
-        # 차선 = 노란색, 정지선·횡단보도·노면 표시 = 흰색 (11/8 현수막 확인). 키 이름은 lane_vision 호환용
+        # 차선 = 노란색, 정지선·횡단보도·노면 표시 = 흰색 (11/8 현수막 확인)
         # 수동 노출 300 기준 노란 선 H 19~39, S 중앙 138, V 중앙 68 → 어두워도 색상으로 구분. 트랙 바닥 H 110대
-        'white_min': [18, 40, 50], 'white_max': [40, 255, 255],
+        'yellow_min': [18, 40, 50], 'yellow_max': [40, 255, 255],
         # 버드아이뷰 범위(m): 좌우 폭, 차 앞 가까운 끝·먼 끝, 픽셀 크기
         'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
-        # 한 선만 보일 때 좌우 판단 경계 이동량(m). 곡률 1.7 /m에서 최대. lane_vision.label_sides 참고
-        'single_line_split': 0.14, 'max_curvature': 1.7,
+        # 한 선만 보일 때(이력 없음) 좌우 판단 경계 이동량(m), 선 곡률 split_curvature(1/m)에서 최대. label_sides 참고
+        'single_line_split': 0.14, 'split_curvature': 1.7,
         'memory_frames': 10,  # 한 선 이름 이어받기: 차선 못 찾은 프레임이 이보다 많으면 이력 버림 (약 0.35 s)
-        'curvature_far': 1.1,  # 곡률 계산 범위(m). 11/8 녹화: 1.7이면 코너 6초 전, 1.1이면 약 1.8초 전부터 조향
         'lane_width': 0.52,          # 선 중심 간격(m). 도면 직선 0.51~0.52, 11/8 카메라 보정 0.52
         # 코너 차로 폭(m)과 그 폭을 쓰는 선 곡률 범위(1/m, 시작~끝 보간). 도면: 안쪽 R0.59 → 1.7, 바깥 R0.66 → 1.5, 바깥 R1.4 완화 → 0.7
         'corner_lane_width': 0.77, 'corner_curvature': [0.8, 1.4],
@@ -33,20 +31,15 @@ ANSWER_CONFIG = {
         # 0.6~0.65 바깥 여유 최대 (5~7 cm). 직선 노이즈 고려 0.65
         'pursuit_distance': 0.65,
         'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
-        'lookahead': 0.9,           # 차 앞 몇 m 지점의 차로 중앙을 목표로 할지
+        'lookahead': 0.9,           # 차로 중앙·방향 기준 거리(m). 목표점 없을 때 조향, 정지선 탐색·차선 변경·주차용
         'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지
-        'smoothing': 0.55,           # 1에 가까울수록 이번 프레임을 더 믿음
+        'smoothing': 0.55,           # lookahead 중앙 흔들림 완화. 1에 가까울수록 이번 프레임을 더 믿음
         'stop_min_width': 0.32, 'stop_max_thickness': 0.13,   # 정지선 최소 길이·최대 두께(m)
         'abnormal_fit_residual': 0.035, 'solid_row_fraction': 0.85,
     },
     'pid': {
         'kp': 1.3, 'ki': 0.03, 'kd': 0.11, 'integral_limit': 0.25, 'derivative_alpha': 0.25,
-        'feedback_gain': 0.35,
-        # 곡률 앞먹임 배율. 0이면 원본 동작. 11/8 실측: 직선 곡률 0±0.03 /m, R0.6 코너 접근 −1.59 /m → −0.31 rad
-        # 11/8 1차 실차: 두 선 모드에서 2차식 곡률 과대 → 코너 일찍 진입. 한 선 목표점 방식 도입하며 0으로
-        'curvature_gain': 0.0, 'curvature_smoothing': 0.5,
-        # 곡률 상한(/m). 트랙 최소 R0.6 → 1.7. 11/8 실차: 직선+코너 섞인 2차식 맞춤으로 −3까지 과대 추정 → 일찍·급하게 조향
-        'max_curvature': 1.7,
+        'feedback_gain': 0.35,  # 목표점 없을 때만 사용 (lane_driving). 곡률 앞먹임은 11/8 과대 추정으로 제거
     },
     'lidar': {
         'emergency_distance': 0.18, 'front_half_angle': 0.3,

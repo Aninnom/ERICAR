@@ -6,8 +6,8 @@
 
 | 파일 | 내용 | 담당 |
 |---|---|---|
-| `lane_vision.py` | 차선 인식 (BEV + sliding window) | 혁준, 소민 |
-| `lane_driving.py` | 차선 PID | 혁준, 소민 |
+| `lane_vision.py` | 차선 인식 (BEV + sliding window, 좌우 판단, 중앙선 목표점) | 혁준, 소민 |
+| `lane_driving.py` | 목표점 pure pursuit (목표점 없을 때 PID) | 혁준, 소민 |
 | `parking.py` | T 주차 | 정윤 |
 | `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유) | 유경 |
 | `cones.py` | 라바콘 | 유경 |
@@ -74,5 +74,5 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 
 - YOLO 모델 클래스 8종 이름이 `params.py`의 `YOLO_CLASSES`와 정확히 같아야 실행됨
 - `config/robot.yaml`의 "실측 필요" 값 (카메라 높이·기울기는 차선 인식에 직접 영향)
-- 차선 색: `params.py`의 `white_min/max`는 흰색만 검출
+- 차선 색: `params.py`의 `yellow_min/max`는 노란색만 검출. 정지선·노면 표시(흰색)는 아직 노란 마스크 사용 (분리 작업 예정)
 - `/odom`·카메라·라이다 헤더 시간이 시스템 시계와 맞아야 함. 어긋나면 "waiting for fresh sensors"에서 정지
