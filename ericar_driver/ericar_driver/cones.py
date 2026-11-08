@@ -68,6 +68,7 @@ class ConeDriving:
         self.c, self.robot = config['lidar'], robot
         self.active = False
         self.remaining = self.heading = self.center = self.previous = 0.0
+        self.travel = 0.0  # 라바콘 모드 시작 후 전진 거리
         self.done = False
 
     def update(self, lane, scan, velocity, yaw_rate, dt, enabled):
@@ -77,6 +78,7 @@ class ConeDriving:
         if self.active:
             self.heading -= yaw_rate*dt
             self.center += velocity*math.sin(self.heading)*dt
+            self.travel += max(0.0, velocity)*dt
         detected = scan['narrow_objects'] > 0 and scan['wide_objects'] == 0
         if detected and not self.active:
             # 같은 쪽 라바콘 사이의 방향으로 도로 축을 잡는다.
@@ -95,8 +97,12 @@ class ConeDriving:
                     left = -cones[:, 0]*math.sin(heading)+cones[:, 1]*math.cos(heading)
                     self.heading, self.center = heading, float((left.min()+left.max())/2)
                     self.active = True
+                    self.travel = 0.0
         self.remaining = self.c['small_object_memory_distance'] if detected else max(0, self.remaining-abs(velocity)*dt)
-        if self.active and self.remaining <= 0:
+        # 종료: 마지막 라바콘을 지나 small_object_memory_distance만큼 가거나(라바콘 끝 선 → 코너 약 0.3 m),
+        # 안전장치로 라바콘 모드에서 cone_max_distance(라바콘 구간 약 2.1 m + 여유)를 넘게 주행하면 끝낸다.
+        # 늦게 끝나면 차선 인식 없이 직진하다 다음 코너를 못 돈다.
+        if self.active and (self.remaining <= 0 or self.travel >= self.c.get('cone_max_distance', 2.5)):
             self.done = True  # 구간 통과 후 표지판 기둥을 라바콘으로 다시 취급하지 않는다.
             self.active = False
         if not self.active:

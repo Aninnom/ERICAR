@@ -42,7 +42,10 @@ ANSWER_CONFIG = {
         'small_object_min_width': 0.015, 'small_object_max_width': 0.12, 'small_object_range': 1.8,
         'small_object_clearance': 0.025, 'cone_inside_required': True, 'cone_side_deadband': 0.02,
         'cone_inside_margin': 0.18, 'cone_row_spacing': 1.0, 'cone_spacing_tolerance': 0.2, 'cone_turn_distances': [0.1, 0.25, 0.4],
-        'cone_planning_distance': 0.8, 'road_heading_limit': 0.75, 'small_object_memory_distance': 0.8,
+        'cone_planning_distance': 0.8, 'road_heading_limit': 0.75,
+        # 라바콘 모드 종료: 마지막 라바콘을 라이다가 지난 뒤 이동 거리(m). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
+        'small_object_memory_distance': 0.3,
+        'cone_max_distance': 2.5,    # 라바콘 모드 최대 주행 거리(m). 라바콘 구간 약 2.1 m + 여유 (안전장치)
         'planning_point_range': 3.0, 'cluster_min_points': 2, 'wide_object_half_width': 0.9,
         'small_object_half_width': 0.75, 'planning_steps': 35, 'planning_steering_samples': 33,
     },
@@ -52,7 +55,10 @@ ANSWER_CONFIG = {
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1, 'enforce_order': True,
-        'sequence': ['slow', 'pedestrian', 'fork', 'traffic', 'parking'], 'fork_distance': 5.0,
+        'sequence': ['slow', 'pedestrian', 'fork', 'traffic', 'parking'],
+        # 갈림길 표지판 인식 후 차선 변경 유지·라바콘 모드 금지 거리(m). 표지판 기둥을 라바콘으로 오인하지 않을 만큼만.
+        # 도면상 인식 지점 → 라바콘 시작선 약 5.1~6.1 m라 5 m면 라바콘 입구에서 아직 꺼져 있을 수 있음
+        'fork_distance': 3.0,
         'fork_wait_for_obstacles': True, 'fork_clear_distance': 0.1, 'pedestrian_require_line': True,
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
