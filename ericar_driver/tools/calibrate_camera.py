@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE.parent))
 def lane_pixels(bgr, lane):
     """차선 색 마스크에서 세로로 긴 덩어리 2개(좌·우 차선)의 화소 좌표"""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array(lane['white_min']), np.array(lane['white_max']))
+    mask = cv2.inRange(hsv, np.array(lane['yellow_min']), np.array(lane['yellow_max']))
     mask[: bgr.shape[0] // 3] = 0  # 위쪽 1/3(먼 곳·배경) 제외
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     blobs = sorted(range(1, count), key=lambda i: -stats[i, cv2.CC_STAT_HEIGHT])[:2]
@@ -168,7 +168,7 @@ def main():
     if args.hsv:
         from ericar_driver.params import ANSWER_CONFIG
         values = [int(x) for x in args.hsv.split(',')]
-        ANSWER_CONFIG['lane']['white_min'], ANSWER_CONFIG['lane']['white_max'] = values[:3], values[3:]
+        ANSWER_CONFIG['lane']['yellow_min'], ANSWER_CONFIG['lane']['yellow_max'] = values[:3], values[3:]
     images = capture(config['topics']['image'], args.capture) if args.capture else [cv2.imread(f) for f in args.images]
     if not images or any(i is None for i in images):
         raise SystemExit('사진 경로 확인')

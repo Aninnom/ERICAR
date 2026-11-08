@@ -1,5 +1,6 @@
 """차선 인식: BEV 변환, sliding window, 정지선 [간단 버전]"""
 # 출처: hello-osy/2026-orda-mentoring answer.py (613c9b4), 차선 간단 버전은 소민 realcar 브랜치 66362f3
+# 11/8 코너: 목표점 pure pursuit·좌우 판단 추가 (sessions 차선 기록, PR #8)
 import math
 import cv2
 import numpy as np
@@ -8,28 +9,29 @@ from .common import clip
 
 
 class LaneVision:
-    """차선 담당①: 카메라 → 차선 오차(m). [간단 버전]
+    """차선 담당①: 카메라 → 차로 중앙 목표점
 
     처리 순서 (analyze):
-      1. 색 검출   : HSV에서 차선 색(white_min~white_max)만 남김
+      1. 색 검출   : HSV에서 차선 색(yellow_min~yellow_max)만 남김
       2. 버드아이뷰 : 카메라 장착값으로 바닥을 위에서 본 이미지로 변환 (1픽셀 = 고정 m)
       3. 가로선 분리: 가로로 긴 페인트(정지선)는 차선에서 빼고 정지선 검출에 사용
-      4. 차선 찾기 : 아래쪽 히스토그램으로 좌/우 시작점 → 슬라이딩 윈도우로 위로 추적
-      5. 오차 계산 : 차선 곡선을 2차식으로 맞추고, 앞 lookahead(m) 지점에서
-                    차로 중앙과 차 중심의 좌우 거리 = error (+ 왼쪽)
-    반환 dict의 키 이름은 원본과 같아서 Driver·LaneChange·Parking·viewer는 그대로 동작.
+      4. 차선 찾기 : 아래쪽 히스토그램으로 좌/우 시작점 → 슬라이딩 윈도우로 위로 추적 → 2차식
+      5. 좌우 판단 : 같은 선 겹침 제거, 한 선이면 직전 프레임 이름 이어받기 (label_sides)
+      6. 목표점    : 선마다 중앙선 점을 만들어 뒷축에서 pursuit_distance인 점 (pursuit_target)
+                    error = 목표점 옆 거리(m, + 왼쪽), forward = 앞 거리(m). 목표점 없으면 lookahead 중앙
+    center_px·heading은 lookahead 행 기준 (정지선 탐색 범위, 차선 변경·주차가 사용)
     """
     def __init__(self, lane, camera, front_axle_x):
         self.c = lane
         self.camera = camera
         self.front_axle_x = front_axle_x
+        self.scale = lane['width_px'] / lane['view_width']                # 1 m = scale 픽셀 (가로)
+        self.row_m = (lane['far'] - lane['near']) / (lane['height_px'] - 1)  # 1 행 = row_m m (세로)
         self.maps = None
         self.valid_bird = None
-        self.previous_center = None   # 이전 프레임 차로 중앙(px), 흔들림 완화용
-        self.previous_fits = {}       # 이전 프레임 좌/우 차선식, 한 선일 때 이름 이어받기용
+        self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.missing_frames = 0       # 차선 못 찾은 연속 프레임 수 (이어받기 유효 판단)
         self.previous_anchors = {}    # 이전 프레임 좌/우 선의 가까운 끝 (행, x px), 이름 이어받기용
-        self.previous_boundaries = {}  # (AnswerNode가 초기화할 때 쓰는 이름 유지)
 
     # ---------- 2. 버드아이뷰 ----------
     def ground_maps(self, image_shape):
@@ -58,7 +60,7 @@ class LaneVision:
 
     def analyze(self, bgr, fork_bias=0.0):
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)                      # 1. 색 검출
-        color = cv2.inRange(hsv, np.array(self.c['white_min']), np.array(self.c['white_max']))
+        color = cv2.inRange(hsv, np.array(self.c['yellow_min']), np.array(self.c['yellow_max']))
         if self.maps is None or self.maps[0] != bgr.shape[:2]:
             self.maps = (bgr.shape[:2], self.ground_maps(bgr.shape))
         map_x, map_y = self.maps[1]
@@ -71,22 +73,19 @@ class LaneVision:
         """ROS 없이 테스트할 수 있도록 버드아이뷰 이후 처리를 분리."""
         c = self.c
         h, w = bird.shape
-        scale = w / c['view_width']              # 1 m = scale 픽셀
-        lane_px = c['lane_width'] * scale        # 차로 폭(픽셀)
+        lane_px = c['lane_width'] * self.scale   # 차로 폭(픽셀)
 
         # ---------- 3. 가로선(정지선) 분리 ----------
-        kernel = np.ones((1, max(3, int(c['stop_min_width'] * scale))), np.uint8)
+        kernel = np.ones((1, max(3, int(c['stop_min_width'] * self.scale))), np.uint8)
         horizontal = cv2.morphologyEx(bird, cv2.MORPH_OPEN, kernel)
         lane_mask = cv2.subtract(bird, horizontal)
 
         # ---------- 4. 차선 찾기 ----------
         starts = self.find_starts(lane_mask, lane_px, fork_bias)
         ys, xs = lane_mask.nonzero()
-        fits, spans, residuals, windows, solid = {}, {}, {}, [], {}
-        near_curvatures, points, picked_sets, anchors = {}, {}, {}, {}
-        near_row = self.row_at(c.get('curvature_far', c['far']))  # 이 행 아래(가까운 쪽)만 곡률 계산
+        fits, spans, residuals, windows, solid, picked_sets, anchors = {}, {}, {}, [], {}, {}, {}
         for side, x in starts.items():
-            picked = self.sliding_window(ys, xs, x, h, scale, side, windows)
+            picked = self.sliding_window(ys, xs, x, h, self.scale, side, windows)
             picked_sets[side] = np.asarray(picked)
             if len(picked) < 3 * c['minimum_pixels']:
                 continue
@@ -94,66 +93,50 @@ class LaneVision:
             if np.ptp(py) < 0.16 * h:          # 너무 짧은 조각은 곡선으로 안 믿음
                 continue
             fit = np.polyfit(py, px, 2)          # x = a*y^2 + b*y + c (픽셀)
-            fits[side], spans[side], points[side] = fit, (float(py.min()), float(py.max())), (py, px)
-            low = py >= py.max() - 0.1 / ((c['far'] - c['near']) / (h - 1))   # 가장 가까운 0.1 m 픽셀
+            fits[side], spans[side] = fit, (float(py.min()), float(py.max()))
+            low = py >= py.max() - 0.1 / self.row_m                     # 가장 가까운 0.1 m 픽셀
             anchors[side] = (float(py[low].mean()), float(px[low].mean()))
-            residuals[side] = float(np.sqrt(np.mean((px - np.polyval(fit, py)) ** 2))) / scale
+            residuals[side] = float(np.sqrt(np.mean((px - np.polyval(fit, py)) ** 2))) / self.scale
             # 실선이면 위아래로 끊김이 거의 없음 → 차선 변경 금지 판단에 사용
             solid[side] = len(np.unique(py)) / (np.ptp(py) + 1) > c['solid_row_fraction']
-            # 곡률은 가까운 구간 점만으로 따로 맞춤: 먼 곳 휨까지 보면 코너 수 초 전부터 꺾음.
-            # 차선 위치·정지선은 기존 범위(far) 유지
-            close = py >= near_row
-            if close.sum() >= 2 * c['minimum_pixels'] and np.ptp(py[close]) >= 0.16 * h:
-                near_curvatures[side] = -2 * np.polyfit(py[close], px[close], 2)[0]
-        # 같은 선 겹침 제거·좌우 재판단. source: 새 이름 → 원래 탐색 쪽
-        source = self.label_sides(fits, h, lane_px, picked_sets, anchors)
+
+        # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
+        source = self.label_sides(fits, lane_px, picked_sets, anchors)
         self.previous_anchors = {s: anchors[k] for s, k in source.items()}
         fits = {s: fits[k] for s, k in source.items()}
         spans = {s: spans[k] for s, k in source.items()}
         solid = {s: solid[k] for s, k in source.items()}
-        points = {s: points[k] for s, k in source.items()}
         residuals = [residuals[k] for k in source.values()]
-        near_curvatures = [near_curvatures[k] for k in source.values() if k in near_curvatures]
 
-        result = dict(valid=False, error=0.0, heading=0.0, curvature=0.0, abnormal=False,
+        result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
                       mask=bird, lane_mask=lane_mask, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
 
-        # ---------- 5. 오차 계산 ----------
         self.missing_frames = 0 if fits else self.missing_frames + 1
         if not fits:
             # 못 찾으면 탐색 기준 중앙도 버림. 남겨두면 엉뚱한 기준 주변만 계속 찾아 영영 못 찾음 (도면 코너 시뮬: 정지)
             self.previous_center = None
-        if fits:
-            self.previous_fits = {s: f.copy() for s, f in fits.items()}
+        else:
+            # lookahead 행의 차로 중앙·방향 (정지선 탐색, 시작점 기준, 차선 변경·주차용)
             row = self.row_at(c['lookahead'])
-            dy = (c['far'] - c['near']) / (h - 1)  # 1픽셀 행 = dy m
             centers, slopes = [], []
             for side, fit in fits.items():
                 x = np.polyval(fit, row)
-                slope = np.polyval(np.polyder(fit), row)   # 행당 x 변화(px/px)
-                # 차선에서 차로 폭 절반만큼 안쪽이 차로 중앙
                 centers.append(x + (lane_px / 2 if side == 'left' else -lane_px / 2))
-                slopes.append(slope)
+                slopes.append(np.polyval(np.polyder(fit), row))          # 행당 x 변화(px/px)
             center = float(np.mean(centers))
             if self.previous_center is not None:
                 center = c['smoothing'] * center + (1 - c['smoothing']) * self.previous_center
-            # 두 선을 모두 찾았을 때만 기억. 한 선만이면 좌우 판단이 틀릴 수 있고, 틀린 중심을 기억하면
-            # 다음 시작점 탐색이 그 자리에 고정되어 계속 한 선만 잡힘 (11/8 실차: 오차 +0.55 m 고정)
+            # 두 선을 모두 찾았을 때만 기억. 틀린 중심을 기억하면 시작점 탐색이 그 자리에 고정됨
             self.previous_center = center if len(fits) == 2 else None
             # 차로 방향(rad, + 왼쪽): 전방 1m 갈 때 차선이 좌우로 얼마나 움직이는지
-            heading = math.atan(float(np.mean(slopes)) / scale / dy)
-            # 곡률(1/m, + 왼쪽): 2차식 x = a·행² + ... 의 a는 곡선 전체에서 부호 일정 →
-            # heading(가까운 끝 기울기)과 달리 "가까이 직선, 멀리 휨"에서도 휘는 방향이 뒤집히지 않음
-            curvature = float(np.mean(near_curvatures)) / dy ** 2 / scale if near_curvatures else 0.0
-            result.update(valid=True, error=(w / 2 - center) / scale, heading=heading, curvature=curvature,
+            heading = math.atan(float(np.mean(slopes)) / self.scale / self.row_m)
+            result.update(valid=True, error=(w / 2 - center) / self.scale, heading=heading,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
                           center_px=center, forward=c['lookahead'], pursuit=False)
-            # pure pursuit 목표점: 선마다 중앙선 점을 만들고 뒷축에서 pursuit_distance인 점 → 평균.
-            # 두 선이면 평균이라 코너에서 차로가 넓어져도(도면 0.52 → 0.78 m) 중앙
-            targets = [t for t in (self.pursuit_target(sd, fits[sd], spans[sd], scale, dy) for sd in fits)
-                       if t is not None]
+            # ---------- 6. 목표점 ---------- 두 선이면 평균이라 코너에서 차로가 넓어져도(0.52 → 0.78 m) 중앙
+            targets = [t for t in (self.pursuit_target(sd, fits[sd], spans[sd]) for sd in fits) if t is not None]
             if targets:
                 forward, lateral = np.mean(targets, axis=0)
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
@@ -183,51 +166,44 @@ class LaneVision:
             starts.pop('left', None)
         return starts
 
-    def label_sides(self, fits, h, lane_px, picked_sets=None, anchors=None):
+    def label_sides(self, fits, lane_px, picked_sets, anchors):
         """좌/우 차선 이름 확정. 반환: {확정 이름: 원래 탐색 쪽}
 
         11/8 실차: 코너에서 한 선만 남으면 시작점 탐색(화면 중앙 기준)이 이름을 잘못 붙이거나
         좌우 창이 같은 선에 붙음 → 오차 급변·조향 포화
-        어느 선이 남는지는 차 자세에 따라 다름 (중앙 주행: 바깥 선 / 안쪽으로 파고듦: 안쪽 선. 프레임 확인)
-        → 위치보다 연속성이 확실
+        어느 선이 남는지는 차 자세에 따라 다름 (중앙 주행: 바깥 선 / 안쪽으로 파고듦: 안쪽 선) → 위치보다 연속성
         1) 좌우 창이 같은 픽셀을 30% 넘게 공유하거나 두 곡선 간격 < 차로 폭 절반이면 같은 선 → 하나만 남김
-        2) 한 선이면 직전 프레임(memory_frames 이내) 좌/우 곡선 중 가까운 쪽 이름을 이어받음
+        2) 한 선이면 직전 프레임(memory_frames 이내) 선의 가까운 끝과 가까운 쪽 이름을 이어받음
         3) 이력 없으면 가까운 끝 좌우 위치로 판단 (경계는 선이 휘는 쪽으로 이동)
+        판단 기준은 실제 픽셀의 가까운 끝(anchor). 곡선을 맨 아래 행까지 연장한 값은 선이 위에서 시작하면
+        엉뚱한 곳을 가리킴 (11/8 실차 4회 76.1 s)
         """
         c = self.c
-        scale = c['width_px'] / c['view_width']
-        dy = (c['far'] - c['near']) / (h - 1)
-        rows = np.array([self.row_at(c['lookahead']), h - 1.0])
+        rows = np.array([self.row_at(c['lookahead']), c['height_px'] - 1.0])
         at = {s: np.polyval(f, rows) for s, f in fits.items()}
-        same = False
-        if len(fits) == 2 and picked_sets:
+        if len(fits) == 2:
             # 두 창이 같은 픽셀을 집었으면 같은 선. 곡선 맞춤 비교는 끝부분 맞춤 오차로 놓침 (11/8 실차 4회 76.5 s)
-            a, b = picked_sets.get('left', []), picked_sets.get('right', [])
-            shared = len(np.intersect1d(a, b)) if len(a) and len(b) else 0
-            same = shared > 0.3 * min(len(a), len(b))
-        if len(fits) == 2 and not same and np.mean(np.abs(at['left'] - at['right'])) >= lane_px / 2:
-            return {'left': 'left', 'right': 'right'}
-        if len(fits) == 2 and same:                                      # 픽셀 많은 쪽 곡선 사용
-            kept = max(fits, key=lambda sd: len(picked_sets[sd]))
-            fits = {kept: fits[kept]}
-            at = {kept: at[kept]}
+            a, b = picked_sets['left'], picked_sets['right']
+            if len(np.intersect1d(a, b)) > 0.3 * min(len(a), len(b)):
+                kept = max(fits, key=lambda sd: len(picked_sets[sd]))      # 픽셀 많은 쪽 곡선 사용
+                fits = {kept: fits[kept]}
+            elif np.mean(np.abs(at['left'] - at['right'])) >= lane_px / 2:
+                return {'left': 'left', 'right': 'right'}
         if not fits:
             return {}
         kept = 'left' if 'left' in fits else 'right'
-        # 판단 기준 = 실제 픽셀의 가까운 끝(anchor). 곡선을 맨 아래 행까지 연장한 값은 선이 위에서 시작하면
-        # 엉뚱한 곳을 가리킴 (11/8 실차 4회 76.1 s: 연장 끝이 오른쪽 → 바깥 선을 오른쪽 선으로 판단)
-        row, x = anchors[kept] if anchors else (h - 1.0, float(at[kept][1]))
-        if self.missing_frames <= c.get('memory_frames', 10) and self.previous_anchors:
-            distances = {sd: math.hypot((x - px_) / scale, (row - pr) * dy)
-                         for sd, (pr, px_) in self.previous_anchors.items()}
+        row, x = anchors[kept]
+        if self.missing_frames <= c['memory_frames'] and self.previous_anchors:
+            distances = {sd: math.hypot((x - px) / self.scale, (row - pr) * self.row_m)
+                         for sd, (pr, px) in self.previous_anchors.items()}
             if min(distances.values()) < c['lane_width'] / 2:
                 return {min(distances, key=distances.get): kept}
-        lateral = (c['width_px'] / 2 - x) / scale                       # 가까운 끝 좌우 위치(m, + 왼쪽)
-        curvature = -2 * fits[kept][0] / dy ** 2 / scale                # 선 곡률(1/m, + 왼쪽으로 휨)
-        split = c.get('single_line_split', 0.14) * clip(curvature / c.get('max_curvature', 1.7), -1.0, 1.0)
+        lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
+        curvature = -2 * fits[kept][0] / self.row_m ** 2 / self.scale    # 선 곡률(1/m, + 왼쪽으로 휨)
+        split = c['single_line_split'] * clip(curvature / c['split_curvature'], -1.0, 1.0)
         return {('left' if lateral > split else 'right'): kept}
 
-    def pursuit_target(self, side, fit, span, scale, dy):
+    def pursuit_target(self, side, fit, span):
         """선 하나로 만든 중앙선 위 pure pursuit 목표점 (앞 m, 옆 m, + 왼쪽). 기준 = 뒷바퀴 축
 
         보이는 구간의 선 점마다 진행 방향 법선으로 차로 폭 절반만큼 안쪽 → 중앙선 점들.
@@ -235,7 +211,7 @@ class LaneVision:
         11/8 실차 3회: 가장 가까운 선 점의 수직 발을 목표로 하면 차 방향이 차로와 어긋날 때
         목표가 차 옆에 생겨 되돌리는 힘이 없음 → 진행 방향으로 일정 거리 앞의 점 사용
         """
-        c = self.c
+        c, scale, dy = self.c, self.scale, self.row_m
         rows = np.arange(span[0], span[1] + 1, 3.0)
         if len(rows) < 3:
             return None

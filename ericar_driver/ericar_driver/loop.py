@@ -122,9 +122,7 @@ class ControlLoop:
             speed, steering, state = self.driver.update(lane, s.scan, s.detections,
                                                          s.detection_stamp, s.velocity, now, s.angular_velocity)
             if was_avoiding and not self.driver.avoiding:
-                self.vision.previous_fits = {}
                 self.vision.previous_anchors = {}
-                self.vision.previous_boundaries = {}
                 self.vision.previous_center = None
                 self.lane_stamp = None
             if self.driver.state != 'parking_sequence':
@@ -141,8 +139,8 @@ class ControlLoop:
         # Telemetry follows the actual published command, including safety stops.
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
-            keys = ('valid', 'error', 'heading', 'curvature', 'center_px', 'forward', 'windows',
-                    'fits', 'fit_spans', 'center_fit', 'fit_near', 'fit_far', 'pursuit')
+            keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
+                    'fits', 'fit_spans', 'pursuit')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,
                            controller_state=self.driver.state)
