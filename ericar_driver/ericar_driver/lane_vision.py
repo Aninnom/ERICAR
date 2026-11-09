@@ -32,6 +32,7 @@ class LaneVision:
         self.valid_bird = None
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
+        self.corner_left_limit = None # 우회전 코너 중이면 m 값 (loop가 설정). 기억 없는 한 선 이름 판단 기준
 
     # ---------- 2. 버드아이뷰 ----------
     def ground_maps(self, image_shape):
@@ -273,6 +274,11 @@ class LaneVision:
             if min(distances.values()) < c['lane_width'] / 2:
                 return min(distances, key=distances.get)
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
+        if self.corner_left_limit is not None:
+            # 우회전 코너 유지 중·직후(loop가 설정): 안쪽 선은 오른쪽 사각으로 빠지고 앞에 남는 건 바깥(왼쪽) 선
+            # 위치 경계(±0.14)로 나누면 차 앞 선을 오른쪽으로 오판 → 왼쪽 목표 → 바깥 선 넘음
+            # (11/9 slow_1109_lap1 686.2 s 3번 코너, +0.07 m 선을 오른쪽으로 판단 → 688~690 s 좌회전·이탈)
+            return 'left' if lateral > -self.corner_left_limit else 'right'
         curvature = -2 * fit[0] / self.row_m ** 2 / self.scale           # 선 곡률(1/m, + 왼쪽으로 휨)
         split = c['single_line_split'] * clip(curvature / c['split_curvature'], -1.0, 1.0)
         return 'left' if lateral > split else 'right'

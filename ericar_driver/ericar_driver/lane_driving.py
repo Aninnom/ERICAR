@@ -22,6 +22,12 @@ class LaneDriving:
         self.lane_stamp = None    # 마지막으로 판단한 카메라 결과 시각 (주기 20 Hz·카메라 28 Hz → 같은 결과 반복 가능)
         self.suspect = 0          # 연속으로 무시한 급변 프레임 수
         self.far_heading = 0.0    # 마지막으로 본 선 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단
+        self.hold_ended = -1e9    # 코너 유지 끝난 시각
+
+    def in_corner(self, now):
+        """코너 유지 중 또는 끝난 뒤 corner_hold.after_seconds 이내 (lane_vision 한 선 이름 판단용)"""
+        h = self.c.get('corner_hold', {})
+        return self.hold is not None or now - self.hold_ended < h.get('after_seconds', 0.0)
 
     def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True):
         speed, target = self.decide(lane, now, dt, slow, velocity, yaw_rate, allow_hold)
@@ -103,6 +109,7 @@ class LaneDriving:
             self.hold = None
             self.armed_until = -1e9   # 같은 코너에서 재시작 방지: 코너 출구 곡률로 다시 준비되지 않게 arm_seconds 동안 막음
             self.rearm_at = now + h['arm_seconds']
+            self.hold_ended = now
             self.steering = 0.0       # 놓친 동안 남은 큰 조향으로 재시작하지 않도록
             return False
         return True

@@ -13,7 +13,9 @@ ANSWER_CONFIG = {
     'steering_rate': 1.5, 'steering_jump': 0.08, 'jump_frames': 3,
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15, 'steering': 0.31,
                     'angle': 65.0, 'max_distance': 1.3,
-                    'start_far_angle': 20.0},   # 선 먼 끝이 오른쪽으로 이 각도(°) 넘을 때만 시작 (갈림길 S자 꺾임 제외)
+                    'start_far_angle': 20.0,    # 선 먼 끝이 오른쪽으로 이 각도(°) 넘을 때만 시작 (갈림길 S자 꺾임 제외)
+                    # 유지 중·끝난 뒤 after_seconds 동안 기억 없는 한 선은 가까운 끝이 오른쪽 corner_left_limit(m) 안이면 왼쪽 선
+                    'after_seconds': 1.5, 'corner_left_limit': 0.1},
 
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
