@@ -29,6 +29,7 @@ TELEMETRY_TOPIC = '/answer/detections'
 def draw_bev(mask, lane):
     """BEV 마스크 위에 윈도우(회색)·차선 곡선(좌 초록/우 파랑)·목표 중심(빨강)"""
     bev = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) // 2
+    bev[mask == 100] = (255, 0, 255)  # 흰색 마스크 (정지선·노면 표시), 자홍
     h, w = mask.shape[:2]
     for win in lane.get('windows', []):
         cv2.rectangle(bev, (int(win['x0']), int(win['y0'])), (int(win['x1']), int(win['y1'])), (90, 90, 90), 1)
