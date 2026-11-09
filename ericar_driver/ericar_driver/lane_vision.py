@@ -30,8 +30,7 @@ class LaneVision:
         self.maps = None
         self.valid_bird = None
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
-        self.missing_frames = 0       # 차선 못 찾은 연속 프레임 수 (이어받기 유효 판단)
-        self.previous_anchors = {}    # 이전 프레임 좌/우 선의 가까운 끝 (행, x px), 이름 이어받기용
+        self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
 
     # ---------- 2. 버드아이뷰 ----------
     def ground_maps(self, image_shape):
@@ -83,7 +82,7 @@ class LaneVision:
         # ---------- 4. 차선 찾기 ----------
         starts = self.find_starts(lane_mask, lane_px, fork_bias)
         ys, xs = lane_mask.nonzero()
-        fits, spans, residuals, windows, solid, picked_sets, anchors = {}, {}, {}, [], {}, {}, {}
+        fits, spans, residuals, windows, solid, picked_sets, anchors, pixels = {}, {}, {}, [], {}, {}, {}, {}
         for side, x in starts.items():
             picked = self.sliding_window(ys, xs, x, h, self.scale, side, windows)
             picked_sets[side] = np.asarray(picked)
@@ -96,13 +95,16 @@ class LaneVision:
             fits[side], spans[side] = fit, (float(py.min()), float(py.max()))
             low = py >= py.max() - 0.1 / self.row_m                     # 가장 가까운 0.1 m 픽셀
             anchors[side] = (float(py[low].mean()), float(px[low].mean()))
+            pixels[side] = (py[::4], px[::4])
             residuals[side] = float(np.sqrt(np.mean((px - np.polyval(fit, py)) ** 2))) / self.scale
             # 실선이면 위아래로 끊김이 거의 없음 → 차선 변경 금지 판단에 사용
             solid[side] = len(np.unique(py)) / (np.ptp(py) + 1) > c['solid_row_fraction']
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
         source = self.label_sides(fits, lane_px, picked_sets, anchors)
-        self.previous_anchors = {s: anchors[k] for s, k in source.items()}
+        # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
+        self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
+        self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})
         fits = {s: fits[k] for s, k in source.items()}
         spans = {s: spans[k] for s, k in source.items()}
         solid = {s: solid[k] for s, k in source.items()}
@@ -113,7 +115,6 @@ class LaneVision:
                       mask=bird, lane_mask=lane_mask, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
 
-        self.missing_frames = 0 if fits else self.missing_frames + 1
         if not fits:
             # 못 찾으면 탐색 기준 중앙도 버림. 남겨두면 엉뚱한 기준 주변만 계속 찾아 영영 못 찾음 (도면 코너 시뮬: 정지)
             self.previous_center = None
@@ -134,7 +135,9 @@ class LaneVision:
             heading = math.atan(float(np.mean(slopes)) / self.scale / self.row_m)
             result.update(valid=True, error=(w / 2 - center) / self.scale, heading=heading,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
-                          center_px=center, forward=c['lookahead'], pursuit=False)
+                          center_px=center, forward=c['lookahead'], pursuit=False,
+                          curvature=max(float(self.line_curvature(fits[sd], np.arange(spans[sd][0], spans[sd][1] + 1, 3.0)).max())
+                                        for sd in fits))
             # ---------- 6. 목표점 ---------- 두 선이면 평균이라 코너에서 차로가 넓어져도(0.52 → 0.78 m) 중앙
             targets = [t for t in (self.pursuit_target(sd, fits[sd], spans[sd]) for sd in fits) if t is not None]
             if targets:
@@ -173,7 +176,9 @@ class LaneVision:
         좌우 창이 같은 선에 붙음 → 오차 급변·조향 포화
         어느 선이 남는지는 차 자세에 따라 다름 (중앙 주행: 바깥 선 / 안쪽으로 파고듦: 안쪽 선) → 위치보다 연속성
         1) 좌우 창이 같은 픽셀을 30% 넘게 공유하거나 두 곡선 간격 < 차로 폭 절반이면 같은 선 → 하나만 남김
-        2) 한 선이면 직전 프레임(memory_frames 이내) 선의 가까운 끝과 가까운 쪽 이름을 이어받음
+        2) 한 선이면 기억한 좌/우 선(각각 마지막으로 본 지 memory_frames 이내) 픽셀 중 새 선의 가까운 끝과
+           가장 가까운 쪽 이름을 이어받음. 끝점끼리 비교하면 보이는 조각이 바뀔 때 놓침 (11/9 도면 코너 시뮬:
+           한 프레임 못 찾음 → 기억 삭제 → 안쪽 선 한 번 보임 → 다시 보인 바깥 선을 오른쪽으로 → 좌회전)
         3) 이력 없으면 가까운 끝 좌우 위치로 판단 (경계는 선이 휘는 쪽으로 이동)
         판단 기준은 실제 픽셀의 가까운 끝(anchor). 곡선을 맨 아래 행까지 연장한 값은 선이 위에서 시작하면
         엉뚱한 곳을 가리킴 (11/8 실차 4회 76.1 s)
@@ -193,9 +198,9 @@ class LaneVision:
             return {}
         kept = 'left' if 'left' in fits else 'right'
         row, x = anchors[kept]
-        if self.missing_frames <= c['memory_frames'] and self.previous_anchors:
-            distances = {sd: math.hypot((x - px) / self.scale, (row - pr) * self.row_m)
-                         for sd, (pr, px) in self.previous_anchors.items()}
+        if self.memory:
+            distances = {sd: float(np.min(np.hypot((x - mx) / self.scale, (row - mr) * self.row_m)))
+                         for sd, (mr, mx, _) in self.memory.items()}
             if min(distances.values()) < c['lane_width'] / 2:
                 return {min(distances, key=distances.get): kept}
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
@@ -225,8 +230,7 @@ class LaneVision:
         tf, tl = tf / norm, tl / norm
         # 차로 폭: 도면상 코너 원호 구간은 넓어짐 (직선 0.52 → 코너 0.76~0.78 m, 안쪽 R590·바깥 R660 비동심)
         # 점마다 선 곡률(1/m)로 직선 폭 ↔ 코너 폭 보간. 한 선만 보일 때 중앙이 선 쪽으로 쏠리는 것 방지
-        dxdf = slope / (scale * dy)                                     # 앞 1 m당 옆 변화
-        k = np.abs(2 * fit[0]) / scale / dy ** 2 / (1 + dxdf ** 2) ** 1.5
+        k = self.line_curvature(fit, rows)
         k0, k1 = c['corner_curvature']
         blend = np.clip((k - k0) / (k1 - k0), 0.0, 1.0)
         half = (c['lane_width'] + blend * (c['corner_lane_width'] - c['lane_width'])) / 2
@@ -239,6 +243,11 @@ class LaneVision:
         cf, cl = cf[ahead], cl[ahead]
         i = int(np.argmin(np.abs(np.hypot(cf, cl) - c['pursuit_distance'])))
         return float(cf[i]), float(cl[i])
+
+    def line_curvature(self, fit, rows):
+        """선 곡률(1/m, 크기만) — 행마다. 2차식 x(행)을 바닥 좌표(앞 m, 옆 m)로 바꿔 계산"""
+        dxdf = np.polyval(np.polyder(fit), rows) / (self.scale * self.row_m)   # 앞 1 m당 옆 변화
+        return np.abs(2 * fit[0]) / self.scale / self.row_m ** 2 / (1 + dxdf ** 2) ** 1.5
 
     def sliding_window(self, ys, xs, x, h, scale, side, windows):
         """아래에서 위로 창을 옮기며 차선 픽셀을 모은다."""
