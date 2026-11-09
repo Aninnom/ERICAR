@@ -60,16 +60,47 @@ class LaneVision:
     def analyze(self, bgr, fork_bias=0.0):
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)                      # 1. 색 검출
         color = cv2.inRange(hsv, np.array(self.c['yellow_min']), np.array(self.c['yellow_max']))
+        white = cv2.inRange(hsv, np.array(self.c['white_min']), np.array(self.c['white_max']))  # 정지선용 흰색
         if self.maps is None or self.maps[0] != bgr.shape[:2]:
             self.maps = (bgr.shape[:2], self.ground_maps(bgr.shape))
         map_x, map_y = self.maps[1]
         self.valid_bird = (map_x >= 1) & (map_x < bgr.shape[1]-1) & (map_y >= 1) & (map_y < bgr.shape[0]-1)
         bird = cv2.remap(color, map_x, map_y, cv2.INTER_NEAREST,           # 2. 버드아이뷰
                          borderMode=cv2.BORDER_CONSTANT)
-        return self.analyze_bird(bird, fork_bias)
+        white_bird = cv2.remap(white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+        return self.analyze_bird(bird, fork_bias, white_bird)
 
-    def analyze_bird(self, bird, fork_bias=0.0):
-        """ROS 없이 테스트할 수 있도록 버드아이뷰 이후 처리를 분리."""
+    def white_dashes(self, white_bird):
+        """흰 BEV에서 점선 조각만 남김. 흰 덩어리마다 모양을 m 단위로 재서
+        길이 ≥ white_dash_min_length, 폭 ≤ white_dash_max_width,
+        진행 방향(세로)에서 기울기 ≤ white_dash_max_tilt(도)인 것만 통과.
+        (예전 세로 막대 필터는 점선이 약 10°만 기울어도 지워졌음)"""
+        c = self.c
+        keep = np.zeros_like(white_bird)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(white_bird, connectivity=8)
+        for i in range(1, n):
+            x, y, bw, bh, area = stats[i]
+            if area < c['minimum_pixels']:
+                continue
+            box = labels[y:y + bh, x:x + bw] == i
+            ys, xs = np.nonzero(box)
+            # 픽셀 → m (가로·세로 픽셀 크기가 달라서 m로 바꾼 뒤 모양 판단)
+            pts = np.column_stack(((xs + x) / self.scale, (ys + y) * self.row_m))
+            pts -= pts.mean(axis=0)
+            # 조각이 가장 길게 뻗은 방향(주축)과 그 수직 방향으로 길이·폭 측정
+            _, vectors = np.linalg.eigh(np.cov(pts.T))
+            major, minor = vectors[:, 1], vectors[:, 0]
+            length = np.ptp(pts @ major)
+            width = np.ptp(pts @ minor)
+            tilt = math.degrees(math.acos(min(1.0, abs(major[1]))))   # 0° = 진행 방향과 나란함
+            if (length >= c['white_dash_min_length'] and width <= c['white_dash_max_width']
+                    and tilt <= c['white_dash_max_tilt']):
+                keep[y:y + bh, x:x + bw][box] = 255
+        return keep
+
+    def analyze_bird(self, bird, fork_bias=0.0, white_bird=None):
+        """ROS 없이 테스트할 수 있도록 버드아이뷰 이후 처리를 분리.
+        white_bird: 흰색 BEV (정지선용). None이면 예전처럼 노란 가로선에서 정지선 탐색"""
         c = self.c
         h, w = bird.shape
         lane_px = c['lane_width'] * self.scale   # 차로 폭(픽셀)
@@ -78,6 +109,16 @@ class LaneVision:
         kernel = np.ones((1, max(3, int(c['stop_min_width'] * self.scale))), np.uint8)
         horizontal = cv2.morphologyEx(bird, cv2.MORPH_OPEN, kernel)
         lane_mask = cv2.subtract(bird, horizontal)
+        # 정지선은 흰 페인트의 가로선에서 찾음. 차선(lane_mask)은 노랑 그대로
+        stop_lines = horizontal if white_bird is None else cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, kernel)
+        # 3차선 가운데 차로: 노란 바깥선이 약 0.78 m 밖이라 탐색 범위(차로 폭 1개) 밖 → 노란 후보가 하나도 없음
+        # 그때만 흰 세로 획(차로 구분 점선)을 차선 후보에 추가. 노란 선이 보이는 곳(코너 등)은 기존과 동일
+        white_lane = False
+        if white_bird is not None and not self.find_starts(lane_mask, lane_px, fork_bias):
+            # 길쭉하고 가는 흰 조각만 남김 (기울어도 됨) → 마름모 고리·글씨 조각·정지선(가로) 제외
+            dashes = self.white_dashes(white_bird)
+            lane_mask = cv2.bitwise_or(lane_mask, dashes)
+            white_lane = True
 
         # ---------- 4. 차선 찾기 ----------
         starts = self.find_starts(lane_mask, lane_px, fork_bias)
@@ -112,7 +153,7 @@ class LaneVision:
 
         result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
-                      mask=bird, lane_mask=lane_mask, windows=windows,
+                      mask=bird, lane_mask=lane_mask, white_mask=white_bird, white_lane=white_lane, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
 
         if not fits:
@@ -145,7 +186,7 @@ class LaneVision:
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
 
         # ---------- 정지선 ----------
-        self.find_stop_line(result, horizontal, lane_px)
+        self.find_stop_line(result, stop_lines, lane_px)
         return result
 
     def find_starts(self, lane_mask, lane_px, fork_bias):
