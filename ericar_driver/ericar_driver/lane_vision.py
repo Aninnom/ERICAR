@@ -180,7 +180,11 @@ class LaneVision:
             self.previous_center = center if len(fits) == 2 else None
             # 차로 방향(rad, + 왼쪽): 전방 1m 갈 때 차선이 좌우로 얼마나 움직이는지
             heading = math.atan(float(np.mean(slopes)) / self.scale / self.row_m)
-            result.update(valid=True, error=(w / 2 - center) / self.scale, heading=heading,
+            # 가장 길게 보이는 선의 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단용 (lane_driving.corner_hold)
+            # 진짜 우회전 코너는 먼 끝이 계속 오른쪽(−37~−75°), 갈림길 끝 S자 꺾임은 왼쪽으로 돌아옴(+1~+25°)
+            longest = max(fits, key=lambda sd: spans[sd][1] - spans[sd][0])
+            far_heading = math.atan(float(np.polyval(np.polyder(fits[longest]), spans[longest][0])) / self.scale / self.row_m)
+            result.update(valid=True, far_heading=far_heading, error=(w / 2 - center) / self.scale, heading=heading,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
                           center_px=center, forward=c['lookahead'], pursuit=False,
                           curvature=max(float(self.line_curvature(fits[sd], np.arange(spans[sd][0], spans[sd][1] + 1, 3.0)).max())
@@ -233,6 +237,7 @@ class LaneVision:
         c = self.c
         rows = np.array([self.row_at(c['lookahead']), c['height_px'] - 1.0])
         at = {s: np.polyval(f, rows) for s, f in fits.items()}
+        pair = None
         if len(fits) == 2:
             # 두 창이 같은 픽셀을 집었으면 같은 선. 곡선 맞춤 비교는 끝부분 맞춤 오차로 놓침 (11/8 실차 4회 76.5 s)
             a, b = picked_sets['left'], picked_sets['right']
@@ -241,19 +246,36 @@ class LaneVision:
                 fits = {kept: fits[kept]}
             elif np.mean(np.abs(at['left'] - at['right'])) >= lane_px / 2:
                 return {'left': 'left', 'right': 'right'}
+            else:
+                # 픽셀 안 겹치는데 간격 < 차로 폭 절반 = 서로 다른 선 2개 (이중선). 도면 상단: 시작 차로 선과
+                # 주차 진입 차로 선 간격 약 0.2 m. 픽셀 많은 쪽만 남기면 바깥 선을 차로 경계로 잡아 목표가
+                # 안쪽 선 위로 감 (11/9 smooth_1109_lap1 271~275 s 마지막 코너 뒤 선 밟음)
+                # → 이름은 픽셀 많은 선으로 정하고, 남기는 선은 차로 쪽 (왼쪽 선이면 오른쪽 것, 오른쪽 선이면 왼쪽 것)
+                pair = {sd: float(np.mean(x)) for sd, x in at.items()}
+                kept = max(fits, key=lambda sd: len(picked_sets[sd]))
+                fits = {kept: fits[kept]}
         if not fits:
             return {}
         kept = 'left' if 'left' in fits else 'right'
-        row, x = anchors[kept]
+        name = self.single_name(fits[kept], anchors[kept])
+        if pair is not None:
+            pick = max if name == 'left' else min                         # x 클수록 오른쪽
+            kept = pick(pair, key=pair.get)
+        return {name: kept}
+
+    def single_name(self, fit, anchor):
+        """한 선의 이름(left/right). 기억한 좌/우 선과 가까우면 이어받고, 없으면 가까운 끝 위치로"""
+        c = self.c
+        row, x = anchor
         if self.memory:
             distances = {sd: float(np.min(np.hypot((x - mx) / self.scale, (row - mr) * self.row_m)))
                          for sd, (mr, mx, _) in self.memory.items()}
             if min(distances.values()) < c['lane_width'] / 2:
-                return {min(distances, key=distances.get): kept}
+                return min(distances, key=distances.get)
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
-        curvature = -2 * fits[kept][0] / self.row_m ** 2 / self.scale    # 선 곡률(1/m, + 왼쪽으로 휨)
+        curvature = -2 * fit[0] / self.row_m ** 2 / self.scale           # 선 곡률(1/m, + 왼쪽으로 휨)
         split = c['single_line_split'] * clip(curvature / c['split_curvature'], -1.0, 1.0)
-        return {('left' if lateral > split else 'right'): kept}
+        return 'left' if lateral > split else 'right'
 
     def pursuit_target(self, side, fit, span):
         """선 하나로 만든 중앙선 위 pure pursuit 목표점 (앞 m, 옆 m, + 왼쪽). 기준 = 뒷바퀴 축

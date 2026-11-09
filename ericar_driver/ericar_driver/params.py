@@ -11,7 +11,8 @@ ANSWER_CONFIG = {
     # 조향 출력 변화율 제한(rad/s)·한 프레임 급변 무시 (lane_driving). 11/9 lap4 직선 프레임당 변화 p95 0.015 rad
     'steering_rate': 1.5, 'steering_jump': 0.08, 'jump_frames': 3,
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15, 'steering': 0.31,
-                    'angle': 65.0, 'max_distance': 1.3},
+                    'angle': 65.0, 'max_distance': 1.3,
+                    'start_far_angle': 20.0},   # 선 먼 끝이 오른쪽으로 이 각도(°) 넘을 때만 시작 (갈림길 S자 꺾임 제외)
 
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,

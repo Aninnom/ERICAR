@@ -21,6 +21,7 @@ class LaneDriving:
         self.output = 0.0         # 실제 내보낸 조향 (변화율 제한 기준)
         self.lane_stamp = None    # 마지막으로 판단한 카메라 결과 시각 (주기 20 Hz·카메라 28 Hz → 같은 결과 반복 가능)
         self.suspect = 0          # 연속으로 무시한 급변 프레임 수
+        self.far_heading = 0.0    # 마지막으로 본 선 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단
 
     def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True):
         speed, target = self.decide(lane, now, dt, slow, velocity, yaw_rate, allow_hold)
@@ -76,10 +77,17 @@ class LaneDriving:
             return False
         if corner_seen and now >= self.rearm_at:
             self.armed_until = now + h['arm_seconds']
+        if lane['valid'] and 'far_heading' in lane:
+            self.far_heading = lane['far_heading']
         if self.hold is None:
             # 시작: 코너 감지 후 오른쪽 조향이 커짐, 또는 오른쪽으로 꺾던 중 선을 놓침
             turning = self.steering <= -h['start_steering'] or (not lane['valid'] and self.steering < -0.05)
             if now >= self.armed_until or not turning:
+                return False
+            # 보이는 선 먼 끝이 오른쪽으로 start_far_angle(°) 넘게 꺾여 나갈 때만 시작 (선 놓친 프레임은 마지막 값)
+            # 갈림길 끝 45° S자 꺾임: 앞 꺾임에서 준비된 뒤 먼 끝이 왼쪽으로 돌아오는데 고정 65° 회전 → 이탈
+            # (11/9 smooth_1109_lap1 212 s, 먼 끝 +1~+25°. 진짜 코너 시작 시 −37~−75°)
+            if self.far_heading > -math.radians(h['start_far_angle']):
                 return False
             self.hold = dict(yaw=0.0, distance=0.0)
         self.hold['yaw'] += yaw_rate * dt
