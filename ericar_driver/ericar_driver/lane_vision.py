@@ -70,12 +70,52 @@ class LaneVision:
         white_bird = cv2.remap(white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
         return self.analyze_bird(bird, fork_bias, white_bird)
 
-    def white_dashes(self, white_bird):
-        """흰 BEV에서 점선 조각만 남김. 흰 덩어리마다 모양을 m 단위로 재서
-        길이 ≥ white_dash_min_length, 폭 ≤ white_dash_max_width,
-        진행 방향(세로)에서 기울기 ≤ white_dash_max_tilt(도)인 것만 통과.
-        (예전 세로 막대 필터는 점선이 약 10°만 기울어도 지워졌음)"""
+    def drop_beyond_yellow(self, white, yellow):
+        """노란 선 너머(차 반대쪽) 흰색 제거 → 트랙 밖 흰 테두리를 점선으로 오인하지 않음
+        - 노란 덩어리마다 차에 가까운 끝(아래쪽 0.1 m) 위치로 차 왼쪽/오른쪽 판단 → 멀리서 휘어도 좌우 안 바뀜
+        - 길이 ≥ yellow_edge_min_length이고 세로에 가까운(높이 ≥ 폭) 덩어리만 기준 → 작은 얼룩·코너 가로 선 제외
+        - 행마다 그 선의 차 쪽 가장자리보다 바깥 흰색 지움. 선이 안 보이는 행은 가까운 행 위치 이어 씀
+        - 노란 선이 없는 쪽은 안 지움 (옆 차로에서 반대쪽 노란 선이 화면 밖이어도 점선 유지)"""
         c = self.c
+        h, w = white.shape
+        car = w / 2
+        rows = np.arange(h)
+        left_edge = np.full(h, -np.inf)    # 이 x 이하 = 차 왼쪽 노란 선 너머
+        right_edge = np.full(h, np.inf)    # 이 x 이상 = 차 오른쪽 노란 선 너머
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(yellow, connectivity=8)
+        for i in range(1, n):
+            x, y, bw, bh, _ = stats[i]
+            if bh * self.row_m < c['yellow_edge_min_length'] or bw / self.scale > bh * self.row_m:
+                continue
+            ys, xs = np.nonzero(labels[y:y + bh, x:x + bw] == i)
+            ys, xs = ys + y, xs + x
+            near = ys >= ys.max() - 0.1 / self.row_m
+            if xs[near].mean() < car:
+                edge = np.full(h, -np.inf)
+                np.maximum.at(edge, ys, xs)            # 행별 차 쪽(오른쪽) 가장자리
+            else:
+                edge = np.full(h, np.inf)
+                np.minimum.at(edge, ys, xs)            # 행별 차 쪽(왼쪽) 가장자리
+            seen = np.isfinite(edge)
+            edge = np.interp(rows, rows[seen], edge[seen])   # 안 보이는 행: 가까운 행 값 (양 끝은 그대로 유지)
+            if xs[near].mean() < car:
+                left_edge = np.maximum(left_edge, edge)      # 왼쪽 선 여러 개면 차에 가까운 것
+            else:
+                right_edge = np.minimum(right_edge, edge)
+        cols = np.arange(w)[None, :]
+        inside = (cols > left_edge[:, None]) & (cols < right_edge[:, None])
+        return np.where(inside, white, 0).astype(white.dtype)
+
+    def white_dashes(self, white_bird, yellow=None):
+        """흰 BEV에서 점선 조각만 남김. 흰 덩어리마다 모양을 m 단위로 재서
+        white_dash_min_length ≤ 길이 ≤ white_dash_max_length, 폭 ≤ white_dash_max_width,
+        진행 방향(세로)에서 기울기 ≤ white_dash_max_tilt(도)인 것만 통과.
+        (예전 세로 막대 필터는 점선이 약 10°만 기울어도 지워졌음)
+        yellow(노란 차선 BEV)가 있으면 먼저 노란 선 너머 흰색 제거 (drop_beyond_yellow)
+        최대 길이: 노란 선을 놓친 쪽은 테두리가 안 지워짐 → 화면 끝까지 이어진 흰 실선(테두리)은 점선 아님"""
+        c = self.c
+        if yellow is not None:
+            white_bird = self.drop_beyond_yellow(white_bird, yellow)
         keep = np.zeros_like(white_bird)
         n, labels, stats, _ = cv2.connectedComponentsWithStats(white_bird, connectivity=8)
         for i in range(1, n):
@@ -93,7 +133,7 @@ class LaneVision:
             length = np.ptp(pts @ major)
             width = np.ptp(pts @ minor)
             tilt = math.degrees(math.acos(min(1.0, abs(major[1]))))   # 0° = 진행 방향과 나란함
-            if (length >= c['white_dash_min_length'] and width <= c['white_dash_max_width']
+            if (c['white_dash_min_length'] <= length <= c['white_dash_max_length'] and width <= c['white_dash_max_width']
                     and tilt <= c['white_dash_max_tilt']):
                 keep[y:y + bh, x:x + bw][box] = 255
         return keep
@@ -111,21 +151,24 @@ class LaneVision:
         lane_mask = cv2.subtract(bird, horizontal)
         # 정지선은 흰 페인트의 가로선에서 찾음. 차선(lane_mask)은 노랑 그대로
         stop_lines = horizontal if white_bird is None else cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, kernel)
-        # 3차선 가운데 차로: 노란 바깥선이 약 0.78 m 밖이라 탐색 범위(차로 폭 1개) 밖 → 노란 후보가 하나도 없음
-        # 그때만 흰 세로 획(차로 구분 점선)을 차선 후보에 추가. 노란 선이 보이는 곳(코너 등)은 기존과 동일
-        white_lane = False
-        if white_bird is not None and not self.find_starts(lane_mask, lane_px, fork_bias):
-            # 길쭉하고 가는 흰 조각만 남김 (기울어도 됨) → 마름모 고리·글씨 조각·정지선(가로) 제외
-            dashes = self.white_dashes(white_bird)
-            lane_mask = cv2.bitwise_or(lane_mask, dashes)
-            white_lane = True
+        # 3차선: 차로 구분선 = 흰 점선, 바깥 경계 = 노랑. 가운데 차로는 양쪽이 모두 점선
+        # 점선이 보이면 항상 차선 후보에 추가 (노란 선 너머 흰색은 제거 → 트랙 밖 흰 테두리 제외)
+        # 점선이 없으면(흰 그림 없음 포함) 아래 처리 전부 기존과 동일
+        yellow_mask = lane_mask
+        dashes = self.white_dashes(white_bird, yellow_mask) if white_bird is not None else None
+        white_lane = dashes is not None and bool(dashes.any())
+        if white_lane:
+            lane_mask = cv2.bitwise_or(yellow_mask, dashes)
 
         # ---------- 4. 차선 찾기 ----------
-        starts = self.find_starts(lane_mask, lane_px, fork_bias)
+        starts = self.find_starts(yellow_mask, lane_px, fork_bias, dashes if white_lane else None)
         ys, xs = lane_mask.nonzero()
+        # 점선 사이 빈 칸을 건너뛰도록 점선 구간에서만 빈 창 허용 개수 늘림
+        max_missing = c['white_dash_max_missing'] if white_lane else 1
         fits, spans, residuals, windows, solid, picked_sets, anchors, pixels = {}, {}, {}, [], {}, {}, {}, {}
+        line_colors = {}
         for side, x in starts.items():
-            picked = self.sliding_window(ys, xs, x, h, self.scale, side, windows)
+            picked = self.sliding_window(ys, xs, x, h, self.scale, side, windows, max_missing)
             picked_sets[side] = np.asarray(picked)
             if len(picked) < 3 * c['minimum_pixels']:
                 continue
@@ -140,6 +183,12 @@ class LaneVision:
             residuals[side] = float(np.sqrt(np.mean((px - np.polyval(fit, py)) ** 2))) / self.scale
             # 실선이면 위아래로 끊김이 거의 없음 → 차선 변경 금지 판단에 사용
             solid[side] = len(np.unique(py)) / (np.ptp(py) + 1) > c['solid_row_fraction']
+            # 선 색: 픽셀 중 노란 비율 > line_yellow_ratio → 노랑 (3차선 바깥 경계), 아니면 흰 점선
+            # 흰색인데 끊김 없는 실선이면 점선 아님(테두리 등) → 'white_solid' (차로 판단에 안 씀)
+            if np.mean(yellow_mask[py, px] > 0) > c['line_yellow_ratio']:
+                line_colors[side] = 'yellow'
+            else:
+                line_colors[side] = 'white_solid' if solid[side] else 'white'
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
         source = self.label_sides(fits, lane_px, picked_sets, anchors)
@@ -149,12 +198,14 @@ class LaneVision:
         fits = {s: fits[k] for s, k in source.items()}
         spans = {s: spans[k] for s, k in source.items()}
         solid = {s: solid[k] for s, k in source.items()}
+        line_colors = {s: line_colors[k] for s, k in source.items()}
         residuals = [residuals[k] for k in source.values()]
 
         result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
                       mask=bird, lane_mask=lane_mask, white_mask=white_bird, white_lane=white_lane, windows=windows,
-                      fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
+                      fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid,
+                      colors=line_colors)
 
         if not fits:
             # 못 찾으면 탐색 기준 중앙도 버림. 남겨두면 엉뚱한 기준 주변만 계속 찾아 영영 못 찾음 (도면 코너 시뮬: 정지)
@@ -189,11 +240,36 @@ class LaneVision:
         self.find_stop_line(result, stop_lines, lane_px)
         return result
 
-    def find_starts(self, lane_mask, lane_px, fork_bias):
-        """아래쪽 띠의 흰 픽셀 개수(히스토그램)에서 좌/우 차선 시작 x를 고른다."""
+    @staticmethod
+    def band_hist(mask):
+        """아래쪽 30% 띠의 열별 픽셀 수 (9픽셀 이동평균)"""
+        h = mask.shape[0]
+        band = mask[int(h * 0.7):] > 0
+        return np.convolve(band.sum(axis=0).astype(float), np.ones(9) / 9, mode='same')
+
+    @staticmethod
+    def peaks(hist, lo, hi, minimum=4):
+        """[lo, hi) 안에서 minimum 이상인 연속 구간마다 최댓값 위치"""
+        above = np.flatnonzero(hist[lo:hi] >= minimum)
+        if not len(above):
+            return []
+        groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
+        return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
+
+    def find_starts(self, lane_mask, lane_px, fork_bias, dashes=None):
+        """아래쪽 띠의 흰 픽셀 개수(히스토그램)에서 좌/우 차선 시작 x를 고른다.
+
+        dashes(흰 점선 BEV)가 있으면 칸마다 (3차선 구간)
+          1) 예상 위치(기준 중앙 ± 차로 폭 절반)에서 start_expect_tolerance 안의 노란 봉우리 → 노란 선
+             (일반 차선·옆 차로의 노란 바깥 경계는 기존과 같은 선)
+          2) 없으면 흰 점선 봉우리 중 예상 위치에 가장 가까운 것
+             (가운데 차로: 치우쳐서 노란 바깥선이 칸에 들어와도 점선 선택. 기존은 픽셀 많은 노란 선 선택)
+          3) 둘 다 없으면 기존처럼 노란 최대
+        dashes가 없으면 기존과 동일"""
         h, w = lane_mask.shape
-        band = lane_mask[int(h * 0.7):] > 0
-        hist = np.convolve(band.sum(axis=0).astype(float), np.ones(9) / 9, mode='same')
+        hist = self.band_hist(lane_mask)
+        white_hist = self.band_hist(dashes) if dashes is not None else None
+        tolerance = self.c['start_expect_tolerance'] * self.scale
         # 기준선: 이전 프레임 차로 중앙(없으면 화면 중앙). 갈림길에선 fork_bias만큼 이동
         center = self.previous_center if self.previous_center is not None else w / 2
         center -= fork_bias * w / self.c['view_width']
@@ -201,7 +277,19 @@ class LaneVision:
         for side, (lo, hi) in {'left': (center - lane_px, center),
                                'right': (center, center + lane_px)}.items():
             lo, hi = int(clip(lo, 0, w - 1)), int(clip(hi, 1, w))
-            if hi > lo and hist[lo:hi].max() >= 4:
+            if hi <= lo:
+                continue
+            if white_hist is not None:
+                expected = center + (-lane_px / 2 if side == 'left' else lane_px / 2)
+                yellow = [x for x in self.peaks(hist, lo, hi) if abs(x - expected) <= tolerance]
+                white = self.peaks(white_hist, lo, hi)
+                if yellow:
+                    starts[side] = min(yellow, key=lambda x: abs(x - expected))
+                    continue
+                if white:
+                    starts[side] = min(white, key=lambda x: abs(x - expected))
+                    continue
+            if hist[lo:hi].max() >= 4:
                 starts[side] = lo + int(hist[lo:hi].argmax())
         # 갈림길: 따라갈 쪽 차선 하나만 사용 (+ 왼쪽, - 오른쪽)
         if fork_bias > 0.001:
@@ -290,8 +378,8 @@ class LaneVision:
         dxdf = np.polyval(np.polyder(fit), rows) / (self.scale * self.row_m)   # 앞 1 m당 옆 변화
         return np.abs(2 * fit[0]) / self.scale / self.row_m ** 2 / (1 + dxdf ** 2) ** 1.5
 
-    def sliding_window(self, ys, xs, x, h, scale, side, windows):
-        """아래에서 위로 창을 옮기며 차선 픽셀을 모은다."""
+    def sliding_window(self, ys, xs, x, h, scale, side, windows, max_missing=1):
+        """아래에서 위로 창을 옮기며 차선 픽셀을 모은다. max_missing: 연속 빈 창 허용 개수 (점선 구간만 늘림)"""
         c = self.c
         margin, picked, last, missing = c['margin'] * scale, [], None, 0
         for i in range(c['windows']):
@@ -307,7 +395,7 @@ class LaneVision:
                 missing = 0
             elif picked:
                 missing += 1
-                if missing > 1:                    # 두 칸 연속 비면 중단
+                if missing > max_missing:          # 기본: 두 칸 연속 비면 중단
                     break
         return picked
 
