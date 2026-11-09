@@ -70,6 +70,34 @@ class LaneVision:
         white_bird = cv2.remap(white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
         return self.analyze_bird(bird, fork_bias, white_bird)
 
+    def white_dashes(self, white_bird):
+        """흰 BEV에서 점선 조각만 남김. 흰 덩어리마다 모양을 m 단위로 재서
+        길이 ≥ white_dash_min_length, 폭 ≤ white_dash_max_width,
+        진행 방향(세로)에서 기울기 ≤ white_dash_max_tilt(도)인 것만 통과.
+        (예전 세로 막대 필터는 점선이 약 10°만 기울어도 지워졌음)"""
+        c = self.c
+        keep = np.zeros_like(white_bird)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(white_bird, connectivity=8)
+        for i in range(1, n):
+            x, y, bw, bh, area = stats[i]
+            if area < c['minimum_pixels']:
+                continue
+            box = labels[y:y + bh, x:x + bw] == i
+            ys, xs = np.nonzero(box)
+            # 픽셀 → m (가로·세로 픽셀 크기가 달라서 m로 바꾼 뒤 모양 판단)
+            pts = np.column_stack(((xs + x) / self.scale, (ys + y) * self.row_m))
+            pts -= pts.mean(axis=0)
+            # 조각이 가장 길게 뻗은 방향(주축)과 그 수직 방향으로 길이·폭 측정
+            _, vectors = np.linalg.eigh(np.cov(pts.T))
+            major, minor = vectors[:, 1], vectors[:, 0]
+            length = np.ptp(pts @ major)
+            width = np.ptp(pts @ minor)
+            tilt = math.degrees(math.acos(min(1.0, abs(major[1]))))   # 0° = 진행 방향과 나란함
+            if (length >= c['white_dash_min_length'] and width <= c['white_dash_max_width']
+                    and tilt <= c['white_dash_max_tilt']):
+                keep[y:y + bh, x:x + bw][box] = 255
+        return keep
+
     def analyze_bird(self, bird, fork_bias=0.0, white_bird=None):
         """ROS 없이 테스트할 수 있도록 버드아이뷰 이후 처리를 분리.
         white_bird: 흰색 BEV (정지선용). None이면 예전처럼 노란 가로선에서 정지선 탐색"""
@@ -87,10 +115,9 @@ class LaneVision:
         # 그때만 흰 세로 획(차로 구분 점선)을 차선 후보에 추가. 노란 선이 보이는 곳(코너 등)은 기존과 동일
         white_lane = False
         if white_bird is not None and not self.find_starts(lane_mask, lane_px, fork_bias):
-            length = max(3, int(c['white_lane_min_length'] / self.row_m))
-            # 세로로 긴 획만 남김 → 마름모 대각선·글씨 조각·정지선(가로) 제외
-            vertical = cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, np.ones((length, 1), np.uint8))
-            lane_mask = cv2.bitwise_or(lane_mask, vertical)
+            # 길쭉하고 가는 흰 조각만 남김 (기울어도 됨) → 마름모 고리·글씨 조각·정지선(가로) 제외
+            dashes = self.white_dashes(white_bird)
+            lane_mask = cv2.bitwise_or(lane_mask, dashes)
             white_lane = True
 
         # ---------- 4. 차선 찾기 ----------
