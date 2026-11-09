@@ -16,7 +16,7 @@ class LaneDriving:
         self.last_seen = -1e9
         self.armed_until = -1e9   # 코너 감지 후 이 시각까지 코너 유지 시작 가능
         self.rearm_at = -1e9      # 코너 유지 끝난 뒤 다시 준비 가능한 시각
-        self.hold = None          # 코너 유지 중: dict(yaw 누적 회전 rad, distance m, two_lines 연속 장수, stamp)
+        self.hold = None          # 코너 유지 중: dict(yaw 누적 회전 rad, distance m)
 
     def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True):
         c, limit = self.c, self.robot['max_steering']
@@ -59,15 +59,12 @@ class LaneDriving:
             turning = self.steering <= -h['start_steering'] or (not lane['valid'] and self.steering < -0.05)
             if now >= self.armed_until or not turning:
                 return False
-            self.hold = dict(yaw=0.0, distance=0.0, two_lines=0, stamp=lane.get('stamp'))
+            self.hold = dict(yaw=0.0, distance=0.0)
         self.hold['yaw'] += yaw_rate * dt
         self.hold['distance'] += abs(velocity) * dt
-        if lane.get('stamp') != self.hold['stamp']:   # 새 영상마다 두 선 연속 장수 갱신
-            self.hold['stamp'] = lane.get('stamp')
-            self.hold['two_lines'] = self.hold['two_lines'] + 1 if lane['valid'] and len(lane.get('fits', {})) == 2 else 0
         turned = math.degrees(-self.hold['yaw'])     # 오른쪽 회전 = odom 각속도 음수
-        if (turned >= h['angle'] or self.hold['distance'] >= h['max_distance'] or
-                (turned >= h['min_angle'] and self.hold['two_lines'] >= h['two_line_frames'])):
+        # 두 선 보이면 일찍 끝내는 조건은 제거: 차로 2개 구간 코너 출구에서 옆 차로 선 쌍을 잡아 52°에 종료 → 이탈 (11/9 integ_1109_lap2 172 s)
+        if turned >= h['angle'] or self.hold['distance'] >= h['max_distance']:
             self.hold = None
             self.armed_until = -1e9   # 같은 코너에서 재시작 방지: 코너 출구 곡률로 다시 준비되지 않게 arm_seconds 동안 막음
             self.rearm_at = now + h['arm_seconds']
