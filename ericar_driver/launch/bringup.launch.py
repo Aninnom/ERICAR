@@ -18,8 +18,9 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
+# /imu: 실측 자이로. /odom 회전은 바퀴 드라이버가 보고 조향각으로 계산한 값(v·tan(조향)/축간거리)이라 실제 회전 확인용 (11/9)
 BAG_TOPICS = ['/camera/color/image_raw/compressed', '/answer/detections', '/answer/status',
-              '/odom', '/limo/ack_cmd', '/limo_status', '/scan']
+              '/odom', '/imu', '/limo/ack_cmd', '/limo_status', '/scan']
 
 
 def include(package, launch_file, arguments=None):

@@ -8,6 +8,8 @@ ANSWER_CONFIG = {
     # 우회전 코너 유지: 코너 안에서는 카메라 사각지대(앞바퀴 앞 약 0.4 m 이내)로 선을 놓치고 남은 한 선 좌우 오판 (11/9 white_1109_lap)
     # → 코너 감지 후 오른쪽 조향 시작하면 고정 조향으로 odom 회전각 angle(°)까지 유지. 조향 0.31 = atan(축간거리 0.2 / 코너 중심 반지름 0.62)
     # 끝: 회전각 도달 또는 최대 거리 (두 선 조기 종료는 11/9 제거, lane_driving.corner_hold 참고)
+    # 조향 출력 변화율 제한(rad/s)·한 프레임 급변 무시 (lane_driving). 11/9 lap4 직선 프레임당 변화 p95 0.015 rad
+    'steering_rate': 1.5, 'steering_jump': 0.08, 'jump_frames': 3,
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15, 'steering': 0.31,
                     'angle': 65.0, 'max_distance': 1.3},
 
@@ -44,6 +46,9 @@ ANSWER_CONFIG = {
         # pure pursuit 목표점 거리(m, 뒷축 기준, 중앙선 위 점). 도면 1번 코너 폐루프 시뮬: 0.9면 탈출 때 바깥 선 접촉,
         # 0.6~0.65 바깥 여유 최대 (5~7 cm). 직선 노이즈 고려 0.65
         'pursuit_distance': 0.65,
+        # 중앙선이 모두 pursuit_distance 원 밖이고 선 기울기가 pursuit_ahead_tilt(°) 넘으면 선 따라 pursuit_ahead m 앞 점 목표
+        'pursuit_ahead': 0.2, 'pursuit_ahead_tilt': 40,
+        'refit_tolerance': 0.04,     # 2차식 맞춤 후 이 거리(m) 밖 픽셀 빼고 재맞춤
         'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
         'lookahead': 0.9,           # 차로 중앙·방향 기준 거리(m). 목표점 없을 때 조향, 정지선 탐색·차선 변경·주차용
         'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지

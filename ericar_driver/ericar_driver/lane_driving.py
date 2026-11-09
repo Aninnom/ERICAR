@@ -2,6 +2,7 @@
 # 출처: hello-osy/2026-orda-mentoring src/orda_sim/orda_sim/answer.py (613c9b4)
 # 11/8 코너: 곡률 앞먹임 제거, 목표점 있으면 pure pursuit만 (PR #8)
 # 11/9 우회전 코너 유지 추가 (corner_hold)
+# 11/9 출력 조향 변화율 제한·한 프레임 급변 무시 추가 (녹화 integ_1109_lap4: 프레임당 오차 5 cm 넘는 점프 108회)
 import math
 
 from .common import clip, PID
@@ -17,8 +18,19 @@ class LaneDriving:
         self.armed_until = -1e9   # 코너 감지 후 이 시각까지 코너 유지 시작 가능
         self.rearm_at = -1e9      # 코너 유지 끝난 뒤 다시 준비 가능한 시각
         self.hold = None          # 코너 유지 중: dict(yaw 누적 회전 rad, distance m)
+        self.output = 0.0         # 실제 내보낸 조향 (변화율 제한 기준)
+        self.lane_stamp = None    # 마지막으로 판단한 카메라 결과 시각 (주기 20 Hz·카메라 28 Hz → 같은 결과 반복 가능)
+        self.suspect = 0          # 연속으로 무시한 급변 프레임 수
 
     def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True):
+        speed, target = self.decide(lane, now, dt, slow, velocity, yaw_rate, allow_hold)
+        # 출력 조향 변화율 제한: 인식 튐·코너 유지 시작/해제가 바퀴에 계단으로 들어가지 않게
+        step = self.c['steering_rate'] * dt
+        self.output += clip(target - self.output, -step, step)
+        return speed, self.output
+
+    def decide(self, lane, now, dt, slow, velocity, yaw_rate, allow_hold):
+        """이번 주기 목표 (속도, 조향). 조향은 변화율 제한 전 값"""
         c, limit = self.c, self.robot['max_steering']
         if lane['valid']:
             self.last_seen = lane.get('stamp', now)
@@ -29,9 +41,19 @@ class LaneDriving:
             if lane.get('pursuit'):
                 # 목표점이 차로 중앙선 위(lane_vision.pursuit_target) → PID는 같은 정보를 중복 반영하므로 제외
                 self.pid.reset()
-                self.steering = clip(geometric, -limit, limit)
+                desired = clip(geometric, -limit, limit)
             else:
-                self.steering = clip(geometric+c['pid']['feedback_gain']*self.pid.update(error, dt), -limit, limit)
+                desired = clip(geometric+c['pid']['feedback_gain']*self.pid.update(error, dt), -limit, limit)
+            # 한 프레임 급변 무시: 차는 프레임당 1.3 cm 이하로 움직이는데 선 개수 전환·잡음으로 목표가 튐
+            # steering_jump 넘게 바뀐 결과는 jump_frames 프레임까지 무시, 계속되면 실제 변화로 보고 받아들임
+            stamp = lane.get('stamp', now)
+            if stamp != self.lane_stamp:
+                self.lane_stamp = stamp
+                if abs(desired - self.steering) > c['steering_jump'] and self.suspect < c['jump_frames']:
+                    self.suspect += 1
+                else:
+                    self.suspect = 0
+                    self.steering = desired
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*abs(self.steering)/limit))
         # 코너 미리 감속: 조향 기준 감속은 조향이 커진 뒤라 늦음 (11/9 실차 2번 코너 0.37 m/s 진입 → 바깥 이탈)
         # 보이는 선 곡률이 코너 폭 보간 시작값 이상이면 코너 속도. 회전 시작 약 2.3 s 전 감지 (녹화 bringup_1109_0841)

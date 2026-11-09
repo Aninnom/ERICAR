@@ -1,6 +1,7 @@
 """차선 인식: BEV 변환, sliding window, 정지선 [간단 버전]"""
 # 출처: hello-osy/2026-orda-mentoring answer.py (613c9b4), 차선 간단 버전은 소민 realcar 브랜치 66362f3
 # 11/8 코너: 목표점 pure pursuit·좌우 판단 추가 (sessions 차선 기록, PR #8)
+# 11/9 이상 픽셀 빼고 재맞춤·누운 선 목표점 (녹화 integ_1109_lap4 분석)
 import math
 import cv2
 import numpy as np
@@ -133,6 +134,11 @@ class LaneVision:
             if np.ptp(py) < 0.16 * h:          # 너무 짧은 조각은 곡선으로 안 믿음
                 continue
             fit = np.polyfit(py, px, 2)          # x = a*y^2 + b*y + c (픽셀)
+            # 이상 픽셀 빼고 재맞춤: 선에 붙은 가로 조각·잡음이 곡선을 끌어당김 (lap4 재생: 185~190 s 오차 점프 12 → 3회)
+            near = np.abs(px - np.polyval(fit, py)) < c['refit_tolerance'] * self.scale
+            if near.sum() >= 3 * c['minimum_pixels'] and not near.all():
+                py, px = py[near], px[near]
+                fit = np.polyfit(py, px, 2)
             fits[side], spans[side] = fit, (float(py.min()), float(py.max()))
             low = py >= py.max() - 0.1 / self.row_m                     # 가장 가까운 0.1 m 픽셀
             anchors[side] = (float(py[low].mean()), float(px[low].mean()))
@@ -281,8 +287,16 @@ class LaneVision:
         ahead = cf > 0.1
         if not ahead.any():
             return None
-        cf, cl = cf[ahead], cl[ahead]
-        i = int(np.argmin(np.abs(np.hypot(cf, cl) - c['pursuit_distance'])))
+        cf, cl, tf, tl = cf[ahead], cl[ahead], tf[ahead], tl[ahead]
+        distance = np.hypot(cf, cl)
+        i = int(np.argmin(np.abs(distance - c['pursuit_distance'])))
+        # 중앙선 전체가 원 밖이고 그 점에서 선이 크게 누움(덜 돈 코너 출구 등): 가장 가까운 점은 차 옆이라
+        # 되돌리는 방향이 틀림 (11/9 lap4 169.7 s 우회전 직후 왼쪽 목표 → S자)
+        # → 선을 따라 pursuit_ahead m 앞 점. 점 순서 = 먼 쪽 → 가까운 쪽이라 앞으로 = 번호 감소
+        # 누운 선에만 적용: 직선에서도 쓰면 목표가 1 m 가까이 멀어져 선 개수 전환 때 오차 차이 커짐 (lap4 143 s)
+        if distance.min() > c['pursuit_distance'] and math.degrees(math.atan2(abs(tl[i]), tf[i])) > c['pursuit_ahead_tilt']:
+            arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(cf[:i + 1][::-1]), np.diff(cl[:i + 1][::-1])))])
+            i -= int(min(np.searchsorted(arc, c['pursuit_ahead']), i))
         return float(cf[i]), float(cl[i])
 
     def line_curvature(self, fit, rows):
