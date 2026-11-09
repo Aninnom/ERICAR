@@ -4,6 +4,8 @@
 ANSWER_CONFIG = {
     'rate_hz': 20.0, 'debug_rate_hz': 5.0, 'sensor_timeout': 0.7, 'odometry_timeout': 0.7,
     'base_speed': 0.4, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
+    'corner_speed': 0.2,   # 앞에 코너(선 곡률 ≥ lane corner_curvature 시작값) 보이면 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
+
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
@@ -25,7 +27,7 @@ ANSWER_CONFIG = {
         'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
         # 한 선만 보일 때(이력 없음) 좌우 판단 경계 이동량(m), 선 곡률 split_curvature(1/m)에서 최대. label_sides 참고
         'single_line_split': 0.14, 'split_curvature': 1.7,
-        'memory_frames': 10,  # 한 선 이름 이어받기: 차선 못 찾은 프레임이 이보다 많으면 이력 버림 (약 0.35 s)
+        'memory_frames': 10,  # 한 선 이름 이어받기: 좌/우 선별로 마지막으로 본 뒤 이 프레임 수까지 기억 (약 0.35 s)
         'lane_width': 0.52,          # 선 중심 간격(m). 도면 직선 0.51~0.52, 11/8 카메라 보정 0.52
         # 코너 차로 폭(m)과 그 폭을 쓰는 선 곡률 범위(1/m, 시작~끝 보간). 도면: 안쪽 R0.59 → 1.7, 바깥 R0.66 → 1.5, 바깥 R1.4 완화 → 0.7
         'corner_lane_width': 0.77, 'corner_curvature': [0.8, 1.4],
