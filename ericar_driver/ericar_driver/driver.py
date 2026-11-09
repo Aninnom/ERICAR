@@ -199,8 +199,10 @@ class Driver:
         self.fork_remaining = max(0, self.fork_remaining-max(0, velocity)*dt)
         self.update_stop_line(lane, velocity, now, dt)
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
-        speed, steering = self.lane_driver.update(lane, now, dt, now < self.slow_until)
-        mode = self.state
+        # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
+        speed, steering = self.lane_driver.update(lane, now, dt, now < self.slow_until, velocity, angular_velocity,
+                                                  allow_hold=self.state == 'lane' and not self.avoiding)
+        mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         if self.state == 'lane':
             change = self.lane_change.update(lane, scan, velocity, angular_velocity, dt,
                                             self.allowed('fork') or self.fork_remaining > 0, self.fork_request)
@@ -235,5 +237,6 @@ class Driver:
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request,
                           avoiding=self.avoiding, cone_active=self.cones.active,
-                          cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed)
+                          cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
+                          corner_hold=self.lane_driver.hold is not None)
         return float(speed), clip(steering, -self.robot['max_steering'], self.robot['max_steering']), mode if self.state == 'lane' else self.state
