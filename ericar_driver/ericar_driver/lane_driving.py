@@ -58,9 +58,14 @@ class LaneDriving:
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*abs(self.steering)/limit))
         # 코너 미리 감속: 조향 기준 감속은 조향이 커진 뒤라 늦음 (11/9 실차 2번 코너 0.37 m/s 진입 → 바깥 이탈)
         # 보이는 선 곡률이 코너 폭 보간 시작값 이상이면 코너 속도. 회전 시작 약 2.3 s 전 감지 (녹화 bringup_1109_0841)
-        corner_seen = lane['valid'] and lane.get('curvature', 0.0) >= c['lane']['corner_curvature'][0]
-        if corner_seen:
-            speed = min(speed, c['corner_speed'])
+        # 코너 유지 준비(corner_seen)는 곡률 시작값 그대로, 감속은 곡률 corner_slow_curvature 구간에서 기본 → 코너 속도로 보간
+        # 곡률 0.8에서 바로 감속하면 꺾기 3.8~6.4 s 전부터 0.2 m/s (11/9 confusion_1109_lap1 코너 4곳 중 3곳)
+        # 곡률 ≈ 코너까지 거리: 2 → 약 0.5 m 전, 3.5 → 약 0.2 m 전 (같은 녹화, 코너 유지 시작 기준)
+        curvature = lane.get('curvature', 0.0) if lane['valid'] else 0.0
+        corner_seen = lane['valid'] and curvature >= c['lane']['corner_curvature'][0]
+        lo, hi = c['corner_slow_curvature']
+        ramp = clip((curvature - lo) / (hi - lo), 0.0, 1.0)
+        speed = min(speed, c['base_speed'] - ramp * (c['base_speed'] - c['corner_speed']))
         if self.corner_hold(lane, now, dt, velocity, yaw_rate, allow_hold, corner_seen):
             return min(speed, c['corner_speed']), -c['corner_hold']['steering']
         if slow or lane['abnormal'] or not lane['valid']:
