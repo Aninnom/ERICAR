@@ -29,6 +29,10 @@ class LaneDriving:
             else:
                 self.steering = clip(geometric+c['pid']['feedback_gain']*self.pid.update(error, dt), -limit, limit)
         speed = max(c['minimum_curve_speed'], c['base_speed']*(1-c['curve_speed_gain']*abs(self.steering)/limit))
+        # 코너 미리 감속: 조향 기준 감속은 조향이 커진 뒤라 늦음 (11/9 실차 2번 코너 0.37 m/s 진입 → 바깥 이탈)
+        # 보이는 선 곡률이 코너 폭 보간 시작값 이상이면 코너 속도. 회전 시작 약 2.3 s 전 감지 (녹화 bringup_1109_0841)
+        if lane['valid'] and lane.get('curvature', 0.0) >= c['lane']['corner_curvature'][0]:
+            speed = min(speed, c['corner_speed'])
         if slow or lane['abnormal'] or not lane['valid']:
             speed = min(speed, c['slow_speed'], c['base_speed']/2, .2)
         if now-self.last_seen > c['lane']['lost_grace']:
