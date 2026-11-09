@@ -22,6 +22,7 @@ class LaneDriving:
         self.lane_stamp = None    # 마지막으로 판단한 카메라 결과 시각 (주기 20 Hz·카메라 28 Hz → 같은 결과 반복 가능)
         self.suspect = 0          # 연속으로 무시한 급변 프레임 수
         self.far_heading = 0.0    # 마지막으로 본 선 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단
+        self.last_curvature = 0.0 # 마지막으로 본 선 곡률(1/m). 코너 유지 조향 선택
         self.hold_ended = -1e9    # 코너 유지 끝난 시각
 
     def in_corner(self, now):
@@ -73,7 +74,7 @@ class LaneDriving:
         ramp = clip((curvature - lo) / (hi - lo), 0.0, 1.0)
         speed = min(speed, c['base_speed'] - ramp * (c['base_speed'] - c['corner_speed']))
         if self.corner_hold(lane, now, dt, velocity, yaw_rate, allow_hold, corner_seen):
-            return min(speed, c['corner_speed']), -c['corner_hold']['steering']
+            return min(speed, c['corner_speed']), -self.hold['steering']
         if slow or lane['abnormal'] or not lane['valid']:
             speed = min(speed, c['slow_speed'], c['base_speed']/2, .2)
         if now-self.last_seen > c['lane']['lost_grace']:
@@ -90,6 +91,8 @@ class LaneDriving:
             self.armed_until = now + h['arm_seconds']
         if lane['valid'] and 'far_heading' in lane:
             self.far_heading = lane['far_heading']
+        if lane['valid']:
+            self.last_curvature = lane.get('curvature', 0.0)
         if self.hold is None:
             # 시작: 코너 감지 후 오른쪽 조향이 커짐, 또는 오른쪽으로 꺾던 중 선을 놓침
             turning = self.steering <= -h['start_steering'] or (not lane['valid'] and self.steering < -0.05)
@@ -100,7 +103,19 @@ class LaneDriving:
             # (11/9 smooth_1109_lap1 212 s, 먼 끝 +1~+25°. 진짜 코너 시작 시 −37~−75°)
             if self.far_heading > -math.radians(h['start_far_angle']):
                 return False
-            self.hold = dict(yaw=0.0, distance=0.0)
+            # 조향 선택: 코너가 바로 앞에 보이며 시작(곡률 큼)하면 크게, 이미 pursuit로 돌던 중 시작(곡률 작음)하면 작게
+            # (11/9 main_1109_lap3: 1·2번 코너 시작 곡률 5~9 → 0.38로 1번 통과, 3·4번 0.0~0.4 → 0.38이면 3번 안쪽 선 물음)
+            sharp = self.last_curvature >= h['sharp_curvature']
+            base = h['steering'] if sharp else h['gentle_steering']
+            self.hold = dict(yaw=0.0, distance=0.0, base=base, steering=base,
+                             error0=lane['error'] if lane['valid'] else None)
+        # 유지 중 보정: 보이는 선 오차가 시작 때보다 오른쪽(−)으로 커지면 더, 왼쪽(+)으로 가면 덜 꺾음. 선 놓치면 마지막 값
+        # (11/10 main_1109_lap4: 3번 코너 0.31에도 오차 −0.17→+0.15 안쪽 선 물음, 마지막 코너 시작 곡률 튀어 0.31 선택 → 오차 −0.26→−0.37 늦게 돎)
+        if lane['valid']:
+            if self.hold['error0'] is None:
+                self.hold['error0'] = lane['error']
+            self.hold['steering'] = clip(self.hold['base'] + h['error_gain'] * (self.hold['error0'] - lane['error']),
+                                         h['steering_min'], self.robot['max_steering'])
         self.hold['yaw'] += yaw_rate * dt
         self.hold['distance'] += abs(velocity) * dt
         turned = math.degrees(-self.hold['yaw'])     # 오른쪽 회전 = odom 각속도 음수

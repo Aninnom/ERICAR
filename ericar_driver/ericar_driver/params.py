@@ -11,7 +11,11 @@ ANSWER_CONFIG = {
     # 끝: 회전각 도달 또는 최대 거리 (두 선 조기 종료는 11/9 제거, lane_driving.corner_hold 참고)
     # 조향 출력 변화율 제한(rad/s)·한 프레임 급변 무시 (lane_driving). 11/9 lap4 직선 프레임당 변화 p95 0.015 rad
     'steering_rate': 1.5, 'steering_jump': 0.08, 'jump_frames': 3,
-    'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15, 'steering': 0.31,
+    'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15,
+                    # 시작 시 곡률 sharp_curvature 이상이면 steering, 아니면 gentle_steering (11/9 lap3, 1번 코너 0.31이면 바깥 이탈)
+                    'steering': 0.38, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
+                    # 유지 중 조향 = 시작 값 + error_gain × (시작 오차 − 현재 오차), steering_min~max_steering 제한
+                    'error_gain': 0.4, 'steering_min': 0.2,
                     'angle': 65.0, 'max_distance': 1.3,
                     'start_far_angle': 20.0,    # 선 먼 끝이 오른쪽으로 이 각도(°) 넘을 때만 시작 (갈림길 S자 꺾임 제외)
                     # 유지 중·끝난 뒤 after_seconds 동안 기억 없는 한 선은 가까운 끝이 오른쪽 corner_left_limit(m) 안이면 왼쪽 선
