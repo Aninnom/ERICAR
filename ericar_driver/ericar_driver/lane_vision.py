@@ -83,6 +83,15 @@ class LaneVision:
         lane_mask = cv2.subtract(bird, horizontal)
         # 정지선은 흰 페인트의 가로선에서 찾음. 차선(lane_mask)은 노랑 그대로
         stop_lines = horizontal if white_bird is None else cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, kernel)
+        # 3차선 가운데 차로: 노란 바깥선이 약 0.78 m 밖이라 탐색 범위(차로 폭 1개) 밖 → 노란 후보가 하나도 없음
+        # 그때만 흰 세로 획(차로 구분 점선)을 차선 후보에 추가. 노란 선이 보이는 곳(코너 등)은 기존과 동일
+        white_lane = False
+        if white_bird is not None and not self.find_starts(lane_mask, lane_px, fork_bias):
+            length = max(3, int(c['white_lane_min_length'] / self.row_m))
+            # 세로로 긴 획만 남김 → 마름모 대각선·글씨 조각·정지선(가로) 제외
+            vertical = cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, np.ones((length, 1), np.uint8))
+            lane_mask = cv2.bitwise_or(lane_mask, vertical)
+            white_lane = True
 
         # ---------- 4. 차선 찾기 ----------
         starts = self.find_starts(lane_mask, lane_px, fork_bias)
@@ -117,7 +126,7 @@ class LaneVision:
 
         result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
-                      mask=bird, lane_mask=lane_mask, white_mask=white_bird, windows=windows,
+                      mask=bird, lane_mask=lane_mask, white_mask=white_bird, white_lane=white_lane, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid)
 
         if not fits:
