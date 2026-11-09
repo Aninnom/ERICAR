@@ -356,17 +356,19 @@ class LaneVision:
         """한 선의 이름(left/right). 기억한 좌/우 선과 가까우면 이어받고, 없으면 가까운 끝 위치로"""
         c = self.c
         row, x = anchor
-        if self.memory:
-            distances = {sd: float(np.min(np.hypot((x - mx) / self.scale, (row - mr) * self.row_m)))
-                         for sd, (mr, mx, _) in self.memory.items()}
-            if min(distances.values()) < c['lane_width'] / 2:
-                return min(distances, key=distances.get)
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
         if self.corner_left_limit is not None:
             # 우회전 코너 유지 중·직후(loop가 설정): 안쪽 선은 오른쪽 사각으로 빠지고 앞에 남는 건 바깥(왼쪽) 선
             # 위치 경계(±0.14)로 나누면 차 앞 선을 오른쪽으로 오판 → 왼쪽 목표 → 바깥 선 넘음
             # (11/9 slow_1109_lap1 686.2 s 3번 코너, +0.07 m 선을 오른쪽으로 판단 → 688~690 s 좌회전·이탈)
+            # 기억보다 먼저 적용: 유지 중 두 선 본 기억이 남은 선에 오른쪽 이름을 넘김
+            # (11/9 main_1109_lap2b 1번 코너 103.4 s, 유지 끝 직후 r 판단 → 좌회전 +0.27·바깥 이탈)
             return 'left' if lateral > -self.corner_left_limit else 'right'
+        if self.memory:
+            distances = {sd: float(np.min(np.hypot((x - mx) / self.scale, (row - mr) * self.row_m)))
+                         for sd, (mr, mx, _) in self.memory.items()}
+            if min(distances.values()) < c['lane_width'] / 2:
+                return min(distances, key=distances.get)
         curvature = -2 * fit[0] / self.row_m ** 2 / self.scale           # 선 곡률(1/m, + 왼쪽으로 휨)
         split = c['single_line_split'] * clip(curvature / c['split_curvature'], -1.0, 1.0)
         return 'left' if lateral > split else 'right'
