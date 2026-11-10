@@ -203,7 +203,8 @@ class Driver:
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
         in_fork = self.fork_pending or self.fork_remaining > 0
         speed, steering = self.lane_driver.update(lane, now, dt, now < self.slow_until, velocity, angular_velocity,
-                                                  allow_hold=self.state == 'lane' and not self.avoiding and not in_fork)
+                                                  allow_hold=self.state == 'lane' and not self.avoiding and not in_fork,
+                                                  avoiding=self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         if self.state == 'lane':
             change = self.lane_change.update(lane, scan, velocity, angular_velocity, dt,

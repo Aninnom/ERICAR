@@ -34,7 +34,11 @@ class LaneDriving:
         h = self.c.get('corner_hold', {})
         return self.hold is not None or now - self.hold_ended < h.get('after_seconds', 0.0)
 
-    def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True):
+    def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True, avoiding=False):
+        if avoiding:
+            # 라바콘·차선 변경이 조향 중: 선 놓침 탐색 시간·거리 누적 안 함 (콘 구간 약 2.1 m에서 선 놓치면
+            # lost_search.distance 넘겨 끝나자마자 정지). 끝난 뒤 lost_grace부터 다시 셈
+            self.last_seen, self.search_distance = now, 0.0
         speed, target = self.decide(lane, now, dt, slow, velocity, yaw_rate, allow_hold)
         # 출력 조향 변화율 제한: 인식 튐·코너 유지 시작/해제가 바퀴에 계단으로 들어가지 않게
         step = self.c['steering_rate'] * dt
