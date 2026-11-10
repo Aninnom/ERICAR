@@ -39,7 +39,7 @@ def paint_bgr():
     import cv2
     from ericar_driver.params import ANSWER_CONFIG
     lane = ANSWER_CONFIG['lane']
-    hsv = [(a + b) // 2 for a, b in zip(lane['white_min'], lane['white_max'])]
+    hsv = [(a + b) // 2 for a, b in zip(lane['yellow_min'], lane['yellow_max'])]
     return cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2BGR)[0, 0]
 
 

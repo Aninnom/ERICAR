@@ -5,7 +5,8 @@
 가까운 안전 조향으로 피함 (기존: 정지), 이동 거리 초과 시 영구 정지 대신 차선 주행으로 복귀.
 
 이 파일은 라이다 판단·조향만 한다. 차선(흰 점선·실선) 인식은 차선 담당 lane_vision.py에서
-lane['valid'], lane['heading'], lane['error'], lane['forward'], lane['solid']로 받는다.
+lane['valid'], lane['heading'], lane['error'], lane['forward'], lane['solid'], lane['colors']로 받는다.
+선 색(lane['colors'])으로 차로 번호(index) 보정: observe_lane (소민 추가)
 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준). direction +1 = 왼쪽, -1 = 오른쪽.
 """
 import math
@@ -30,6 +31,10 @@ def free_distances(forward, left, center, robot, config):
     return free
 
 
+# 선 색 조합 (왼쪽, 오른쪽) → 차로 번호 (0=오른쪽, 1=가운데, 2=왼쪽). 노랑 = 3차선 바깥 경계, 흰 = 차로 구분 점선
+LANE_BY_COLORS = {('yellow', 'white'): 2, ('white', 'white'): 1, ('white', 'yellow'): 0}
+
+
 class LaneChange:
     """라이다 담당: 전방 차량 감지 → 빈 옆 차로 선택 → 한 차로 이동 → 차선 복귀.
 
@@ -43,7 +48,27 @@ class LaneChange:
         self.heading = self.offset = self.target = self.travel = 0.0
         self.direction = 0
         self.waiting = False
+        self.seen_lane, self.seen_count, self.seen_stamp = None, 0, None
         self.debug = {}
+
+    def observe_lane(self, lane):
+        """선 색으로 본 차로가 새 카메라 프레임 index_confirm_frames번 연속 같으면 index 보정.
+        지금까지는 initial_lane에서 차선 변경 횟수만 셈 → 한 번 틀리면 계속 틀림
+        노랑/노랑(일반 구간)·선 하나·색 정보 없음 → 무시 (기존 index 유지)"""
+        stamp = lane.get('stamp')
+        if stamp is not None and stamp == self.seen_stamp:
+            return
+        self.seen_stamp = stamp
+        colors = lane.get('colors', {}) if lane.get('valid') else {}
+        seen = LANE_BY_COLORS.get((colors.get('left'), colors.get('right')))
+        if seen is None or seen >= self.c['lane_count']:
+            return
+        if seen == self.seen_lane:
+            self.seen_count += 1
+        else:
+            self.seen_lane, self.seen_count = seen, 1
+        if self.seen_count >= self.c['index_confirm_frames']:
+            self.index = seen
 
     def choose_direction(self, free, lane, requested=0):
         """왼쪽(+1)·오른쪽(-1) 중 갈 차로. 없으면 0
@@ -81,6 +106,8 @@ class LaneChange:
         self.waiting = False
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
+        if not self.active:
+            self.observe_lane(lane)
         if self.active:
             self.offset -= velocity*math.sin(self.heading)*dt
             self.travel += abs(velocity)*dt

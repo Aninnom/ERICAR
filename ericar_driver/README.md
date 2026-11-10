@@ -6,8 +6,8 @@
 
 | 파일 | 내용 | 담당 |
 |---|---|---|
-| `lane_vision.py` | 차선 인식 (BEV + sliding window) | 혁준, 소민 |
-| `lane_driving.py` | 차선 PID | 혁준, 소민 |
+| `lane_vision.py` | 차선 인식 (BEV + sliding window, 좌우 판단, 중앙선 목표점) | 혁준, 소민 |
+| `lane_driving.py` | 목표점 pure pursuit (목표점 없을 때 PID) | 혁준, 소민 |
 | `parking.py` | T 주차 | 정윤 |
 | `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유) | 유경 |
 | `cones.py` | 라바콘 | 유경 |
@@ -28,12 +28,15 @@
 | 도구 | 용도 | 실행 (차, 터미널 환경 1) |
 |---|---|---|
 | `calibrate_camera.py` | 카메라 높이·기울기 보정 (직선 차로 사진), 줄자로 정지선 거리 검증 | `python3 tools/calibrate_camera.py --capture 5` / `--capture 3 --verify 0.30` |
-| `debug_view.py` | 카메라 + BEV 차선 마스크·곡선 + 상태·제어값을 브라우저로 | `python3 tools/debug_view.py` → `http://<차 IP>:8080` |
+| `debug_view.py` | 카메라 + BEV 차선 마스크·곡선 + 상태·제어값을 브라우저로 | `bringup.launch.py`가 자동 실행. 단독: `python3 tools/debug_view.py` → `http://<차 IP>:8080` |
+| `bag_timeline.py` | 녹화 주행 구간 시계열 (거리·방향·조향·오차·검출 선) | `python3 tools/bag_timeline.py ~/bags/<이름>` |
+| `bag_frames.py` | 녹화 지정 시각 카메라 + BEV 창·곡선·목표점 한 장 | `python3 tools/bag_frames.py ~/bags/<이름> 29.0,30.6` → `/tmp/frames.jpg` |
+| `replay_bag.py` | 녹화 영상을 지금 코드에 다시 넣어 결과 CSV (수정 전후 비교) | `python3 tools/replay_bag.py ~/bags/<이름> > after.csv` |
 
 차선만 시험할 때는 YOLO 없이 실행 (표지판 미션 비활성, 모델 불필요)
 
 ```bash
-ros2 launch ericar_driver driver.launch.py yolo:=false
+ros2 launch ericar_driver bringup.launch.py yolo:=false
 ```
 
 ## 회귀 시험 (맥·차, ROS 불필요)
@@ -58,11 +61,37 @@ numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 
 
 ## 실행 (차, 터미널 환경 3 dl_env)
 
-차량 드라이버·라이다·카메라를 먼저 실행 (`docs/car_checklist.md`).
-
 ```bash
 cd ~/autorace_ws && colcon build --packages-select ericar_driver && source install/setup.bash
 ```
+
+### 한 번에 실행 (권장): `bringup.launch.py`
+
+바퀴(`limo_base_ackerman`)·라이다·카메라(노출 300 자동 설정)·주행 노드·디버그 화면을 한 줄로 실행. 종료는 Ctrl+C 한 번.
+
+```bash
+ros2 launch ericar_driver bringup.launch.py
+```
+
+| 인자 | 기본값 | 내용 |
+|---|---|---|
+| `yolo` | `true` | `false`면 YOLO 없이 차선·라이다만 (모델 불필요) |
+| `driver` | `true` | `false`면 센서만 (주행 노드 없이, 녹화·보정용) |
+| `debug` | `true` | 디버그 화면 (포트 8080) |
+| `record` | `false` | `true`면 `~/bags/run_<월일_시분>` 녹화 (`bag:=` 로 경로 지정) |
+| `exposure` | `300` | 카메라 수동 노출 |
+| `model`, `config` | `~/models/best.pt`, `config/robot.yaml` | 주행 노드로 전달 |
+
+예: 차선만 + 녹화 `ros2 launch ericar_driver bringup.launch.py yolo:=false record:=true`
+
+- 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`
+- 시작 로그에 `[bringup] 카메라 노출: data=300` 확인
+- 카메라 `Failed to setup devices` 오류 한 줄은 단독 실행 때도 나오는 메시지, 영상은 정상
+- wego `teleop_launch.py`와 같이 켜지 말 것 (차동 모드 드라이버라 바퀴 드라이버 중복)
+
+### 따로 실행
+
+센서·드라이버를 직접 띄운 경우 주행 노드만:
 
 ```bash
 ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
@@ -97,5 +126,5 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt star
 
 - YOLO 모델 클래스 8종 이름이 `params.py`의 `YOLO_CLASSES`와 정확히 같아야 실행됨
 - `config/robot.yaml`의 "실측 필요" 값 (카메라 높이·기울기는 차선 인식에 직접 영향)
-- 차선 색: `params.py`의 `white_min/max`는 흰색만 검출
+- 차선 색: `params.py`의 `yellow_min/max`는 노란색만 검출. 정지선·노면 표시(흰색)는 아직 노란 마스크 사용 (분리 작업 예정)
 - `/odom`·카메라·라이다 헤더 시간이 시스템 시계와 맞아야 함. 어긋나면 "waiting for fresh sensors"에서 정지

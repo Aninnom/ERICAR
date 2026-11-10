@@ -113,6 +113,8 @@ class ControlLoop:
             state = 'waiting for fresh sensors / detector'
         else:
             if required_camera and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
+                self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
+                                                 if self.driver.lane_driver.in_corner(now) else None)
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 self.lane_stamp = s.image_stamp
@@ -122,8 +124,7 @@ class ControlLoop:
             speed, steering, state = self.driver.update(lane, s.scan, s.detections,
                                                          s.detection_stamp, s.velocity, now, s.angular_velocity)
             if was_avoiding and not self.driver.avoiding:
-                self.vision.previous_fits = {}
-                self.vision.previous_boundaries = {}
+                self.vision.memory = {}
                 self.vision.previous_center = None
                 self.lane_stamp = None
             if self.driver.state != 'parking_sequence':
@@ -135,13 +136,17 @@ class ControlLoop:
             self.driver.debug['speed'] = speed
             self.driver.debug['required_camera'] = required_camera
             if now - self.debug_stamp >= 1.0 / c['debug_rate_hz']:
-                out.lane_mask, out.lane_mask_stamp = lane['lane_mask'], float(lane['stamp'])
+                mask = lane['lane_mask']
+                if lane.get('white_mask') is not None:  # 디버그용: 흰색만 잡힌 화소 = 100 (차선 255와 구분)
+                    mask = mask.copy()
+                    mask[(lane['white_mask'] > 0) & (mask == 0)] = 100
+                out.lane_mask, out.lane_mask_stamp = mask, float(lane['stamp'])
                 self.debug_stamp = now
         # Telemetry follows the actual published command, including safety stops.
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
-            keys = ('valid', 'error', 'heading', 'curvature', 'center_px', 'forward', 'windows',
-                    'fits', 'fit_spans', 'center_fit', 'fit_near', 'fit_far')
+            keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
+                    'fits', 'fit_spans', 'pursuit', 'curvature')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,
                            controller_state=self.driver.state)
