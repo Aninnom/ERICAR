@@ -63,6 +63,11 @@ ANSWER_CONFIG = {
         'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
         # 한 선만 보일 때(이력 없음) 좌우 판단 경계 이동량(m), 선 곡률 split_curvature(1/m)에서 최대. label_sides 참고
         'single_line_split': 0.14, 'split_curvature': 1.7,
+        # 시작점: 탐색 칸 안 봉우리 중 칸 최대의 이 비율 이상인 것들에서 차에 가까운 것 선택 (lane_vision.find_starts)
+        'start_peak_ratio': 0.4,
+        # 좌우 선 간격이 이 값(m) 미만이면 차로가 아니라 이중선(옆 차로 선 + 내 차로 선) → 차로 쪽 선만 사용 (label_sides)
+        # 실제 차로 폭 최소 0.45(지그재그), 상단 이중선 BEV 간격 0.26~0.30
+        'double_line_gap': 0.38,
         'memory_frames': 10,  # 한 선 이름 이어받기: 좌/우 선별로 마지막으로 본 뒤 이 프레임 수까지 기억 (약 0.35 s)
         'lane_width': 0.52,          # 선 중심 간격(m). 도면 직선 0.51~0.52, 11/8 카메라 보정 0.52
         # 코너 차로 폭(m)과 그 폭을 쓰는 선 곡률 범위(1/m, 시작~끝 보간). 도면: 안쪽 R0.59 → 1.7, 바깥 R0.66 → 1.5, 바깥 R1.4 완화 → 0.7
