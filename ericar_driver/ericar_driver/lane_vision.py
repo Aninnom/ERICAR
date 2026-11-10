@@ -236,7 +236,7 @@ class LaneVision:
             # 진짜 우회전 코너는 먼 끝이 계속 오른쪽(−37~−75°), 갈림길 끝 S자 꺾임은 왼쪽으로 돌아옴(+1~+25°)
             longest = max(fits, key=lambda sd: spans[sd][1] - spans[sd][0])
             far_heading = math.atan(float(np.polyval(np.polyder(fits[longest]), spans[longest][0])) / self.scale / self.row_m)
-            result.update(valid=True, far_heading=far_heading, error=(w / 2 - center) / self.scale, heading=heading,
+            result.update(valid=True, far_heading=far_heading, near_curvature=self.near_curvature(longest), error=(w / 2 - center) / self.scale, heading=heading,
                           abnormal=max(residuals) > c['abnormal_fit_residual'],
                           center_px=center, forward=c['lookahead'], pursuit=False,
                           curvature=max(float(self.line_curvature(fits[sd], np.arange(spans[sd][0], spans[sd][1] + 1, 3.0)).max())
@@ -416,6 +416,21 @@ class LaneVision:
             arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(cf[:i + 1][::-1]), np.diff(cl[:i + 1][::-1])))])
             i -= int(min(np.searchsorted(arc, c['pursuit_ahead']), i))
         return float(cf[i]), float(cl[i])
+
+    def near_curvature(self, side):
+        """차 앞 near_curvature_distance(m) 안 픽셀만으로 맞춘 선 곡률(1/m, + 왼쪽 휨). 픽셀 부족하면 None
+        전체 2차식 곡률은 먼 꺾임이 선 전체에 퍼져 가까운 휨 방향을 못 봄 (lane_driving.corner_hold 비스듬한 진입 판단)"""
+        c = self.c
+        if side not in self.memory or self.memory[side][2] != 0:
+            return None
+        py, px = self.memory[side][0], self.memory[side][1]
+        forward = c['far'] - py / (c['height_px'] - 1) * (c['far'] - c['near'])
+        m = forward <= c['near_curvature_distance']
+        if m.sum() < 8 or np.ptp(forward[m]) < 0.25:
+            return None
+        fit = np.polyfit(py[m], px[m], 2)
+        dxdf = np.polyval(np.polyder(fit), np.median(py[m])) / (self.scale * self.row_m)
+        return float(-2 * fit[0] / self.scale / self.row_m ** 2 / (1 + dxdf ** 2) ** 1.5)
 
     def line_curvature(self, fit, rows):
         """선 곡률(1/m, 크기만) — 행마다. 2차식 x(행)을 바닥 좌표(앞 m, 옆 m)로 바꿔 계산"""

@@ -16,6 +16,8 @@ ANSWER_CONFIG = {
                     'steering': 0.38, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
                     # 유지 중 조향 = 시작 값 + error_gain × (시작 오차 − 현재 오차), steering_min~max_steering 제한
                     'error_gain': 0.4, 'steering_min': 0.2,
+                    # 시작 순간 가까운 선이 왼쪽으로 skip_near_curvature(1/m) 넘게 휘면 이번 코너는 유지 없이 pursuit (비스듬한 진입)
+                    'skip_near_curvature': 0.1, 'skip_window': 0.6,
                     'angle': 65.0, 'max_distance': 1.3,
                     'start_far_angle': 20.0,    # 선 먼 끝이 오른쪽으로 이 각도(°) 넘을 때만 시작 (갈림길 S자 꺾임 제외)
                     # 유지 중·끝난 뒤 after_seconds 동안 기억 없는 한 선은 가까운 끝이 오른쪽 corner_left_limit(m) 안이면 왼쪽 선
@@ -58,6 +60,7 @@ ANSWER_CONFIG = {
         'lane_width': 0.52,          # 선 중심 간격(m). 도면 직선 0.51~0.52, 11/8 카메라 보정 0.52
         # 코너 차로 폭(m)과 그 폭을 쓰는 선 곡률 범위(1/m, 시작~끝 보간). 도면: 안쪽 R0.59 → 1.7, 바깥 R0.66 → 1.5, 바깥 R1.4 완화 → 0.7
         'corner_lane_width': 0.77, 'corner_curvature': [0.8, 1.4],
+        'near_curvature_distance': 1.0,   # 가까운 선 휨 방향 판단 거리(m). BEV가 약 0.6 m부터라 1 m 안쪽만 의미 (11/10)
         # pure pursuit 목표점 거리(m, 뒷축 기준, 중앙선 위 점). 도면 1번 코너 폐루프 시뮬: 0.9면 탈출 때 바깥 선 접촉,
         # 0.6~0.65 바깥 여유 최대 (5~7 cm). 직선 노이즈 고려 0.65
         'pursuit_distance': 0.65,

@@ -23,6 +23,7 @@ class LaneDriving:
         self.suspect = 0          # 연속으로 무시한 급변 프레임 수
         self.far_heading = 0.0    # 마지막으로 본 선 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단
         self.last_curvature = 0.0 # 마지막으로 본 선 곡률(1/m). 코너 유지 조향 선택
+        self.left_near_at = -1e9  # 가까운 선이 왼쪽으로 휜 마지막 시각 (비스듬한 진입 판단)
         self.hold_ended = -1e9    # 코너 유지 끝난 시각
 
     def in_corner(self, now):
@@ -93,6 +94,9 @@ class LaneDriving:
             self.far_heading = lane['far_heading']
         if lane['valid']:
             self.last_curvature = lane.get('curvature', 0.0)
+            near = lane.get('near_curvature')
+            if near is not None and near > h['skip_near_curvature']:
+                self.left_near_at = now
         if self.hold is None:
             # 시작: 코너 감지 후 오른쪽 조향이 커짐, 또는 오른쪽으로 꺾던 중 선을 놓침
             turning = self.steering <= -h['start_steering'] or (not lane['valid'] and self.steering < -0.05)
@@ -102,6 +106,13 @@ class LaneDriving:
             # 갈림길 끝 45° S자 꺾임: 앞 꺾임에서 준비된 뒤 먼 끝이 왼쪽으로 돌아오는데 고정 65° 회전 → 이탈
             # (11/9 smooth_1109_lap1 212 s, 먼 끝 +1~+25°. 진짜 코너 시작 시 −37~−75°)
             if self.far_heading > -math.radians(h['start_far_angle']):
+                return False
+            # 비스듬한 진입: 가까운 선이 왼쪽으로 휨 = 차가 바깥 선 쪽으로 비스듬히 다가감 → 고정 원호가 안 맞아 안쪽 선 물음
+            # 선이 계속 보이므로 이번 코너는 pursuit만 (arm_seconds 동안 재시작 막음). 시작 순간엔 이미 오른쪽 휨(−0.3)일 수 있어 skip_window 안 기록으로 판단
+            # (11/10 오른쪽 갈림길 → 3번 코너: 가까운 휨 +0.3~+0.4. 정상 코너 시작 직전 −0.8~−3.1. main_1110_lap6 106.1 s)
+            if now - self.left_near_at < h['skip_window']:
+                self.armed_until = -1e9
+                self.rearm_at = now + h['arm_seconds']
                 return False
             # 조향 선택: 코너가 바로 앞에 보이며 시작(곡률 큼)하면 크게, 이미 pursuit로 돌던 중 시작(곡률 작음)하면 작게
             # (11/9 main_1109_lap3: 1·2번 코너 시작 곡률 5~9 → 0.38로 1번 통과, 3·4번 0.0~0.4 → 0.38이면 3번 안쪽 선 물음)
