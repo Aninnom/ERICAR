@@ -200,7 +200,7 @@ class LaneVision:
                 line_colors[side] = 'white_solid' if solid[side] else 'white'
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
-        source = self.label_sides(fits, lane_px, picked_sets, anchors, spans)
+        source = self.label_sides(fits, lane_px, picked_sets, anchors)
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
         self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})
@@ -290,23 +290,10 @@ class LaneVision:
         center = self.previous_center if self.previous_center is not None else w / 2
         center -= fork_bias * w / self.c['view_width']
         starts = {}
-        # 노란 봉우리는 좌우 칸 전체에서 한 번에 묶은 뒤 봉우리 위치로 좌/우 칸에 나눔. 칸 경계(중앙)에서 잘라 묶으면
-        # 중앙을 비스듬히 가로지르는 선 하나의 꼬리가 반대 칸에서 "가장 가까운 선"으로 잡혀 그쪽 진짜 선을 놓침 (11/10 zigzag_1110_lap1 125.0 s)
-        all_peaks = self.peaks(hist, int(clip(center - lane_px, 0, w - 1)), int(clip(center + lane_px, 1, w)))
         for side, (lo, hi) in {'left': (center - lane_px, center),
                                'right': (center, center + lane_px)}.items():
             lo, hi = int(clip(lo, 0, w - 1)), int(clip(hi, 1, w))
             if hi <= lo:
-                continue
-            # 노란 선 후보: 이 칸 봉우리 중 최대의 start_peak_ratio 이상 (작은 얼룩 제외). near = 그중 차에 가까운 것
-            mine = [x for x in all_peaks if lo <= x < hi]
-            strong = [x for x in mine if hist[x] >= self.c['start_peak_ratio'] * max(hist[m] for m in mine)]
-            near = (max(strong) if side == 'left' else min(strong)) if strong else None
-            if white_hist is not None and len(strong) >= 2:
-                # 흰 점선 후보가 있어도(마름모·"천천히" 획이 점선 조건 통과) 노란 선이 한 칸에 둘이면 이중선 → 차에 가까운 선
-                # 아래 예상 위치 규칙은 차가 차로 중앙이라고 가정해 옆 차로 선(+0.33 m)을 고름 (11/10 search_1110_lap1 137.8~138.3 s)
-                # 3차선 구간은 한 칸(차로 폭)에 노란 선이 둘 들어오지 않아 영향 없음
-                starts[side] = near
                 continue
             if white_hist is not None:
                 expected = center + (-lane_px / 2 if side == 'left' else lane_px / 2)
@@ -318,11 +305,8 @@ class LaneVision:
                 if white:
                     starts[side] = min(white, key=lambda x: abs(x - expected))
                     continue
-            if near is not None:
-                # 칸 안에 선이 여러 개면 차에 가까운 선 = 내 차로 경계. 그 너머 선은 옆 차로 것
-                # 예전: 픽셀 최대 → 마지막 코너 뒤 출발 차로 선(+0.33 m)과 지금 차로 왼쪽 선(+0.03 m) 사이를 프레임마다 오감
-                # → 목표가 선 위에 머묾 (11/10 search_1110_lap1 137.2~139.4 s, zigzag_1110_lap1 154.5~156.6 s)
-                starts[side] = near
+            if hist[lo:hi].max() >= 4:
+                starts[side] = lo + int(hist[lo:hi].argmax())
         # 갈림길: 따라갈 쪽 차선 하나만 사용 (+ 왼쪽, - 오른쪽)
         if fork_bias > 0.001:
             starts.pop('right', None)
@@ -330,23 +314,7 @@ class LaneVision:
             starts.pop('left', None)
         return starts
 
-    def double_line(self, fits, spans, at, lane_px):
-        """좌우 창이 잡은 두 선이 차로가 아니라 이중선(옆 차로 선 + 내 차로 선)인지. 두 조건 모두 만족해야 이중선
-        1) lookahead·맨 아래 행 연장값 평균 간격 < double_line_gap
-        2) 두 선이 함께 보이는 행 구간이 0.15 m 이상이면 그 구간 최대 간격도 < double_line_gap (내내 나란히 붙어 감)
-        - 1)만 쓰면 한 행에서만 가까운 선 쌍을, 2)만 쓰면 갈림길 섬 V자처럼 짧게 겹치는 구간에서만 가까운 선 쌍을
-          이중선으로 오판 (11/10 zigzag_1110_lap1 125.0 s: 겹침 0.18 m 구간 간격은 좁지만 0.7 m 앞 간격 0.48 → 차로 경계)"""
-        gap = self.c['double_line_gap'] * self.scale
-        if np.mean(np.abs(at['left'] - at['right'])) >= gap:
-            return False
-        top = max(spans['left'][0], spans['right'][0])
-        bottom = min(spans['left'][1], spans['right'][1])
-        if (bottom - top) * self.row_m >= 0.15:
-            rows = np.arange(top, bottom + 1, 5.0)
-            return bool(np.abs(np.polyval(fits['left'], rows) - np.polyval(fits['right'], rows)).max() < gap)
-        return True
-
-    def label_sides(self, fits, lane_px, picked_sets, anchors, spans):
+    def label_sides(self, fits, lane_px, picked_sets, anchors):
         """좌/우 차선 이름 확정. 반환: {확정 이름: 원래 탐색 쪽}
 
         11/8 실차: 코너에서 한 선만 남으면 시작점 탐색(화면 중앙 기준)이 이름을 잘못 붙이거나
@@ -370,11 +338,9 @@ class LaneVision:
             if len(np.intersect1d(a, b)) > 0.3 * min(len(a), len(b)):
                 kept = max(fits, key=lambda sd: len(picked_sets[sd]))      # 픽셀 많은 쪽 곡선 사용
                 fits = {kept: fits[kept]}
-            elif not self.double_line(fits, spans, at, lane_px):
+            elif np.mean(np.abs(at['left'] - at['right'])) >= lane_px / 2:
                 return {'left': 'left', 'right': 'right'}
             else:
-                # 기준 double_line_gap: 예전 차로 폭 절반(0.26 m)은 실제 이중선 간격 0.26~0.30 m(BEV 측정)와 겹쳐
-                # 출발 차로 선·지금 차로 선 쌍을 정상 차로로 통과시킴 → 목표가 두 선 사이 (11/10 search_1110_lap1 136.4 s)
                 # 픽셀 안 겹치는데 간격 < 차로 폭 절반 = 서로 다른 선 2개 (이중선). 도면 상단: 시작 차로 선과
                 # 주차 진입 차로 선 간격 약 0.2 m. 픽셀 많은 쪽만 남기면 바깥 선을 차로 경계로 잡아 목표가
                 # 안쪽 선 위로 감 (11/9 smooth_1109_lap1 271~275 s 마지막 코너 뒤 선 밟음)
@@ -385,18 +351,14 @@ class LaneVision:
         if not fits:
             return {}
         kept = 'left' if 'left' in fits else 'right'
-        # 이중선에서 기억·코너 규칙이 없을 때는 두 선 가까운 끝의 가운데 위치로 이름 결정. 한 선 위치로 정하면
-        # 차가 두 선 사이에 걸쳤을 때 차 앞 선을 오른쪽으로 보고 바깥 선을 남김 (11/10 search_1110_lap1 136.4 s 단독 분석 오차 +0.40)
-        middle = (anchors[kept][0], (anchors['left'][1] + anchors['right'][1]) / 2) if pair is not None else None
-        name = self.single_name(fits[kept], anchors[kept], middle)
+        name = self.single_name(fits[kept], anchors[kept])
         if pair is not None:
             pick = max if name == 'left' else min                         # x 클수록 오른쪽
             kept = pick(pair, key=pair.get)
         return {name: kept}
 
-    def single_name(self, fit, anchor, fallback_anchor=None):
-        """한 선의 이름(left/right). 기억한 좌/우 선과 가까우면 이어받고, 없으면 가까운 끝 위치로
-        fallback_anchor: 기억·코너 규칙이 없을 때 위치 판단에 대신 쓸 점 (이중선의 두 선 가운데)"""
+    def single_name(self, fit, anchor):
+        """한 선의 이름(left/right). 기억한 좌/우 선과 가까우면 이어받고, 없으면 가까운 끝 위치로"""
         c = self.c
         row, x = anchor
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
@@ -412,8 +374,6 @@ class LaneVision:
                          for sd, (mr, mx, _) in self.memory.items()}
             if min(distances.values()) < c['lane_width'] / 2:
                 return min(distances, key=distances.get)
-        if fallback_anchor is not None:
-            lateral = (c['width_px'] / 2 - fallback_anchor[1]) / self.scale
         curvature = -2 * fit[0] / self.row_m ** 2 / self.scale           # 선 곡률(1/m, + 왼쪽으로 휨)
         split = c['single_line_split'] * clip(curvature / c['split_curvature'], -1.0, 1.0)
         return 'left' if lateral > split else 'right'
