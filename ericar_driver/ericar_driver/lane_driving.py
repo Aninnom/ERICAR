@@ -25,6 +25,8 @@ class LaneDriving:
         self.last_curvature = 0.0 # 마지막으로 본 선 곡률(1/m). 코너 유지 조향 선택
         self.left_near_at = -1e9  # 가까운 선이 왼쪽으로 휜 마지막 시각 (비스듬한 진입 판단)
         self.hold_ended = -1e9    # 코너 유지 끝난 시각
+        self.zigzag_frames = 0    # 지그재그로 판단된 연속 카메라 결과 수
+        self.zigzag_left = 0.0    # 지그재그 서행을 유지할 남은 거리(m)
 
     def in_corner(self, now):
         """코너 유지 중 또는 끝난 뒤 corner_hold.after_seconds 이내 (lane_vision 한 선 이름 판단용)"""
@@ -58,6 +60,12 @@ class LaneDriving:
             stamp = lane.get('stamp', now)
             if stamp != self.lane_stamp:
                 self.lane_stamp = stamp
+                # 서행 유도선 확인: 연속 confirm_frames면 서행 시작·남은 거리 갱신, 아닌 결과는 하나씩 깎음 (한두 프레임 끊김 허용)
+                z = c['zigzag']
+                both = lane.get('zigzag', 0) >= 2      # 서로 다른 두 선 모두 톱니일 때만 확정 (한 선은 주름·꺾임 오검출)
+                self.zigzag_frames = min(self.zigzag_frames + 1, z['confirm_frames']) if both else max(self.zigzag_frames - 1, 0)
+                if both and self.zigzag_frames >= z['confirm_frames']:
+                    self.zigzag_left = z['hold_distance']
                 if abs(desired - self.steering) > c['steering_jump'] and self.suspect < c['jump_frames']:
                     self.suspect += 1
                 else:
@@ -74,6 +82,13 @@ class LaneDriving:
         lo, hi = c['corner_slow_curvature']
         ramp = clip((curvature - lo) / (hi - lo), 0.0, 1.0)
         speed = min(speed, c['base_speed'] - ramp * (c['base_speed'] - c['corner_speed']))
+        # 서행 유도선: 규정상 서행 구간(최대 0.2 m/s)인데 인식이 정상이라 0.39 m/s로 지나감 (11/10 skip_1110_lap1 106~110 s)
+        # 1번 코너 유지 중·직후에는 바깥 선 하나만 보임 (104.5~105.9 s) → 그동안은 한 선만 톱니여도 서행 (확정·거리 유지는 안 함)
+        # 안 하면 유지 끝나고 두 선 확정까지 0.4 s 동안 0.19 → 0.40 m/s로 가속했다가 다시 감속
+        self.zigzag_left = max(0.0, self.zigzag_left - abs(velocity) * dt)
+        entering = lane['valid'] and lane.get('zigzag', 0) >= 1 and self.in_corner(now)
+        if self.zigzag_left > 0.0 or entering:
+            speed = min(speed, c['zigzag']['speed'])
         if self.corner_hold(lane, now, dt, velocity, yaw_rate, allow_hold, corner_seen):
             return min(speed, c['corner_speed']), -self.hold['steering']
         if slow or lane['abnormal'] or not lane['valid']:

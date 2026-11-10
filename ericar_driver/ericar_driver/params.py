@@ -11,6 +11,10 @@ ANSWER_CONFIG = {
     # 끝: 회전각 도달 또는 최대 거리 (두 선 조기 종료는 11/9 제거, lane_driving.corner_hold 참고)
     # 조향 출력 변화율 제한(rad/s)·한 프레임 급변 무시 (lane_driving). 11/9 lap4 직선 프레임당 변화 p95 0.015 rad
     'steering_rate': 1.5, 'steering_jump': 0.08, 'jump_frames': 3,
+    # 서행 유도선(지그재그, 규정 미션 6 "서행 통과", 서행 구간 최대 0.2 m/s): 양쪽 선이 톱니 모양인 카메라 결과가
+    # confirm_frames 연속이면 speed로 제한, 마지막으로 본 뒤 hold_distance(m) 더 갈 때까지 유지
+    # (톱니가 화면에서 사라질 때 구간 끝은 뒷축 앞 약 1.0 m → 앞바퀴 기준 0.8 m 남음. 11/10 skip_1110_lap1 109.5~110.5 s)
+    'zigzag': {'speed': 0.18, 'confirm_frames': 4, 'hold_distance': 1.0},
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15,
                     # 시작 시 곡률 sharp_curvature 이상이면 steering, 아니면 gentle_steering (11/9 lap3, 1번 코너 0.31이면 바깥 이탈)
                     'steering': 0.38, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
@@ -67,6 +71,10 @@ ANSWER_CONFIG = {
         # 중앙선이 모두 pursuit_distance 원 밖이고 선 기울기가 pursuit_ahead_tilt(°) 넘으면 선 따라 pursuit_ahead m 앞 점 목표
         'pursuit_ahead': 0.2, 'pursuit_ahead_tilt': 40,
         'refit_tolerance': 0.04,     # 2차식 맞춤 후 이 거리(m) 밖 픽셀 빼고 재맞춤
+        # 지그재그(서행 유도선) 판별 (lane_vision.zigzag_line): 행 묶음 크기, 최소 보이는 길이(m),
+        # 잔차 부호 판단 최소 크기(m), 부호 바뀜 최소 횟수, 잔차 크기 범위(m). 11/10 skip_1110_lap1 기준
+        'zigzag_bin_rows': 10, 'zigzag_min_span': 0.8, 'zigzag_deadband': 0.008,
+        'zigzag_min_crossings': 5, 'zigzag_residual': [0.012, 0.045],
         'windows': 12, 'margin': 0.17, 'minimum_pixels': 25,   # 슬라이딩 윈도우 개수·반폭(m)·최소 픽셀
         'lookahead': 0.9,           # 차로 중앙·방향 기준 거리(m). 목표점 없을 때 조향, 정지선 탐색·차선 변경·주차용
         'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지

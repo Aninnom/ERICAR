@@ -169,6 +169,7 @@ class LaneVision:
         max_missing = c['white_dash_max_missing'] if white_lane else 1
         fits, spans, residuals, windows, solid, picked_sets, anchors, pixels = {}, {}, {}, [], {}, {}, {}, {}
         line_colors = {}
+        zigzag = {}
         for side, x in starts.items():
             picked = self.sliding_window(ys, xs, x, h, self.scale, side, windows, max_missing)
             picked_sets[side] = np.asarray(picked)
@@ -177,6 +178,7 @@ class LaneVision:
             py, px = ys[picked], xs[picked]
             if np.ptp(py) < 0.16 * h:          # 너무 짧은 조각은 곡선으로 안 믿음
                 continue
+            zigzag[side] = self.zigzag_line(py, px)   # 재맞춤 전 픽셀로 판단 (재맞춤은 톱니 끝을 이상 픽셀로 버림)
             fit = np.polyfit(py, px, 2)          # x = a*y^2 + b*y + c (픽셀)
             # 이상 픽셀 빼고 재맞춤: 선에 붙은 가로 조각·잡음이 곡선을 끌어당김 (lap4 재생: 185~190 s 오차 점프 12 → 3회)
             near = np.abs(px - np.polyval(fit, py)) < c['refit_tolerance'] * self.scale
@@ -212,7 +214,10 @@ class LaneVision:
                       stop_distance=None, stop_candidates=[], center_px=w / 2,
                       mask=bird, lane_mask=lane_mask, white_mask=white_bird, white_lane=white_lane, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid,
-                      colors=line_colors)
+                      colors=line_colors,
+                      # 서행 유도선(지그재그): 2 = 서로 다른 좌우 선이 모두 톱니 모양, 1 = 찾은 선 중 하나라도, 0 = 없음
+                      # 좌우 창이 같은 선에 붙은 경우는 1 (11/10 skip_1110_lap1 142 s: 현수막 주름으로 한 선이 물결 → 2로 세면 오검출)
+                      zigzag=2 if len(source) == 2 and all(zigzag.get(k) for k in source.values()) else int(any(zigzag.values())))
 
         if not fits:
             # 못 찾으면 탐색 기준 중앙도 버림. 남겨두면 엉뚱한 기준 주변만 계속 찾아 영영 못 찾음 (도면 코너 시뮬: 정지)
@@ -416,6 +421,30 @@ class LaneVision:
             arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(cf[:i + 1][::-1]), np.diff(cl[:i + 1][::-1])))])
             i -= int(min(np.searchsorted(arc, c['pursuit_ahead']), i))
         return float(cf[i]), float(cl[i])
+
+    def zigzag_line(self, py, px):
+        """선 하나가 지그재그(서행 유도선, 규정 미션 6)인지. 서행 판단용 (lane_driving)
+
+        행을 zigzag_bin_rows씩 묶어 평균 x → 2차식 잔차(m)가 좌우로 번갈아 바뀌는 횟수와 크기로 판단
+        11/10 녹화 skip_1110_lap1: 지그재그 104.5~109.5 s 바뀜 6~10회·잔차 0.016~0.039 m,
+        코너 3~6회·잔차 0.06 m 이상(창이 다른 선으로 넘어감), 직선 0회·0.002 m → 잔차 상한으로 코너 제외
+        """
+        c = self.c
+        bins = (py // c['zigzag_bin_rows']).astype(int)
+        count = np.bincount(bins)
+        used = count > 0
+        if used.sum() < 8:
+            return False
+        forward = np.bincount(bins, py)[used] / count[used] * self.row_m     # 행 → m (기울기·잔차 단위만 필요)
+        lateral = np.bincount(bins, px)[used] / count[used] / self.scale
+        if np.ptp(forward) < c['zigzag_min_span']:
+            return False
+        residual = lateral - np.polyval(np.polyfit(forward, lateral, 2), forward)
+        rms = float(np.sqrt(np.mean(residual ** 2)))
+        signs = np.sign(residual[np.abs(residual) > c['zigzag_deadband']])
+        crossings = int(np.count_nonzero(signs[1:] != signs[:-1]))
+        low, high = c['zigzag_residual']
+        return crossings >= c['zigzag_min_crossings'] and low <= rms <= high
 
     def near_curvature(self, side):
         """차 앞 near_curvature_distance(m) 안 픽셀만으로 맞춘 선 곡률(1/m, + 왼쪽 휨). 픽셀 부족하면 None
