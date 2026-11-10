@@ -15,6 +15,9 @@ ANSWER_CONFIG = {
     # confirm_frames 연속이면 speed로 제한, 마지막으로 본 뒤 hold_distance(m) 더 갈 때까지 유지
     # (톱니가 화면에서 사라질 때 구간 끝은 뒷축 앞 약 1.0 m → 앞바퀴 기준 0.8 m 남음. 11/10 skip_1110_lap1 109.5~110.5 s)
     'zigzag': {'speed': 0.18, 'confirm_frames': 4, 'hold_distance': 1.0},
+    # 차선을 lane.lost_grace 넘게 놓친 뒤: 정지 대신 speed로 가며 탐색, 조향은 straighten_distance(m) 동안 0으로
+    # distance(m) 가거나 seconds(초) 지나도 못 찾으면 정지 (lane_driving.decide). 값은 실차 확인 전
+    'lost_search': {'speed': 0.15, 'distance': 2.0, 'seconds': 20.0, 'straighten_distance': 0.5},
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15,
                     # 시작 시 곡률 sharp_curvature 이상이면 steering, 아니면 gentle_steering (11/9 lap3, 1번 코너 0.31이면 바깥 이탈)
                     'steering': 0.38, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,

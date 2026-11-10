@@ -27,6 +27,7 @@ class LaneDriving:
         self.hold_ended = -1e9    # 코너 유지 끝난 시각
         self.zigzag_frames = 0    # 지그재그로 판단된 연속 카메라 결과 수
         self.zigzag_left = 0.0    # 지그재그 서행을 유지할 남은 거리(m)
+        self.search_distance = 0.0  # 선을 놓친 뒤(lost_grace 이후) 탐색하며 간 거리(m)
 
     def in_corner(self, now):
         """코너 유지 중 또는 끝난 뒤 corner_hold.after_seconds 이내 (lane_vision 한 선 이름 판단용)"""
@@ -93,9 +94,20 @@ class LaneDriving:
             return min(speed, c['corner_speed']), -self.hold['steering']
         if slow or lane['abnormal'] or not lane['valid']:
             speed = min(speed, c['slow_speed'], c['base_speed']/2, .2)
-        if now-self.last_seen > c['lane']['lost_grace']:
-            speed = 0.0
-        return speed, self.steering
+        lost_for = now - self.last_seen
+        if lost_for <= c['lane']['lost_grace']:
+            self.search_distance = 0.0
+            return speed, self.steering
+        # 선을 lost_grace 넘게 놓침. 예전: 바로 속도 0 → 선이 다시 보일 일이 없어 그대로 정지 (규정 III-자: 15초 내 미발진이면 미션 0점)
+        # (11/10 zigzag_1110_lap1 120.9 s: 3차선 가운데 차로에서 정지, 섬 노란 선은 0.5 m 앞이라 조금만 더 가면 보였음)
+        # → lost_search.speed로 계속 가며 선 탐색. 조향은 마지막 값에서 straighten_distance 동안 0으로 (큰 조향 그대로면 제자리 돌아 역주행 방향)
+        # 끝: 탐색 거리 distance 또는 놓친 뒤 seconds 초과 → 정지 (트랙 밖으로 계속 가지 않게, 출발 전 선 없는 곳에 세워 둔 차가 움직이지 않게)
+        s = c['lost_search']
+        self.search_distance += abs(velocity) * dt
+        fade = clip(1.0 - self.search_distance / s['straighten_distance'], 0.0, 1.0)
+        if self.search_distance >= s['distance'] or lost_for > c['lane']['lost_grace'] + s['seconds']:
+            return 0.0, self.steering * fade
+        return min(speed, s['speed']), self.steering * fade
 
     def corner_hold(self, lane, now, dt, velocity, yaw_rate, allow_hold, corner_seen):
         """우회전 코너 유지 판단. True면 이번 주기 고정 조향 사용 (카메라 결과 무시)"""
