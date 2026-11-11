@@ -48,9 +48,11 @@ ANSWER_CONFIG = {
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
+        # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
+        'confirm_frames_by_class': {'left': 3, 'right': 3},
         'minimum_area_by_class': {
             'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.025, 'traffic_yellow': 0.025,
-            'traffic_green': 0.025, 'left': 0.006, 'right': 0.006, 'slow': 0.004,
+            'traffic_green': 0.025, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
@@ -139,6 +141,7 @@ ANSWER_CONFIG = {
         'cone_max_distance': 2.5,    # 안전장치: 진입 시 첫 콘까지 거리 + 이 값 넘게 주행하면 종료. 라바콘 구간 약 2.1 m + 여유
     },
     'missions': {
+        'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,

@@ -32,6 +32,7 @@ class Driver:
         self.slow_until = self.fork_remaining = self.fork_bias = self.fork_target = 0.0
         self.fork_pending, self.fork_clear_distance = False, 0.0
         self.fork_request = self.fork_goal = 0
+        self.fork_sign, self.fork_sign_stamp = None, None  # 최초 확정 방향·영상 시각 고정
         self.traffic_stop_completed = False
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
@@ -105,11 +106,17 @@ class Driver:
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
         names = {d['name'] for d in detections
                  if (not d.get('truncated', False) or d['name'] in truncated_allowed) and d['area'] >= self.c['detector'].get('minimum_area_by_class', {}).get(d['name'], self.c['detector']['minimum_area'])}
+        if {'left', 'right'} <= names:
+            # 연속 횟수가 다른 양쪽 화살표도 확정 보류. 새 단일 방향부터 재확인
+            names -= {'left', 'right'}
+            self.sign_counts.pop('left', None)
+            self.sign_counts.pop('right', None)
         if stamp != self.last_detection_stamp:
             self.sign_counts = {name: self.sign_counts.get(name, 0) + 1 for name in names}
             self.last_detection_stamp = stamp
         return {name for name in names
-                if self.sign_counts.get(name, 0) >= self.c['detector']['confirm_frames']}
+                if self.sign_counts.get(name, 0) >= self.c['detector'].get('confirm_frames_by_class', {}).get(
+                    name, self.c['detector']['confirm_frames'])}
 
     def update_stop_line(self, lane, velocity, now, dt):
         m = self.c['missions']
@@ -151,6 +158,8 @@ class Driver:
             self.fork_clear_distance = 0.0
             self.fork_bias = 0.0
             self.fork_goal = 1 if self.fork_target > 0 else -1
+            self.fork_sign = 'left' if self.fork_goal > 0 else 'right'
+            self.fork_sign_stamp = detection_stamp
             self.fork_remaining = m.get('fork_distance', 1.6)
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
         # 인식 즉시 이동 요청. 실제 빈 공간·충돌 경로 판정은 LaneChange 담당
@@ -341,6 +350,9 @@ class Driver:
             speed = 0.0
         if self.state == 'parked':
             speed = 0.0
+        if self.state == 'lane' and (self.allowed('fork') or self.fork_remaining > 0):
+            # 표지판이 가까워질 때까지 기본 0.4 m/s로 접근하지 않도록 준비 속도 적용
+            speed = min(speed, self.c['missions'].get('fork_prepare_speed', .18))
         self.debug = dict(lane_valid=lane['valid'], lane_error=lane['error'],
                           pid=dict(self.pid.terms), pid_feedback_gain=self.c['pid']['feedback_gain'],
                           stage=self.stage(), section=self.sections.index,
@@ -352,6 +364,8 @@ class Driver:
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
+                          fork_sign=self.fork_sign, fork_sign_stamp=self.fork_sign_stamp,
+                          fork_sign_counts={n: self.sign_counts.get(n, 0) for n in ('left', 'right')},
                           avoiding=self.avoiding, cone_active=self.cones.active,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
                           corner_hold=self.lane_driver.hold is not None)

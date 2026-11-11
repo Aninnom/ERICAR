@@ -166,7 +166,7 @@ class ControlLoop:
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
             keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
-                    'fits', 'fit_spans', 'pursuit', 'curvature')
+                    'fits', 'fit_spans', 'pursuit', 'curvature', 'colors')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,
                            controller_state=self.driver.state)

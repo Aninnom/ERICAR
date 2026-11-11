@@ -37,7 +37,7 @@ def test_both_directions():
     for name, start, destination, direction in [('left', 0, 2, 1), ('right', 2, 0, -1)]:
         d = driver()
         d.lane_change.index = start
-        for t in (0., .1):
+        for t in (0., .1, .2):
             signs(d, [name], t, wide=1)
         assert not d.fork_pending and d.fork_request == direction
         for i in range(15):
@@ -66,7 +66,7 @@ def test_both_directions():
 
 def test_immediate_and_memory():
     d = driver()
-    for t in (0., .1):
+    for t in (0., .1, .2):
         signs(d, ['right'], t)
     assert d.fork_request == -1, '장애물 없을 때 즉시 요청 누락'
     for i in range(100):
