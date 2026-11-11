@@ -16,22 +16,23 @@ topics:
 robot:
   name: limo
   wheelbase: 0.2  # 제조사 표기 200 mm
-  width: 0.22  # 실측 필요
-  length: 0.322  # 실측 필요
+  width: 0.225  # 사용자 실측 22.5 cm
+  length: 0.330  # 사용자 실측 33 cm
   max_speed: 0.6
   max_steering: 0.42  # 실차 한계 약 ±0.42 rad (시뮬 0.52)
   steering_offset: -0.015  # 조향 영점 보정 rad. 02번 차량 왼쪽 쏠림, 11/8 바닥 직진 0.5 m 시험으로 결정
   front_axle_x: 0.2  # base_link(뒷바퀴 축) → 앞바퀴 축
+  front_bumper_x: 0.258  # 사용자 실측 앞 범퍼 x 25.8 cm
   camera:
     hfov_deg: 71.0  # 규정집 FOV 약 71°
-    x: 0.23  # 실측 필요
+    x: 0.250  # 사용자 실측 카메라 x 25 cm
     y: 0.0
     z: 0.1875  # 11/8 보정 (직선 차로, 차선 평행·간격 0.52 m 기준, 5장 일치)
     pitch: 0.148  # 11/8 보정 (rad, 아래쪽 +, 8.5°). 카메라 각도 변경 시 재보정
   lidar:
-    x: 0.1  # 실측 필요
+    x: 0.214  # 사용자 실측 라이다 x 21.4 cm
     y: 0.0
-    z: 0.16  # 실측 필요
+    z: 0.070  # 사용자 실측 라이다 z 7 cm
     range_min: 0.06
     range_max: 12.0
     zero_is_no_return: true  # YDLidar는 무반사를 0으로 보냄(프레임의 50~60%). false면 0을 막힘으로 보고 정지
