@@ -33,6 +33,10 @@ class LaneVision:
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
         self.corner_left_limit = None # 우회전 코너 중이면 m 값 (loop가 설정). 기억 없는 한 선 이름 판단 기준
+        # 3차선 끝 차로(또는 그쪽으로 차선 변경 중)면 노란 바깥선이 있는 쪽 'left'/'right' (loop가 설정), 아니면 None
+        # 바깥 차로에서 노란 선만 보일 때 위치로 이름을 붙이면 차가 노란 선에 붙은 순간 '오른쪽 선'으로 오판
+        # → 차로 중앙을 더 바깥으로 계산해 트랙 밖으로 나감 (11/11 run_1111_1241 17.8~22.7 s, n=r → 이탈) (소민)
+        self.outer_yellow = None
         self.double_left = False      # 마지막 코너 뒤 왼쪽에 옆 차로 선이 나란한 구간이면 True (loop가 설정). find_starts·label_sides
 
     # ---------- 2. 버드아이뷰 ----------
@@ -82,6 +86,11 @@ class LaneVision:
         c = self.c
         h, w = white.shape
         car = w / 2
+        # 바깥 차로: 노란 선이 차 쪽으로 반 차로까지 붙어도 바깥선으로 판단 (그 너머 흰색 = 트랙 밖)
+        if self.outer_yellow == 'left':
+            car += c['lane_width'] / 2 * self.scale
+        elif self.outer_yellow == 'right':
+            car -= c['lane_width'] / 2 * self.scale
         rows = np.arange(h)
         left_edge = np.full(h, -np.inf)    # 이 x 이하 = 차 왼쪽 노란 선 너머
         right_edge = np.full(h, np.inf)    # 이 x 이상 = 차 오른쪽 노란 선 너머
@@ -202,6 +211,10 @@ class LaneVision:
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
         source = self.label_sides(fits, lane_px, picked_sets, anchors, line_colors)
+        if self.outer_yellow is not None and len(source) == 1:
+            kept = next(iter(source.values()))
+            if line_colors.get(kept) == 'yellow':
+                source = {self.outer_yellow: kept}
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
         self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})

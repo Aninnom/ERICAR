@@ -7,6 +7,8 @@
 이 파일은 라이다 판단·조향만 한다. 차선(흰 점선·실선) 인식은 차선 담당 lane_vision.py에서
 lane['valid'], lane['heading'], lane['error'], lane['forward'], lane['solid'], lane['colors']로 받는다.
 선 색(lane['colors'])으로 차로 번호(index) 보정: observe_lane (소민 추가)
+소민 11/12: 갈림길 표지판 방향 우선(preferred), 카메라 종료·지나침 방지(바깥 노란 선 이탈 대책), 목표 횡이동 제한
+  근거: test/three_lane.py 합성 시험, 11/11 run_1111_1241 (차선 변경 뒤 노란 바깥선 밖 이탈)
 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준). direction +1 = 왼쪽, -1 = 오른쪽.
 """
 import math
@@ -67,15 +69,17 @@ class LaneChange:
             self.seen_count += 1
         else:
             self.seen_lane, self.seen_count = seen, 1
-        if self.seen_count >= self.c['index_confirm_frames']:
+        # 차선 변경 중에는 index 그대로 (끝날 때 direction만큼 바꿈). 본 차로는 카메라 종료 판단에만 씀
+        if not self.active and self.seen_count >= self.c['index_confirm_frames']:
             self.index = seen
 
-    def choose_direction(self, free, lane, requested=0):
+    def choose_direction(self, free, lane, requested=0, preferred=0):
         """왼쪽(+1)·오른쪽(-1) 중 갈 차로. 없으면 0
 
         - 차로 범위(0 ~ lane_count-1) 밖이거나 그쪽 차선이 실선이면 제외 (갈림길 요청은 실선 무시)
         - 옆 차로가 min_free_distance 이상 비어 있고, 지금 차로보다 free_gain 이상 더 비어 있어야 함
         - 둘 다 되면 더 멀리 비어 있는 쪽. 같으면 왼쪽 (기존 동작)
+        - preferred(이미 읽은 갈림길 표지판 방향) 쪽이 조건을 만족하면 그쪽 먼저 (반대로 피하면 다시 건너와야 함, 소민)
         """
         c = self.c
         best, best_free = 0, free[0]+c['free_gain']
@@ -87,6 +91,8 @@ class LaneChange:
             if not requested and lane.get('solid', {}).get(side, False):
                 continue
             enough = free[direction] >= c['min_free_distance']
+            if enough and not requested and direction == preferred and free[direction] > free[0]+c['free_gain']:
+                return direction
             if enough and (requested or free[direction] > best_free):
                 best, best_free = direction, free[direction]
         return best
@@ -102,17 +108,28 @@ class LaneChange:
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
         return (c['speed'] if safe else 0.0), steering
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0):
+    def camera_finished(self, lane):
+        """카메라로 차선 변경 끝 판단 (소민): 반 넘게 옮겼고, 선 색이 목적 차로 + 차로 중앙 근처·나란함
+        추측 항법(odom 적분)은 회전 오차(11/9 실측 1.07배)로 덜·더 감 → 카메라가 확인되면 바로 차선 주행에 넘김"""
+        c = self.c
+        return (self.seen_lane == self.index+self.direction and self.seen_count >= 2 and lane.get('valid') and
+                abs(self.offset) > c['lane_width']*c.get('camera_finish_progress', .6) and
+                abs(lane['error']) < c.get('camera_finish_error', .06) and
+                abs(lane['heading']) < c.get('camera_finish_heading', .12))
+
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0):
         self.waiting = False
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
-        if not self.active:
-            self.observe_lane(lane)
+        self.observe_lane(lane)
         if self.active:
             self.offset -= velocity*math.sin(self.heading)*dt
             self.travel += abs(velocity)*dt
             error = self.target-self.offset
             done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
+            done = done or self.camera_finished(lane)
+            # 지나침 방지: 목표보다 overshoot(m) 넘게 갔으면 바로 차선 주행으로 (바깥 노란 선 넘음 방지, 소민)
+            done = done or abs(self.offset) > abs(self.target)+self.c.get('overshoot', .08)
             if done or self.travel >= self.c['max_distance']:
                 # 이동 거리 초과: 영구 정지 대신 차선 주행으로 돌아간다. 반 차로 넘게 갔으면 옮긴 것으로 본다.
                 moved = done or abs(self.offset) > self.c['lane_width']/2
@@ -132,8 +149,10 @@ class LaneChange:
         # 차체가 진행할 통로 안의 전방 장애물만 확인한다.
         if free[0] >= self.c['trigger_distance'] and not requested:
             return None
-        direction = self.choose_direction(free, lane, requested)
+        direction = self.choose_direction(free, lane, requested, preferred)
         self.debug['choice'] = direction
+        if direction == 0 and requested:
+            return None  # 갈림길 요청인데 옆 차로가 아직 안 비었으면 차선 주행 계속, 다음 주기에 다시 확인 (소민)
         if direction == 0:
             # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
             # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
@@ -149,5 +168,7 @@ class LaneChange:
         self.active, self.direction = True, direction
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = heading, 0.0, 0.0
+        # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
+        center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.target = direction*self.c['lane_width']+center
         return self.update(lane, scan, 0.0, 0.0, dt, enabled)

@@ -31,7 +31,7 @@ class Driver:
         self.line_seen = -1e9
         self.slow_until = self.fork_remaining = self.fork_bias = self.fork_target = 0.0
         self.fork_pending, self.fork_clear_distance = False, 0.0
-        self.fork_request = 0
+        self.fork_request = self.fork_goal = 0
         self.traffic_stop_completed = False
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
@@ -76,6 +76,15 @@ class Driver:
     def stage(self):
         """디버그 표시용: 지금 구간과 활성 미션"""
         return 'S%d %s' % (self.sections.index, '·'.join(sorted(self.sections.missions() - self.done)))
+
+    def outer_yellow(self):
+        # 3차선 바깥 차로(목적 차로 포함)면 노란 바깥선 쪽. lane_vision 한 선 이름 판단용 (소민)
+        change = self.lane_change
+        if not (self.sections.allows('lane_change') or self.fork_remaining > 0):
+            return None
+        lane = change.index + (change.direction if change.active else 0)
+        last = change.c['lane_count'] - 1
+        return 'left' if lane == last else 'right' if lane == 0 else None
 
     def allowed(self, mission):
         """지금 구간의 미션이고 아직 끝내지 않았을 때만"""
@@ -142,16 +151,20 @@ class Driver:
             else:
                 self.fork_clear_distance += max(0.0, velocity) * dt
             if self.fork_clear_distance >= m.get('fork_clear_distance', .20):
-                # 표지판 방향으로 실제 한 차로 이동한 뒤 새 차선을 따른다.
-                direction = 1 if self.fork_target > 0 else -1
-                destination = self.c['lane_change']['lane_count']-1 if direction > 0 else 0
-                self.fork_request = direction if self.lane_change.index != destination else 0
+                # 표지판 방향 끝 차로에 도착할 때까지 차선 변경 반복 (예전: 1회만 → 반대쪽 끝 차로면 가운데에서 끝, 소민)
+                self.fork_goal = 1 if self.fork_target > 0 else -1
                 self.fork_bias = 0.0
                 self.fork_pending = False
         if self.fork_remaining <= 0.0:
             self.fork_bias = 0.0
             self.fork_target = 0.0
             self.fork_pending = False
+            self.fork_goal = 0
+        if self.fork_goal and not self.lane_change.active:
+            destination = self.c['lane_change']['lane_count']-1 if self.fork_goal > 0 else 0
+            self.fork_request = self.fork_goal if self.lane_change.index != destination else 0
+            if not self.fork_request:
+                self.fork_goal = 0
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):
                 self.traffic_stop_completed = False
@@ -286,9 +299,11 @@ class Driver:
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         stuck_change = False
         if self.state == 'lane':
+            # 장애물 회피 때 이미 읽은 갈림길 표지판 방향을 먼저 봄 (소민)
+            preferred = 1 if self.fork_target > 0 else -1 if self.fork_target < 0 else 0
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork_remaining > 0)
-                                            and self.lane_change_off <= 0, self.fork_request)
+                                            and self.lane_change_off <= 0, self.fork_request, preferred)
             if self.fork_request and self.lane_change.active:
                 self.fork_request = 0
             cone = None if change is not None else self.cones.update(
@@ -331,7 +346,7 @@ class Driver:
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
-                          fork_remaining=self.fork_remaining, fork_request=self.fork_request,
+                          fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
                           avoiding=self.avoiding, cone_active=self.cones.active,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
                           corner_hold=self.lane_driver.hold is not None)
