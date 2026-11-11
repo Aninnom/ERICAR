@@ -93,7 +93,7 @@ class Driver:
 
     def fork_direction(self):
         """목표 끝 차로 정렬 후 갈림길 선 선택 방향. +1=A, -1=B"""
-        if self.fork_remaining <= 0 or not self.fork_target or self.lane_change.active:
+        if self.fork_remaining <= 0 or not self.fork_target or self.lane_change.active or self.fork_pending:
             return 0
         direction = 1 if self.fork_target > 0 else -1
         destination = self.c['lane_change']['lane_count']-1 if direction > 0 else 0
@@ -154,7 +154,7 @@ class Driver:
         if len(arrows) == 1 and self.allowed('fork') and self.fork_remaining <= 0.0:
             self.advance('fork')
             self.fork_target = m['fork_bias'] if 'left' in ready else -m['fork_bias']
-            self.fork_pending = False
+            self.fork_pending = m.get('fork_prepare_distance', .15) > 0
             self.fork_clear_distance = 0.0
             self.fork_bias = 0.0
             self.fork_goal = 1 if self.fork_target > 0 else -1
@@ -162,14 +162,20 @@ class Driver:
             self.fork_sign_stamp = detection_stamp
             self.fork_remaining = m.get('fork_distance', 1.6)
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
-        # 인식 즉시 이동 요청. 실제 빈 공간·충돌 경로 판정은 LaneChange 담당
+        # 방향은 즉시 기억, 빈 도로의 출구 정렬만 조금 지연. 일반 장애물 회피는 계속 활성
+        if self.fork_pending:
+            self.fork_request = 0
+            if not self.lane_change.active:
+                self.fork_clear_distance += max(0., velocity)*dt
+            if self.fork_clear_distance >= m.get('fork_prepare_distance', .15):
+                self.fork_pending = False
         if self.fork_remaining <= 0.0:
             self.fork_bias = 0.0
             self.fork_target = 0.0
             self.fork_pending = False
             self.fork_goal = 0
             self.fork_request = 0
-        if self.fork_goal and not self.lane_change.active:
+        if self.fork_goal and not self.lane_change.active and not self.fork_pending:
             destination = self.c['lane_change']['lane_count']-1 if self.fork_goal > 0 else 0
             self.fork_request = self.fork_goal if self.lane_change.index != destination else 0
         if self.state == 'lane':
@@ -363,6 +369,7 @@ class Driver:
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
+                          fork_prepare_travel=self.fork_clear_distance,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
                           fork_sign=self.fork_sign, fork_sign_stamp=self.fork_sign_stamp,
                           fork_sign_counts={n: self.sign_counts.get(n, 0) for n in ('left', 'right')},

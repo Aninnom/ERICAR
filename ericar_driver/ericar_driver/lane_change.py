@@ -140,8 +140,9 @@ class LaneChange:
                 self.index += self.direction if moved else 0
                 return None
             return self.steer(points, dt)
-        if not enabled or not lane['valid'] or (not requested and not scan['wide_objects']):
+        if not enabled or not lane['valid']:
             return None
+        # 넓은 군집 분류가 빠져도 실제 주행 통로의 라이다 점으로 회피 판단 필요
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
         heading = lane['heading']
         forward, left = to_road(points, heading)

@@ -14,9 +14,10 @@ from ericar_driver.params import ANSWER_CONFIG
 from ericar_driver.lane_vision import LaneVision
 
 
-def driver():
+def driver(prepare_distance=0.):
     c = copy.deepcopy(ANSWER_CONFIG)
     c['missions']['start_stage'] = 'fork'
+    c['missions']['fork_prepare_distance'] = prepare_distance  # 기존 즉시 요청 시험은 대기 제외
     robot = yaml.safe_load((HERE.parent / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
     return Driver({'answer': c, 'robot': robot})
 

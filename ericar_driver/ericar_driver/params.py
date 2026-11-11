@@ -142,6 +142,7 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
+        'fork_prepare_distance': 0.15,  # 방향 확정 후 출구 정렬 전 추가 전진(m). 장애물 회피는 즉시
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
