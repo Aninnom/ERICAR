@@ -102,7 +102,7 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 
 ### 구간 관리자 (미션 순서)
 
-미션은 표지판 순서가 아니라 **지금 구간**으로 켜짐 (`section.py`). 최근 2 m 주행 안에서 오른쪽으로 65° 넘게 돌면 코너 1개로 세고 구간 +1. 회전은 `/imu` 자이로 (0.3초 넘게 안 오면 `/odom` 회전 × 0.93). 표지판 하나를 놓쳐도 다음 구간 미션은 그대로 동작.
+미션은 표지판 순서가 아니라 **지금 구간**으로 켜짐 (`section.py`). 출발 뒤 누적 회전이 −65°·−155°·−245°·−335°를 넘을 때마다 구간 +1 (코너 4개가 모두 우회전 90°, 여유 25°). 회전은 `/imu` 자이로 (0.3초 넘게 안 오면 `/odom` 회전 × 0.93). 표지판 하나를 놓쳐도 다음 구간 미션은 그대로 동작.
 
 | 구간 | 위치 | 활성 미션 |
 |---|---|---|
@@ -113,6 +113,8 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 | S4 | 4번 코너 뒤 | 신호등, 주차 |
 
 **라바콘은 실차 확인 전이라 기본값에서 꺼 둠** (`params.py` `sections.off: ['cones']`). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인.
+
+주행 노드가 켜진 채로 차를 조종기로 몰거나 들어서 돌리면 그 회전도 누적됨 → 차를 출발 위치에 둔 뒤 노드를 켬 (연속 2바퀴째는 내내 S4).
 
 지금 구간은 `/answer/detections`의 `control.stage`·`section`·`section_distance`(구간 내 주행 거리)·`yaw_source`(`imu`/`odom`)로 확인. 구간과 무관하게 미션을 단독 시험하려면 `params.py` `sections.enabled` False.
 

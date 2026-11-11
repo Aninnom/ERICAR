@@ -58,15 +58,19 @@ def test_section_manager():
     assert drive(SectionManager(c), lap()) == [0, 1, 2, 3, 4]
     assert drive(SectionManager(c), lap(fork=45)) == [0, 1, 2, 3, 4], '왼쪽 갈림길 꺾임을 코너로 셈'
     assert drive(SectionManager(c), lap(fork=-45)) == [0, 1, 2, 3, 4], '오른쪽 갈림길 꺾임을 코너로 셈'
-    # 오른쪽 갈림길 합류(왼쪽 45°) 바로 뒤 코너: 창 안 최대 방향 기준이라 그대로 셈
-    assert drive(SectionManager(c), [(1.0, 0), (0.4, 45), (0.2, 0), (1.0, -90), (1.0, 0)]) == [0, 1]
-    # 자이로 치우침 0.2°/분의 30배(6°/분)와 odom 대체(실측의 1/0.93배 × 보정 0.93)에서도 같음
-    for bias in (math.radians(6) / 60, -math.radians(6) / 60):
+    # 자이로 치우침: 실측 0.3°/분의 10배(3°/분)에서도 같음
+    for bias in (math.radians(3) / 60, -math.radians(3) / 60):
+        assert drive(SectionManager(c), lap(fork=-45), bias=bias) == [0, 1, 2, 3, 4], bias
         assert drive(SectionManager(c), lap(fork=45), bias=bias) == [0, 1, 2, 3, 4], bias
     assert drive(SectionManager(c), lap(), speed=0.15) == [0, 1, 2, 3, 4]
-    # 코너 유지 실측 58°(IMU) + 나머지 pursuit: 코너를 0.2 m/s로 1.3 m에 걸쳐 돌아도 1개
-    assert drive(SectionManager(c), [(2, 0), (1.3, -90), (2, 0)], speed=0.2) == [0, 1]
-    # 재출발 구간 지정, 마지막 구간 뒤에는 더 올라가지 않음
+    # 구간 안에서 좌우로 크게 흔들림 (3차선 연속 차선 변경 ±40°, 수동 개입 뒤 복귀 70°): 코너로 세지 않음
+    # 11/11 segA_1111_lap2b: 수동 개입 뒤 자동 복귀 회전을 "최근 2 m 안 65°" 방식이 코너로 셈
+    slalom = [(0.5, 40), (0.5, -40), (0.5, -40), (0.5, 40)] * 3
+    assert drive(SectionManager(c, 2), [(1, 0)] + slalom + [(1, 0)]) == [2]
+    assert drive(SectionManager(c, 2), [(1, 0), (0.6, 40), (1.2, -70), (0.6, 30), (1, 0)]) == [2]
+    # 코너 유지 실측 58°(IMU) 뒤 나머지를 pursuit로 천천히 돌아도 1개
+    assert drive(SectionManager(c), [(2, 0), (0.6, -58), (1.0, -32), (2, 0)], speed=0.2) == [0, 1]
+    # 재출발 구간 지정 (그 구간 직선 방향에서 시작), 마지막 구간 뒤에는 더 올라가지 않음
     assert drive(SectionManager(c, 3), [(1, 0), (1, -90), (2, 0), (1, -90), (1, 0)]) == [3, 4]
     disabled = SectionManager(dict(c, enabled=False))
     assert disabled.allows('parking') and disabled.allows('lane_change')

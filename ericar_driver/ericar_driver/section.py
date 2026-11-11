@@ -1,14 +1,15 @@
-"""구간 관리자: 트랙의 우회전 코너를 세어 지금 구간(S0~S4)과 구간 내 주행 거리를 알려 줌
+"""구간 관리자: 출발 뒤 누적 회전각으로 지금 구간(S0~S4)과 구간 내 주행 거리를 알려 줌
 
 미션 사슬(표지판을 봐야 다음 미션이 켜짐) 대체. 표지판 하나를 놓쳐도 다음 구간 미션은 그대로 동작.
 지도·절대 위치 없음. 입력은 회전 속도(IMU 자이로, 없으면 odom × 보정)와 주행 속도(odom)뿐.
 
-코너 판정: 최근 window(m) 주행 안에서 오른쪽으로 turn(°) 넘게 돌았으면 코너 1개 통과 → 구간 +1
-- 누적 각도를 직접 쓰지 않는 이유: 자이로 치우침이 한 바퀴(약 3분) 동안 쌓여도 코너 하나(약 1 m)에는 영향 없음
-- 갈림길 45° 꺾임·차선 변경·라바콘은 turn 미만이라 세지 않음. 왼쪽으로 꺾인 직후 코너는 창 안 최대 방향 기준이라 그대로 셈
+코너 판정: 코너 4개가 모두 우회전 90° → 구간 k의 직선 방향 = −90k°. 누적 회전이 다음 직선 방향까지
+margin(°) 안으로 들어오면 구간 +1 (margin 25 → −65°, −155°, −245°, −335°). 되돌아가지 않음
+- 갈림길 45° 꺾임·차선 변경·수동 조작 뒤 복귀처럼 구간 안에서 좌우로 크게 흔들려도 누적 각도는 기준에 못 미침
+  (11/11 segA_1111_lap2b: "최근 2 m 안 65° 회전" 방식은 수동 개입 뒤 복귀 회전을 코너로 잘못 셈 → 누적 각도로 변경)
+- IMU 실측: 정지 치우침 0.3°/분 이하, 한 바퀴 누적 −354~−366° → 한 바퀴 동안 오차는 여유 안
 """
 import math
-from collections import deque
 
 # 구간별 활성 미션. 트랙 순서 고정 (시계 방향, 코너 4개 모두 우회전 90°)
 SECTION_MISSIONS = [
@@ -27,10 +28,8 @@ class SectionManager:
         self.c = config
         self.index = int(start)   # 지금 구간 번호 (0~4)
         self.distance = 0.0       # 이 구간에 들어온 뒤 주행 거리(m)
-        self.yaw = 0.0            # 출발 뒤 누적 회전(rad, + 왼쪽). 기록·확인용
-        self.travel = 0.0
-        self.history = deque([(0.0, 0.0)])   # (주행 거리, 누적 회전)
-        self.turned = 0.0         # 창 안 최대 방향에서 지금까지 오른쪽 회전(°)
+        self.yaw = -math.radians(90.0*self.index)   # 출발 뒤 누적 회전(rad, + 왼쪽). 재출발은 그 구간 직선 방향에서 시작
+        self.turned = 0.0         # 이 구간 직선 방향에서 오른쪽으로 돈 각도(°)
 
     def missions(self):
         return SECTION_MISSIONS[self.index]
@@ -42,18 +41,12 @@ class SectionManager:
         return not self.c['enabled'] or mission in self.missions()
 
     def update(self, yaw_rate, velocity, dt):
-        step = abs(velocity)*dt
         self.yaw += yaw_rate*dt
-        self.travel += step
-        self.distance += step
-        self.history.append((self.travel, self.yaw))
-        while self.travel-self.history[0][0] > self.c['window']:
-            self.history.popleft()
-        self.turned = math.degrees(max(yaw for _, yaw in self.history)-self.yaw)
-        if self.turned >= self.c['turn'] and self.index < len(SECTION_MISSIONS)-1:
+        self.distance += abs(velocity)*dt
+        self.turned = -math.degrees(self.yaw)-90.0*self.index
+        if self.turned >= 90.0-self.c['margin'] and self.index < len(SECTION_MISSIONS)-1:
             self.index += 1
             self.distance = 0.0
-            self.history = deque([(self.travel, self.yaw)])   # 같은 코너를 두 번 세지 않음
-            self.turned = 0.0
+            self.turned -= 90.0
             return True
         return False
