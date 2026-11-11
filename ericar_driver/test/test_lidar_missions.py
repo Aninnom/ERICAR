@@ -258,8 +258,44 @@ def test_three_lane_left_right():
         assert r['done'] and r['min_clear'] > 0.0, (name, r)
 
 
+def random_three_lane_layout(seed, cars=7, gap=(1.0, 1.6)):
+    """임의 배치 7대: 줄마다 1~2대(차로 무작위), 줄 간격 gap(m), 앞뒤 ±0.1 m 흔들림.
+    직전 줄에서 한 차로 이내로 옮겨 지나갈 수 있는 배치만 사용 (세 차로 전부 막힘 없음). 반환 [(x, 차선 번호)]"""
+    rng = np.random.default_rng(seed)
+    while True:
+        layout, x, reachable = [], 1.5, {1}
+        while len(layout) < cars and reachable:
+            count = min(int(rng.integers(1, 3)), cars - len(layout))
+            blocked = set(rng.choice(3, size=count, replace=False).tolist())
+            reachable = {i for i in range(3) if i not in blocked and any(abs(i - p) <= 1 for p in reachable)}
+            layout += [(x + float(rng.uniform(-0.1, 0.1)), i) for i in sorted(blocked)]
+            x += float(rng.uniform(*gap))
+        if reachable:
+            return layout
+
+
+# 임의 배치 30가지 중 아직 실패하는 수 (11/11, 줄 간격 1.0~1.6 m). 고치면 줄일 것
+#   시드 4·24: 두 차로 옆으로 가야 하는 배치. 바로 앞 줄만 보고 고른 차로가 다음 줄에서 막혀 정지
+#   시드 19: 통과하지만 접촉 (원인 미분석)
+# 참고: 줄 간격 0.8~1.2 m는 22/30 (차선 변경 거리 부족으로 정지). 도면 점선 구간 약 4.05 m에 7대면 이쪽에 가까울 수 있음
+THREE_LANE_RANDOM_ALLOWED_FAILURES = 3
+
+
+def test_three_lane_random(seeds=30):
+    failed = []
+    for seed in range(seeds):
+        r = run_three_lane(random_three_lane_layout(seed))
+        if not (r['done'] and r['min_clear'] > 0.0):
+            failed.append(seed)
+            print(f"3차선 임의 {seed:2d} 실패: 차로 {r['lanes']} 최소 여유 {r['min_clear']:.3f} m, "
+                  f"대기 {r['waits']}주기, 통과 {r['done']} (x {r['x']:.2f})")
+    print(f"3차선 임의 배치: {seeds - len(failed)}/{seeds} 통과, 실패 시드 {failed}")
+    assert len(failed) <= THREE_LANE_RANDOM_ALLOWED_FAILURES, failed
+
+
 if __name__ == '__main__':
     test_cones_pass()
     test_cones_not_started_by_other_objects()
     test_three_lane_left_right()
+    test_three_lane_random()
     print('라이다 미션 시험 통과')
