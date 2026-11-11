@@ -36,6 +36,9 @@ class SectionManager:
         return SECTION_MISSIONS[self.index]
 
     def allows(self, mission):
+        """지금 구간의 미션인지. sections.off에 있는 미션은 구간과 무관하게 꺼짐 (담당자가 실차 확인 뒤 목록에서 뺌)"""
+        if mission in self.c.get('off', ()):
+            return False
         return not self.c['enabled'] or mission in self.missions()
 
     def update(self, yaw_rate, velocity, dt):

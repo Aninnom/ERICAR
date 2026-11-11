@@ -69,9 +69,13 @@ def test_section_manager():
     # 재출발 구간 지정, 마지막 구간 뒤에는 더 올라가지 않음
     assert drive(SectionManager(c, 3), [(1, 0), (1, -90), (2, 0), (1, -90), (1, 0)]) == [3, 4]
     disabled = SectionManager(dict(c, enabled=False))
-    assert disabled.allows('parking') and disabled.allows('cones')
+    assert disabled.allows('parking') and disabled.allows('lane_change')
     manager = SectionManager(c)
     assert manager.allows('slow') and not manager.allows('pedestrian') and not manager.allows('cones')
+    # 라바콘은 기본값에서 꺼 둠 (sections.off). 목록에서 빼면 S3에서만 켜짐
+    assert 'cones' in c['off'] and not SectionManager(c, 3).allows('cones') and not disabled.allows('cones')
+    on = SectionManager(dict(c, off=[]), 3)
+    assert on.allows('cones') and not SectionManager(dict(c, off=[]), 2).allows('cones')
     print('구간 관리자 단독 통과')
 
 
@@ -80,8 +84,18 @@ def test_section_manager():
 def full(drop=(), **kw):
     sections = []
 
+    reset = set()
+
     def on_tick(node, sim, t):
-        index = node.loop.driver.sections.index
+        driver = node.loop.driver
+        # 차선 변경기(lane_change.heading)는 차선 변경이 없는 동안에도 회전을 계속 적분함 → 코너를 돌면 도로 방향 기억이
+        # 90°씩 틀어지고, 그 값이 갈림길 요청에 쓰임 (기존 문제, 3차선·갈림길 담당 범위, 보드 42번)
+        # 이 시험은 구간 관리자만 보므로 가짜 코너가 끝날 때마다 0으로 되돌림
+        for corner in CORNERS:
+            if corner not in reset and sim['s'] >= corner + scenario.CORNER_LENGTH:
+                reset.add(corner)
+                driver.lane_change.heading = 0.0
+        index = driver.sections.index
         if not sections or sections[-1][0] != index:
             sections.append((index, round(sim['s'], 2)))
     records = scenario.run(CONFIG, stop_paint=WHITE, drop=drop, corners=CORNERS, on_tick=on_tick, **kw)

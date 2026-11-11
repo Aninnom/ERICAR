@@ -285,11 +285,6 @@ class Driver:
                                                   avoiding=self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         stuck_change = False
-        # 차선 변경기의 도로 방향 기억: 갈림길 요청은 카메라 대신 이 값을 씀 (lane_change.update). 예전에는 직전 차선 변경
-        # 시작 때 값에서 회전만 적분 → 3차선에서 차선 변경이 한 번도 없었으면 출발 뒤 누적 회전(코너 2개 = 180°)이 들어감
-        # → 갈림길 구간 밖에서 차선이 정상으로 보이는 동안은 카메라 도로 방향으로 맞춰 둠 (유경 공유 필요)
-        if self.state == 'lane' and not self.lane_change.active and not in_fork and lane['valid'] and not lane['abnormal']:
-            self.lane_change.heading = lane['heading']
         if self.state == 'lane':
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork_remaining > 0)

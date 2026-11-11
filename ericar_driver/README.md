@@ -109,8 +109,10 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 | S0 | 출발 직선 | 서행 표지판 |
 | S1 | 1번 코너 뒤 | 보행자 (서행 유도선은 카메라로 상시) |
 | S2 | 2번 코너 뒤 | 3차선 차선 변경, 갈림길 |
-| S3 | 3번 코너 뒤 | 라바콘 |
+| S3 | 3번 코너 뒤 | 라바콘 (지금은 꺼 둠, 아래 참고) |
 | S4 | 4번 코너 뒤 | 신호등, 주차 |
+
+**라바콘은 실차 확인 전이라 기본값에서 꺼 둠** (`params.py` `sections.off: ['cones']`). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인.
 
 지금 구간은 `/answer/detections`의 `control.stage`·`section`·`section_distance`(구간 내 주행 거리)·`yaw_source`(`imu`/`odom`)로 확인. 구간과 무관하게 미션을 단독 시험하려면 `params.py` `sections.enabled` False.
 

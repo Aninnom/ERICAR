@@ -34,7 +34,10 @@ ANSWER_CONFIG = {
     # turn 65: 코너 90° 중 여유 25°. 갈림길 꺾임 45°는 세지 않음. window: 코너 호 약 1 m + 여유
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
     # enabled False면 구간과 무관하게 모든 미션 허용 (단독 시험용)
-    'sections': {'enabled': True, 'turn': 65.0, 'window': 2.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3},
+    # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 실차 확인 전이라 끔 (11/11 segA_1111_lap1: 트랙 옆에 세워 둔
+    # 라바콘·의자 다리를 통로로 보고 진입 → 4번 코너 이탈). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인
+    'sections': {'enabled': True, 'turn': 65.0, 'window': 2.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
+                 'off': ['cones']},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
