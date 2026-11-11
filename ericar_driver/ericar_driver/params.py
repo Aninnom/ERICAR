@@ -30,6 +30,18 @@ ANSWER_CONFIG = {
                     # 유지 중·끝난 뒤 after_seconds 동안 기억 없는 한 선은 가까운 끝이 오른쪽 corner_left_limit(m) 안이면 왼쪽 선
                     'after_seconds': 1.5, 'corner_left_limit': 0.1},
 
+    # 구간 관리자 (section.py): 최근 window(m) 주행 안에서 오른쪽으로 turn(°) 넘게 돌면 코너 1개 = 구간 +1
+    # turn 65: 코너 90° 중 여유 25°. 갈림길 꺾임 45°는 세지 않음. window: 코너 호 약 1 m + 여유
+    # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
+    # enabled False면 구간과 무관하게 모든 미션 허용 (단독 시험용)
+    'sections': {'enabled': True, 'turn': 65.0, 'window': 2.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3},
+    # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
+    # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
+    # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
+    # 값은 실차 확인 전
+    'stall': {'seconds': 8.0, 'reset_distance': 0.3, 'lane_change_off_distance': 1.5,
+              'creep_speed': 0.08, 'creep_horizon': 0.3, 'creep_margin': 0.02},
+
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
@@ -40,6 +52,9 @@ ANSWER_CONFIG = {
         'cpu_threads': 2, 'edge_margin': 0.01,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
         'shutdown_timeout': 5.0,
+        # 시작 직후 첫 검출을 기다리는 최대 시간(s). 그 뒤로는 검출이 끊겨도(timeout 초과·예외) 표지판 미션만 끄고 주행 계속
+        'startup_wait': 20.0,
+        'failure_limit': 5,   # YOLO 예외가 이 횟수 연속이면 고장으로 보고 시작 대기도 건너뜀 (추론은 계속 재시도)
     },
     'lane': {
         # 차선 = 노란색, 정지선·횡단보도·노면 표시 = 흰색 (11/8 현수막 확인)
@@ -119,8 +134,9 @@ ANSWER_CONFIG = {
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
-        'line_match_tolerance': 0.1, 'enforce_order': True,
-        'sequence': ['slow', 'pedestrian', 'fork', 'traffic', 'parking'],
+        'line_match_tolerance': 0.1,
+        # 미션 순서는 구간 관리자가 결정 (위 sections, section.py SECTION_MISSIONS). 예전 sequence·enforce_order 제거
+        'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
         # 갈림길 표지판 인식 후 차선 변경 유지·라바콘 모드 금지 거리(m). 표지판 기둥을 라바콘으로 오인하지 않을 만큼만.
         # 도면상 인식 지점 → 라바콘 시작선 약 5.1~6.1 m라 5 m면 라바콘 입구에서 아직 꺼져 있을 수 있음
         'fork_distance': 3.0,

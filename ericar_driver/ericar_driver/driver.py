@@ -5,7 +5,9 @@ from .common import clip
 from .cones import ConeDriving
 from .lane_change import LaneChange
 from .lane_driving import LaneDriving
+from .lidar import body_points, clear_steering
 from .parking import Parking
+from .section import SectionManager, START_SECTION
 
 # 정지 미션 시간 초과 후 같은 표지판에 바로 다시 반응하지 않도록 쿨다운을 거는 표지판
 MISSION_SIGNS = {
@@ -31,9 +33,14 @@ class Driver:
         self.fork_pending, self.fork_clear_distance = False, 0.0
         self.fork_request = 0
         self.traffic_stop_completed = False
-        # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션부터 시작 (node.py --start-stage)
-        sequence = self.c['missions']['sequence']
-        self.stage_index = sequence.index(self.c['missions'].get('start_stage') or sequence[0])
+        # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
+        # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
+        self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
+        self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
+        self.stall_time = 0.0         # 의도하지 않은 정지 누적 시간(s)
+        self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
+        self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
+        self.signs_lost = 0.0         # 표지판 검출이 끊긴 누적 시간(s)
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
 
     @property
@@ -57,25 +64,25 @@ class Driver:
     def leave_mission(self, mission, now):
         """정지 미션 시간 초과: 영구 정지(fault) 대신 차선 주행으로 돌아간다.
 
-        미션 단계는 넘기지 않는다. 다음 미션 표지판이 이미 보이는 위치(예: 신호등 옆 주차 표지판)에서
-        곧장 다음 미션에 들어가는 오작동을 막기 위함. 재출발은 launch의 start_stage로 한다.
-        같은 표지판에 바로 다시 들어가지 않도록 쿨다운만 건다.
+        그 미션은 포기(done)로 표시해 같은 구간에서 다시 들어가지 않음. 다음 미션은 구간이 바뀌면 켜짐.
+        재출발은 launch의 start_stage로 한다.
         """
         for name in MISSION_SIGNS.get(mission, []):
             self.cooldowns[name] = now + self.c['missions']['sign_cooldown']
+        self.done.add(mission)
         self.line_distance = None
         self.transition('lane', now)
 
     def stage(self):
-        sequence = self.c['missions']['sequence']
-        return sequence[self.stage_index] if self.stage_index < len(sequence) else 'complete'
+        """디버그 표시용: 지금 구간과 활성 미션"""
+        return 'S%d %s' % (self.sections.index, '·'.join(sorted(self.sections.missions() - self.done)))
 
     def allowed(self, mission):
-        return not self.c['missions']['enforce_order'] or self.stage() == mission
+        """지금 구간의 미션이고 아직 끝내지 않았을 때만"""
+        return self.sections.allows(mission) and mission not in self.done
 
     def advance(self, mission):
-        if self.stage() == mission:
-            self.stage_index += 1
+        self.done.add(mission)
 
     def confirmed(self, detections, stamp):
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
@@ -212,14 +219,62 @@ class Driver:
                 self.traffic_stop_completed = True
             if green_only and self.traffic_stop_completed:
                 self.transition('traffic_approach', now)
+            elif (self.signs_lost >= self.c['stall']['seconds'] or
+                    now - self.state_started > m['traffic_max_wait']):
+                # 녹색을 볼 수 없는 상태(YOLO 끊김)거나 너무 오래 기다림: 서 있으면 이후 미션까지 0점 → 포기하고 진행
+                self.leave_mission('traffic', now)
+                speed = m['stop_approach_speed']
         return speed
 
-    def update(self, lane, scan, detections, detection_stamp, velocity, now, angular_velocity=0.0):
+    def stall_guard(self, speed, steering, scan, blocked, stuck_change, velocity, dt):
+        """멈춤 방지: 의도하지 않은 정지가 stall.seconds 넘으면 다음 동작으로 강제 전환. 반환 (속도, 조향, 막힘)
+
+        대상: 차선 변경 대기(옆 차로 막힘)·차선 변경 중 안전 조향 없음·전방 비상 정지. 차선 주행 상태일 때만
+        의도한 정지(보행자·신호등 대기, 주차 완료)·센서 끊김·차선 놓침 탐색 종료(lane_driving lost_search)는 대상 아님
+        정지가 풀려도 stall.reset_distance(m) 가기 전에는 시간을 이어서 셈 → 대기 해제 직후 바로 또 막히면 곧장 다음 단계
+        """
+        s = self.c['stall']
+        self.lane_change_off = max(0.0, self.lane_change_off-abs(velocity)*dt)
+        emergency = blocked and scan['valid_fraction'] >= .5
+        reason = None
+        if self.state == 'lane':
+            reason = ('lane_change' if self.lane_change.waiting or stuck_change else
+                      'blocked' if emergency else None)
+        if reason is None:
+            self.stall_moved += abs(velocity)*dt
+            if self.stall_moved >= s['reset_distance']:
+                self.stall_time = 0.0
+            return speed, steering, blocked
+        self.stall_moved = 0.0
+        self.stall_time += dt
+        if self.stall_time < s['seconds']:
+            return speed, steering, blocked
+        if reason == 'lane_change':
+            # 차선 변경 포기: lane_change_off_distance 동안 끄고 차선 주행. 앞이 막혀 있으면 아래 비상 정지 → 서행 회피로 이어짐
+            self.lane_change.active = self.lane_change.waiting = False
+            self.lane_change_off = s['lane_change_off_distance']
+        elif speed >= 0:
+            # 전방 비상 정지가 안 풀림: 라이다 점을 피하는 조향이 있을 때만 creep_speed로 비켜 감 (없으면 계속 정지)
+            safe_steering, safe = clear_steering(body_points(scan, self.robot), steering, self.robot,
+                                                 s['creep_horizon'], s['creep_margin'])
+            if safe:
+                return s['creep_speed'], safe_steering, False
+        return speed, steering, blocked
+
+    def update(self, lane, scan, detections, detection_stamp, velocity, now, angular_velocity=0.0,
+               yaw_rate=None, signs_ok=True):
+        """yaw_rate: 실측 회전 속도(IMU, rad/s). None이면 odom 값 × sections.odom_yaw_scale
+        signs_ok: 표지판 검출이 최신인지 (False면 detections는 빈 목록으로 들어옴)"""
         if self.last_time is not None and now < self.last_time:
             self.__init__({'answer': self.c, 'robot': self.robot})
         dt = .05 if self.last_time is None else clip(now-self.last_time, .001, .2)
         self.last_time = now
         self.fork_remaining = max(0, self.fork_remaining-max(0, velocity)*dt)
+        # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
+        # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
+        turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
+        self.sections.update(turn_rate, velocity, dt)
+        self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.update_stop_line(lane, velocity, now, dt)
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
@@ -229,14 +284,22 @@ class Driver:
                                                   allow_hold=self.state == 'lane' and not self.avoiding and not in_fork,
                                                   avoiding=self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
+        stuck_change = False
+        # 차선 변경기의 도로 방향 기억: 갈림길 요청은 카메라 대신 이 값을 씀 (lane_change.update). 예전에는 직전 차선 변경
+        # 시작 때 값에서 회전만 적분 → 3차선에서 차선 변경이 한 번도 없었으면 출발 뒤 누적 회전(코너 2개 = 180°)이 들어감
+        # → 갈림길 구간 밖에서 차선이 정상으로 보이는 동안은 카메라 도로 방향으로 맞춰 둠 (유경 공유 필요)
+        if self.state == 'lane' and not self.lane_change.active and not in_fork and lane['valid'] and not lane['abnormal']:
+            self.lane_change.heading = lane['heading']
         if self.state == 'lane':
-            change = self.lane_change.update(lane, scan, velocity, angular_velocity, dt,
-                                            self.allowed('fork') or self.fork_remaining > 0, self.fork_request)
+            change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
+                                            (self.sections.allows('lane_change') or self.fork_remaining > 0)
+                                            and self.lane_change_off <= 0, self.fork_request)
             if self.fork_request and self.lane_change.active:
                 self.fork_request = 0
             cone = None if change is not None else self.cones.update(
-                lane, scan, velocity, angular_velocity, dt, self.stage() == 'traffic' and self.fork_remaining <= 0)
+                lane, scan, velocity, turn_rate, dt, self.sections.allows('cones') and self.fork_remaining <= 0)
             if change is not None:
+                stuck_change = self.lane_change.active and change[0] == 0.0
                 speed, steering = change
                 mode = 'lane_change' if self.lane_change.active else 'lane_change: waiting for clear lane'
             elif cone is not None:
@@ -258,13 +321,18 @@ class Driver:
                 self.parking.pause(now)
             else:
                 blocked = False
+        speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0
-        if self.state.startswith('fault') or self.state == 'parked':
+        if self.state == 'parked':
             speed = 0.0
         self.debug = dict(lane_valid=lane['valid'], lane_error=lane['error'],
                           pid=dict(self.pid.terms), pid_feedback_gain=self.c['pid']['feedback_gain'],
-                          stage=self.stage(), front=scan['front'], rear=scan['rear'],
+                          stage=self.stage(), section=self.sections.index,
+                          section_distance=self.sections.distance, section_turned=self.sections.turned,
+                          yaw_deg=self.sections.yaw*57.29578, yaw_source='odom' if yaw_rate is None else 'imu',
+                          stall_time=self.stall_time, lane_change_off=self.lane_change_off, signs_ok=signs_ok,
+                          front=scan['front'], rear=scan['rear'],
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,

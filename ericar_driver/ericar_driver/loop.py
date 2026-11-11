@@ -42,15 +42,15 @@ def load_config(path):
 
 
 def sensor_status(config, state, ages, available):
-    """Require the inputs used by this state, keeping lidar/odometry mandatory."""
+    """Require the inputs used by this state, keeping lidar/odometry mandatory.
+
+    표지판 검출(YOLO)은 필수 아님: 끊기면 표지판 미션만 꺼지고 차선·라이다 주행 계속 (ControlLoop.step)"""
     timed_parking = state in ('parking_sequence', 'parked')
     required_camera = not timed_parking or config['parking'].get('require_camera_during_sequence', False)
     ready = (available['scan'] and 0 <= ages['scan'] < config['sensor_timeout'] and
              0 <= ages['odometry'] < config['odometry_timeout'])
     if required_camera:
         ready = ready and available['image'] and 0 <= ages['image'] < config['sensor_timeout']
-        if config['detector']['enabled']:
-            ready = ready and available['detector'] and 0 <= ages['detector'] < config['detector']['timeout']
     else:
         # The timed sequence must have been entered through camera alignment.
         ready = ready and available['lane']
@@ -71,6 +71,8 @@ class Sensors:
     velocity: float
     angular_velocity: float
     odom_stamp: float
+    yaw_rate: float = 0.0        # IMU 자이로 z (rad/s, + 왼쪽)
+    imu_stamp: float = -1e9      # IMU 수신 시각. 오래되면 odom 회전으로 대체
 
 
 @dataclass
@@ -95,6 +97,8 @@ class ControlLoop:
         self.debug_stamp = -1e9
         self.detection_debug_stamp = -1e9
         self.last_state = ''
+        self.started = None          # 첫 제어 주기 시각 (YOLO 첫 검출 대기 기준)
+        self.detector_seen = False   # 최신 검출을 한 번이라도 받음
 
     def step(self, s):
         c, now = self.c, s.now
@@ -102,10 +106,21 @@ class ControlLoop:
         ages = dict(image=now-s.image_stamp, scan=now-s.scan_stamp,
                     odometry=now-s.odom_stamp, detector=now-s.detection_stamp)
         available = dict(image=s.image is not None, scan=s.scan is not None,
-                         lane=self.lane_cache is not None, detector=s.detector_ok)
+                         lane=self.lane_cache is not None)
         sensor_ready, required_camera = sensor_status(c, self.driver.state, ages, available)
         self.driver.debug['required_camera'] = required_camera
-        if not sensor_ready or not math.isfinite(s.velocity) or not math.isfinite(s.angular_velocity):
+        # 표지판 검출: 최신일 때만 사용. 끊기면(시간 초과·YOLO 예외) 빈 목록으로 주행 계속
+        # 예전: 검출이 끊기면 센서 대기로 영구 정지. 시작 직후 첫 검출만 startup_wait까지 기다림 (출발선 서행 표지판)
+        if self.started is None:
+            self.started = now
+        signs_ok = 0 <= ages['detector'] < c['detector']['timeout']
+        self.detector_seen = self.detector_seen or signs_ok
+        waiting_detector = (c['detector']['enabled'] and s.detector_ok and not self.detector_seen and
+                            now - self.started < c['detector']['startup_wait'])
+        # 회전 속도: IMU가 최신이면 IMU, 아니면 odom × 보정 (driver.update에서 처리)
+        imu_ok = 0 <= now - s.imu_stamp < c['sections']['imu_timeout'] and math.isfinite(s.yaw_rate)
+        if (not sensor_ready or waiting_detector or
+                not math.isfinite(s.velocity) or not math.isfinite(s.angular_velocity)):
             self.driver.debug['published_speed'] = 0.0
             self.driver.debug['speed'] = 0.0
             speed, steering = 0.0, 0.0
@@ -121,8 +136,10 @@ class ControlLoop:
                 self.lane_bias = self.driver.fork_bias
             lane = self.lane_cache
             was_avoiding = self.driver.avoiding
-            speed, steering, state = self.driver.update(lane, s.scan, s.detections,
-                                                         s.detection_stamp, s.velocity, now, s.angular_velocity)
+            speed, steering, state = self.driver.update(lane, s.scan, s.detections if signs_ok else [],
+                                                         s.detection_stamp, s.velocity, now, s.angular_velocity,
+                                                         yaw_rate=s.yaw_rate if imu_ok else None,
+                                                         signs_ok=signs_ok or not c['detector']['enabled'])
             if was_avoiding and not self.driver.avoiding:
                 self.vision.memory = {}
                 self.vision.previous_center = None
