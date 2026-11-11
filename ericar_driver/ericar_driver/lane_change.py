@@ -76,7 +76,7 @@ class LaneChange:
     def choose_direction(self, free, lane, requested=0, preferred=0):
         """왼쪽(+1)·오른쪽(-1) 중 갈 차로. 없으면 0
 
-        - 차로 범위(0 ~ lane_count-1) 밖이거나 그쪽 차선이 실선이면 제외 (갈림길 요청은 실선 무시)
+        - 차로 범위 밖·노란 경계 방향 제외. 일반 회피는 실선 방향도 제외
         - 옆 차로가 min_free_distance 이상 비어 있고, 지금 차로보다 free_gain 이상 더 비어 있어야 함
         - 둘 다 되면 더 멀리 비어 있는 쪽. 같으면 왼쪽 (기존 동작)
         - preferred(이미 읽은 갈림길 표지판 방향) 쪽이 조건을 만족하면 그쪽 먼저 (반대로 피하면 다시 건너와야 함, 소민)
@@ -87,6 +87,9 @@ class LaneChange:
             if requested and direction != requested:
                 continue
             if not 0 <= self.index+direction < c['lane_count']:
+                continue
+            # YOLO 요청도 노란 바깥선·교통섬 경계 횡단 금지. 점선 차로에서 정렬 필요
+            if lane.get('colors', {}).get(side) == 'yellow':
                 continue
             if not requested and lane.get('solid', {}).get(side, False):
                 continue
