@@ -215,7 +215,8 @@ class LaneVision:
         if self.outer_yellow is not None and len(source) == 1 and not self.fork_direction:
             kept = next(iter(source.values()))
             if line_colors.get(kept) == 'yellow':
-                source = {self.outer_yellow: kept}
+                # 차선 변경 중에도 추적 중인 교통섬 경계를 바깥선 이름으로 덮어쓰기 금지
+                source = {self.remembered_side(anchors[kept]) or self.outer_yellow: kept}
         source = self.fork_sources(source, fits, anchors, line_colors, lane_px)
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
@@ -288,6 +289,13 @@ class LaneVision:
         groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
         return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
 
+    def remembered_side(self, anchor):
+        """기억한 선과 반 차로 이내인 가까운 끝의 이름. 없으면 None"""
+        row, x = anchor
+        distances = {side: float(np.min(np.hypot((x-mx)/self.scale, (row-mr)*self.row_m)))
+                     for side, (mr, mx, _) in self.memory.items() if len(mr)}
+        return min(distances, key=distances.get) if distances and min(distances.values()) < self.c['lane_width']/2 else None
+
     def fork_sources(self, source, fits, anchors, colors, lane_px):
         """출구 정렬 후 교통섬 경계 이름 보정. 선의 위치·선택 방향 휨으로 제한"""
         direction = self.fork_direction
@@ -305,6 +313,11 @@ class LaneVision:
         if colors.get(kept) != 'yellow':
             return source
         row, x = anchors[kept]
+        # A/B 교통섬 경계의 꺾임 방향 반전만으로 추적 이름 변경 금지
+        # 근거: run_1112_0326 45.7초 오른쪽 경계 → 47.9초 왼쪽 이름·오른쪽 목표
+        remembered = self.remembered_side((row, x))
+        if remembered is not None:
+            return {remembered: kept}
         lateral = (self.c['width_px']/2-x)/self.scale
         heading = math.atan(float(np.polyval(np.polyder(fits[kept]), row))/self.scale/self.row_m)
         # 차 중앙 부근에서 선택 출구로 꺾이는 선 = 교통섬 쪽 경계 후보

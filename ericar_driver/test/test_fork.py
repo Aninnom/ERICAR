@@ -79,9 +79,9 @@ def test_immediate_and_memory():
 
 
 def test_fork_boundaries():
-    v = LaneVision(copy.deepcopy(ANSWER_CONFIG['lane']), {}, 0.2)
     row = 400.
     for direction, inner, outer in [(1, 'right', 'left'), (-1, 'left', 'right')]:
+        v = LaneVision(copy.deepcopy(ANSWER_CONFIG['lane']), {}, 0.2)
         v.fork_direction = direction
         slope = direction*.3*v.scale*v.row_m
         fit = np.array([0., slope, v.c['width_px']/2-slope*row])
@@ -119,6 +119,34 @@ def test_requested_uses_current_heading():
     assert result[0] > 0
 
 
+def test_fork_keeps_tracked_inner_boundary():
+    # run_1112_0326: A 오른쪽 경계가 반대 방향으로 꺾인 뒤 왼쪽 이름으로 강제 변경된 조건
+    for direction, inner, outer in [(1, 'right', 'left'), (-1, 'left', 'right')]:
+        v = LaneVision(copy.deepcopy(ANSWER_CONFIG['lane']), {}, .2)
+        v.fork_direction, v.outer_yellow = direction, outer
+        rows = np.arange(360., 420.)
+        slope = -direction*.5*v.scale*v.row_m
+        fit = np.array([0., slope, v.c['width_px']/2-slope*400.])
+        v.memory = {inner: (rows, np.polyval(fit, rows), 0)}
+        source = v.fork_sources({inner: 'right'}, {'right': fit},
+                               {'right': (400., v.c['width_px']/2)}, {'right': 'yellow'},
+                               v.c['lane_width']*v.scale)
+        assert source == {inner: 'right'}, '교통섬 경계 이름 반전: '+str(source)
+        mask = np.zeros((v.c['height_px'], v.c['width_px']), np.uint8)
+        near = int(np.polyval(fit, mask.shape[0]-1))
+        far = int(np.polyval(fit, 0))
+        cv2.line(mask, (near, mask.shape[0]-1), (far, 0), 255, 4)
+        # 차선 변경 중(출구 보정 전) → 종료 후 전환에서도 이름 유지
+        v.fork_direction = 0
+        changing = v.analyze_bird(mask)
+        assert changing['valid'] and set(changing['fits']) == {inner}, changing['fits']
+        v.fork_direction = direction
+        result = v.analyze_bird(mask)
+        assert result['valid'] and set(result['fits']) == {inner}, result['fits']
+        # A의 오른쪽 경계에서는 경계보다 왼쪽 목표, B는 반대. 꺾임 방향과 독립
+        assert direction*result['error'] > 0, result['error']
+
+
 def test_blocked_target_keeps_avoidance():
     d = driver()
     lane = dict(valid=True, heading=0., error=0., colors={}, solid={}, stamp=1.)
@@ -136,5 +164,6 @@ if __name__ == '__main__':
     test_immediate_and_memory()
     test_fork_boundaries()
     test_requested_uses_current_heading()
+    test_fork_keeps_tracked_inner_boundary()
     test_blocked_target_keeps_avoidance()
     print('YOLO 좌·우 분기 상태 시험 통과')
