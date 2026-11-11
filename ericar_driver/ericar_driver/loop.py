@@ -132,6 +132,7 @@ class ControlLoop:
                                                  if self.driver.lane_driver.in_corner(now) else None)
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.vision.outer_yellow = self.driver.outer_yellow()
+                self.vision.fork_direction = self.driver.fork_direction()
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 self.lane_stamp = s.image_stamp

@@ -37,6 +37,7 @@ class LaneVision:
         # 바깥 차로에서 노란 선만 보일 때 위치로 이름을 붙이면 차가 노란 선에 붙은 순간 '오른쪽 선'으로 오판
         # → 차로 중앙을 더 바깥으로 계산해 트랙 밖으로 나감 (11/11 run_1111_1241 17.8~22.7 s, n=r → 이탈) (소민)
         self.outer_yellow = None
+        self.fork_direction = 0  # 끝 차로 정렬 후 선택 출구. +1=A(왼쪽), -1=B(오른쪽)
         self.double_left = False      # 마지막 코너 뒤 왼쪽에 옆 차로 선이 나란한 구간이면 True (loop가 설정). find_starts·label_sides
 
     # ---------- 2. 버드아이뷰 ----------
@@ -211,10 +212,11 @@ class LaneVision:
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
         source = self.label_sides(fits, lane_px, picked_sets, anchors, line_colors)
-        if self.outer_yellow is not None and len(source) == 1:
+        if self.outer_yellow is not None and len(source) == 1 and not self.fork_direction:
             kept = next(iter(source.values()))
             if line_colors.get(kept) == 'yellow':
                 source = {self.outer_yellow: kept}
+        source = self.fork_sources(source, fits, anchors, line_colors, lane_px)
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
         self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})
@@ -285,6 +287,30 @@ class LaneVision:
             return []
         groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
         return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
+
+    def fork_sources(self, source, fits, anchors, colors, lane_px):
+        """출구 정렬 후 교통섬 경계 이름 보정. 선의 위치·선택 방향 휨으로 제한"""
+        direction = self.fork_direction
+        if not direction or not source:
+            return source
+        if len(source) == 2:
+            row = max(anchors[k][0] for k in source.values())
+            gap = abs(np.polyval(fits[source['left']], row)-np.polyval(fits[source['right']], row))
+            if gap <= 1.5*lane_px:
+                return source
+            # 서로 다른 출구 선을 평균내지 않고 선택 출구 쪽 경계만 유지
+            side = 'left' if direction > 0 else 'right'
+            return {side: source[side]}
+        kept = next(iter(source.values()))
+        if colors.get(kept) != 'yellow':
+            return source
+        row, x = anchors[kept]
+        lateral = (self.c['width_px']/2-x)/self.scale
+        heading = math.atan(float(np.polyval(np.polyder(fits[kept]), row))/self.scale/self.row_m)
+        # 차 중앙 부근에서 선택 출구로 꺾이는 선 = 교통섬 쪽 경계 후보
+        inner = direction*heading > .1 and direction*lateral < self.c['single_line_split']
+        side = ('right' if direction > 0 else 'left') if inner else ('left' if direction > 0 else 'right')
+        return {side: kept}
 
     def find_starts(self, lane_mask, lane_px, fork_bias, dashes=None):
         """아래쪽 띠의 흰 픽셀 개수(히스토그램)에서 좌/우 차선 시작 x를 고른다.

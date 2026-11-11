@@ -4,11 +4,14 @@ import sys
 from pathlib import Path
 
 import yaml
+import numpy as np
+import cv2
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from ericar_driver.driver import Driver
 from ericar_driver.params import ANSWER_CONFIG
+from ericar_driver.lane_vision import LaneVision
 
 
 def driver():
@@ -36,7 +39,7 @@ def test_both_directions():
         d.lane_change.index = start
         for t in (0., .1):
             signs(d, [name], t, wide=1)
-        assert d.fork_pending and d.fork_request == 0
+        assert not d.fork_pending and d.fork_request == direction
         for i in range(15):
             signs(d, [], .2+i*.05)
         assert d.fork_request == direction
@@ -61,7 +64,77 @@ def test_both_directions():
         assert d.fork_request == 0 and not d.fork_pending
 
 
+def test_immediate_and_memory():
+    d = driver()
+    for t in (0., .1):
+        signs(d, ['right'], t)
+    assert d.fork_request == -1, '장애물 없을 때 즉시 요청 누락'
+    for i in range(100):
+        signs(d, ['left'], 1+i*.05, wide=1)
+    assert d.fork_goal == -1 and d.fork_request == -1, '방향 기억 변경'
+    assert d.fork_direction() == 0, '정렬 전 갈림길 선 보정 활성'
+    d.lane_change.index = 0
+    signs(d, [], 10)
+    assert d.fork_request == 0 and d.fork_direction() == -1
+
+
+def test_fork_boundaries():
+    v = LaneVision(copy.deepcopy(ANSWER_CONFIG['lane']), {}, 0.2)
+    row = 400.
+    for direction, inner, outer in [(1, 'right', 'left'), (-1, 'left', 'right')]:
+        v.fork_direction = direction
+        slope = direction*.3*v.scale*v.row_m
+        fit = np.array([0., slope, v.c['width_px']/2-slope*row])
+        # 화면 중앙의 교통섬 경계: 이전 잘못된 이름보다 출구 형상 우선
+        got = v.fork_sources({outer: 'left'}, {'left': fit}, {'left': (row, v.c['width_px']/2)},
+                             {'left': 'yellow'}, v.c['lane_width']*v.scale)
+        assert got == {inner: 'left'}, got
+        x = v.c['width_px']/2-direction*.26*v.scale
+        got = v.fork_sources({inner: 'left'}, {'left': fit}, {'left': (row, x)},
+                             {'left': 'yellow'}, v.c['lane_width']*v.scale)
+        assert got == {outer: 'left'}, got
+        # BEV 픽셀 → 탐색 → 이름 → 목표점 전체 경로에서 잘못된 바깥선 힌트보다 교통섬 형상 우선
+        v = LaneVision(copy.deepcopy(ANSWER_CONFIG['lane']), {}, .2)
+        v.fork_direction = direction
+        v.outer_yellow = outer
+        mask = np.zeros((v.c['height_px'], v.c['width_px']), np.uint8)
+        x = int(v.c['width_px']/2)
+        shift = int(direction*.3*(v.c['far']-v.c['near'])*v.scale)
+        cv2.line(mask, (x, mask.shape[0]-1), (x-shift, 0), 255, 4)
+        result = v.analyze_bird(mask)
+        assert result['valid'] and set(result['fits']) == {inner}, result['fits']
+        assert direction*result['error'] > 0, '교통섬 반대쪽 목표점 생성 실패'
+    v.fork_direction = 0
+    assert v.fork_sources({'left': 'left'}, {}, {}, {}, 104) == {'left': 'left'}
+
+
+def test_requested_uses_current_heading():
+    d = driver()
+    change = d.lane_change
+    change.heading = -1.5
+    lane = dict(valid=True, heading=0., error=0., colors={}, solid={}, stamp=1.)
+    scan = dict(points=[], wide_objects=0)
+    result = change.update(lane, scan, 0., 0., .05, True, requested=1)
+    assert change.active and change.direction == 1 and change.heading == 0.
+    assert result[0] > 0
+
+
+def test_blocked_target_keeps_avoidance():
+    d = driver()
+    lane = dict(valid=True, heading=0., error=0., colors={}, solid={}, stamp=1.)
+    x = d.robot['lidar']['x']
+    # 앞·오른쪽 막힘, 왼쪽 여유. 오른쪽 출구 요청 중에도 왼쪽 회피 가능
+    scan = dict(points=[[.8-x, 0.], [.7-x, -.52]], wide_objects=2)
+    result = d.lane_change.update(lane, scan, 0., 0., .05, True, requested=-1, preferred=-1)
+    assert d.lane_change.active and d.lane_change.direction == 1
+    assert result is not None
+
+
 if __name__ == '__main__':
     test_conflicting_arrows()
     test_both_directions()
+    test_immediate_and_memory()
+    test_fork_boundaries()
+    test_requested_uses_current_heading()
+    test_blocked_target_keeps_avoidance()
     print('YOLO 좌·우 분기 상태 시험 통과')

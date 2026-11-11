@@ -139,8 +139,8 @@ class LaneChange:
             return self.steer(points, dt)
         if not enabled or not lane['valid'] or (not requested and not scan['wide_objects']):
             return None
-        # 갈림길의 꺾인 경계선 대신 직전 차선 변경의 도로 방향을 이어 쓴다.
-        heading = self.heading if requested else lane['heading']
+        # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
+        heading = lane['heading']
         forward, left = to_road(points, heading)
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
         center = 0.0 if requested else lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
@@ -152,7 +152,8 @@ class LaneChange:
         direction = self.choose_direction(free, lane, requested, preferred)
         self.debug['choice'] = direction
         if direction == 0 and requested:
-            return None  # 갈림길 요청인데 옆 차로가 아직 안 비었으면 차선 주행 계속, 다음 주기에 다시 확인 (소민)
+            # 목표 쪽 막힘: 목표는 유지하고 일반 장애물 회피로 우회 가능
+            return self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
         if direction == 0:
             # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
             # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
