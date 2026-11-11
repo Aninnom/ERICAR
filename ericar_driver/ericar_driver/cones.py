@@ -60,37 +60,14 @@ def gate_edges(forward, left, sides, window):
     return edges
 
 
-def split_rows(cones, guess, c):
-    """콘 두 줄(통로 좌·우)이 가장 곧게 갈리는 통로 방향과 줄 배정. 없으면 None
-
-    방향 후보마다 도로 기준 왼쪽 거리를 정렬해 가장 큰 틈에서 두 줄로 나누고,
-    두 줄의 왼쪽 거리 퍼짐(최대-최소) 합이 가장 작은 방향을 고른다 (같은 퍼짐이면 guess에 가까운 방향).
-    조건: 틈(가장 안쪽 좌·우 콘 간격) cone_gate_min~max, 줄마다 퍼짐 cone_row_tolerance 이하.
-    한 줄만 있으면 줄 방향에서 틈이 0, 다른 방향에서는 줄 퍼짐이 커서 통과하지 못한다.
-    11/12 녹화 cone_run_0002 11.3 s: 코너 직후 통로가 차 정면 기준 오른쪽 약 45°라
-    차 정면으로 좌우를 나누면 콘이 모두 오른쪽 → 진입 못 하고 정지.
-    반환 (방향, 콘별 줄 배열 +1 왼쪽 / -1 오른쪽)
-    """
-    limit, step = c['cone_start_max_heading'], c['cone_start_heading_step']
-    best = None
-    for heading in np.arange(-limit, limit+step/2, step):
-        _, left = to_road(cones, heading)
-        order = np.argsort(left)
-        values = left[order]
-        k = int(np.argmax(np.diff(values)))
-        right_row, left_row = values[:k+1], values[k+1:]
-        gap = left_row[0]-right_row[-1]
-        if not c['cone_gate_min'] <= gap <= c['cone_gate_max']:
-            continue
-        spread = max(np.ptp(right_row), np.ptp(left_row))
-        if spread > c['cone_row_tolerance']:
-            continue
-        cost = np.ptp(right_row)+np.ptp(left_row)+0.1*abs(heading-guess)
-        if best is None or cost < best[0]:
-            sides = np.empty(len(cones), dtype=int)
-            sides[order[:k+1]], sides[order[k+1:]] = -1, 1
-            best = (cost, float(heading), sides)
-    return None if best is None else best[1:]
+def row_heading(forward, left, center, minimum_span=0.3):
+    """같은 줄 콘 2개 이상(앞뒤 간격 minimum_span 이상)이면 직선 맞춤 → 줄 방향(rad). 양쪽 평균, 없으면 None"""
+    angles = []
+    for side in (1, -1):
+        mask = (left-center)*side > 0
+        if np.count_nonzero(mask) >= 2 and np.ptp(forward[mask]) >= minimum_span:
+            angles.append(math.atan(np.polyfit(forward[mask], left[mask], 1)[0]))
+    return float(np.mean(angles)) if angles else None
 
 
 class ConeDriving:
@@ -106,40 +83,33 @@ class ConeDriving:
         self.debug = {}
 
     # ---------- 1. 진입 판단 (참고 코드 Is_Labacon) ----------
-    def start_check(self, cones, lane, wide=None):
+    def start_check(self, cones, lane):
         """라바콘 구간 시작이면 (콘 줄 방향, 통로 중앙, 좌우 간격, 첫 콘 앞 거리), 아니면 None
 
         1) 앞 cone_start_range 안에 콘 cone_start_min_cones개 이상
-        2) 콘이 곧은 두 줄로 갈림 (split_rows). 통로 방향은 차 정면 ±cone_start_max_heading 안에서 찾음
-           → 코너 직후 비스듬히 다가가도 진입 (예전: 차 정면 기준 좌·우에 콘이 각각 있어야 했음)
+        2) 차 기준 왼쪽·오른쪽에 콘이 각각 있음 (콘 사이로 지나가는 구간)
         3) 가장 가까운 좌·우 콘 간격이 cone_gate_min ~ cone_gate_max (차가 지나갈 수 있는 통로)
-        4) 넓은 군집(wide, 차체 좌표)이 통로 안쪽에 없음 (차량 장애물). 콘 줄 위의 넓은 군집은
-           붙어 놓인 콘 여러 개가 한 덩어리로 잡힌 것이라 무시 (11/12 녹화: 폭 0.16~0.5 m 덩어리가 콘 줄 위)
+        콘 줄 방향은 같은 줄 콘 직선 맞춤 → 없으면 카메라 차로 방향 → 없으면 차 정면.
+        진입 직전 코너 곡선이나 콘에 가린 차선보다 콘 줄이 실제 통로 방향에 가깝다.
         """
         c = self.c
         ahead = (cones[:, 0] > 0) & (cones[:, 0] < c['cone_start_range'])
         cones = cones[ahead]
         if len(cones) < c['cone_start_min_cones']:
             return None
-        guess = lane['heading'] if lane.get('valid') and abs(lane['heading']) < .35 else 0.0
-        rows = split_rows(cones, guess, c)
-        if rows is None:
-            return None
-        heading, sides = rows
+        heading = lane['heading'] if lane.get('valid') and abs(lane['heading']) < .35 else 0.0
         forward, left = to_road(cones, heading)
+        rows = row_heading(forward, left, 0.0)
+        if rows is not None:
+            heading = float(np.clip(heading+rows, -.35, .35))
+            forward, left = to_road(cones, heading)
+        sides = np.where(left >= 0, 1, -1)   # 진입 전에는 차 정면 기준으로 좌우를 나눔
         left_edge, right_edge = gate_edges(forward, left, sides, c['cone_gate_window'])
         if left_edge is None or right_edge is None:
             return None
         width = left_edge-right_edge
         if not c['cone_gate_min'] <= width <= c['cone_gate_max']:
             return None
-        if wide is not None and len(wide):
-            wide_forward, wide_left = to_road(wide, heading)
-            margin = c['cone_wide_margin']
-            inside = ((wide_forward > 0) & (wide_forward < c['cone_start_range']) &
-                      (wide_left > right_edge+margin) & (wide_left < left_edge-margin))
-            if np.any(inside):
-                return None
         return heading, (left_edge+right_edge)/2, width, float(forward.min())
 
     # ---------- 2. 콘 사이 통과 ----------
@@ -196,13 +166,8 @@ class ConeDriving:
             return None
         cones = find_cones(scan, self.robot)
         if not self.active:
-            # 넓은 물체(차량 장애물)가 통로 안쪽에 보이면 라바콘 구간으로 보지 않는다 (start_check 4)
-            # 위치 없이 개수만 있으면(합성 시험 등) 예전처럼 넓은 물체가 하나라도 있으면 진입하지 않음
-            if 'wide_centers' in scan:
-                wide = body_points({'points': scan['wide_centers']}, self.robot)
-                start = self.start_check(cones, lane, wide)
-            else:
-                start = self.start_check(cones, lane) if scan.get('wide_objects', 0) == 0 else None
+            # 넓은 물체(차량 장애물)가 보이면 라바콘 구간으로 보지 않는다.
+            start = self.start_check(cones, lane) if scan['wide_objects'] == 0 else None
             self.confirm = self.confirm+1 if start else 0
             self.debug = dict(state='wait', confirm=self.confirm, cones=int(len(cones)))
             if self.confirm < self.c['cone_confirm_count']:
