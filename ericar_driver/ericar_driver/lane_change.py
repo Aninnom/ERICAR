@@ -135,8 +135,17 @@ class LaneChange:
         direction = self.choose_direction(free, lane, requested)
         self.debug['choice'] = direction
         if direction == 0:
+            # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
+            # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
+            if not requested and free[0] > self.c['stop_distance']:
+                desired = pursuit_steering(lane.get('forward', .65), lane['error'], self.robot)
+                steering, safe = clear_steering(points, desired, self.robot,
+                                                self.c['safety_horizon'], self.c['margin'])
+                if safe:
+                    self.debug['approach'] = True
+                    return self.c['approach_speed'], steering
             self.waiting = True
-            return 0.0, 0.0  # 옆 차로가 막혀 있으면 정지하고 다음 센서 입력을 기다린다.
+            return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
         self.active, self.direction = True, direction
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = heading, 0.0, 0.0
