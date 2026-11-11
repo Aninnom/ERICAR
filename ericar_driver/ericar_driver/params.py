@@ -125,6 +125,10 @@ ANSWER_CONFIG = {
         # [실차] 간격 범위는 실제 라바콘 배치 보고 조정 (참고 코드 0.6~0.95, 차폭 0.22)
         'cone_start_range': 1.5, 'cone_start_min_cones': 3, 'cone_confirm_count': 3,
         'cone_gate_min': 0.35, 'cone_gate_max': 1.0,
+        # 진입 통로 방향 탐색 (cones.split_rows): 차 정면 ±cone_start_max_heading(rad)을 step 간격으로,
+        # 줄마다 왼쪽 거리 퍼짐 cone_row_tolerance(m) 이하. 11/12 녹화: 코너 직후 통로가 오른쪽 약 45°
+        'cone_start_max_heading': 0.9, 'cone_start_heading_step': 0.02, 'cone_row_tolerance': 0.15,
+        'cone_wide_margin': 0.08,    # 넓은 군집이 좌·우 콘 경계에서 이만큼 넘게 안쪽이면 차량 장애물로 보고 진입 안 함
         'cone_gate_width': 0.6,      # 한쪽 줄만 보일 때 쓰는 좌·우 간격 기본값 (진입 시 측정값으로 교체)
         'cone_gate_window': 0.5,     # 같은 줄에서 가장 가까운 콘부터 이 앞 거리 안의 콘 중 가장 안쪽을 통로 경계로
         'cone_view_distance': 1.5,   # 통과 중 보는 콘 앞 거리

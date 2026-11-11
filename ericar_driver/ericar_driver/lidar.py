@@ -109,6 +109,7 @@ def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, confi
     narrow_objects = 0
     wide_objects = 0
     narrow_centers = []
+    wide_centers = []   # 넓은 군집 중심. 라바콘 진입 때 통로 안쪽 물체(차량)인지 콘 줄 위 덩어리인지 구분 (cones.start_check)
     if len(points):
         breaks = np.flatnonzero(np.linalg.norm(np.diff(points, axis=0), axis=1) > config.get('cluster_gap', .12)) + 1
         for cluster in np.split(points, breaks):
@@ -118,10 +119,11 @@ def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, confi
             center = np.mean(cluster, axis=0)
             if width > config.get('small_object_max_width', .12) and 0 < center[0] < config.get('small_object_range', 1.8) and abs(center[1]) < config.get('wide_object_half_width', .9):
                 wide_objects += 1
+                wide_centers.append(center.tolist())
             if (config.get('small_object_min_width', .025) <= width <= config.get('small_object_max_width', .12) and
                     0 < center[0] < config.get('small_object_range', 1.8) and abs(center[1]) < config.get('small_object_half_width', .75)):
                 narrow_objects += 1
                 narrow_centers.append(center.tolist())
     return dict(front=front, rear=rear, points=points,
                 narrow_objects=narrow_objects, narrow_centers=narrow_centers,
-                wide_objects=wide_objects, valid_fraction=float(np.mean(valid)))
+                wide_objects=wide_objects, wide_centers=wide_centers, valid_fraction=float(np.mean(valid)))
