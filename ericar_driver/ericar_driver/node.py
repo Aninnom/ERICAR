@@ -164,23 +164,32 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false]. --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    yolo = True
-    if '--yolo' in args:
-        i = args.index('--yolo')
-        yolo = args[i + 1].lower() not in ('false', '0', 'no', 'off')
-        args = args[:i] + args[i + 2:]
-    return args, yolo
+    options = {'--yolo': 'true', '--start-stage': ''}
+    for flag in options:
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                raise SystemExit(f'{flag} 뒤에 값이 필요합니다')
+            options[flag] = args[i + 1]
+            args = args[:i] + args[i + 2:]
+    yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
+    return args, yolo, options['--start-stage']
 
 
 def main(config_path=None):
-    # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용
-    args, yolo = parse_args(sys.argv)
+    # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용, 첫 미션부터 시작
+    args, yolo, start_stage = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
     c = config['answer']
+    if start_stage:
+        sequence = c['missions']['sequence']
+        if start_stage not in sequence:
+            raise SystemExit(f'start_stage "{start_stage}"는 미션 순서 {sequence} 중 하나여야 합니다')
+        c['missions']['start_stage'] = start_stage
     if not yolo:
         # 차선 시험용: 표지판 미션 없이 주행. 센서 상태 확인에서도 YOLO 제외
         c['detector']['enabled'] = False

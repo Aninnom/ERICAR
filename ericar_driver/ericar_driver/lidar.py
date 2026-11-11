@@ -35,6 +35,52 @@ def path_clearance(points, steering, robot, distance):
 
 
 
+# ---------- 라바콘·3차선 공통 (유경) ----------
+
+def to_road(points, heading):
+    """차체 좌표 점(N×2) → 도로 기준 (앞 거리, 왼쪽 거리). heading = 차체에서 본 도로 방향(rad, + 왼쪽)"""
+    points = np.asarray(points, dtype=float).reshape(-1, 2)
+    cosine, sine = math.cos(heading), math.sin(heading)
+    return points[:, 0]*cosine+points[:, 1]*sine, -points[:, 0]*sine+points[:, 1]*cosine
+
+
+def to_body(forward, left, heading):
+    """도로 기준 (앞, 왼쪽) → 차체 좌표 (x, y)"""
+    cosine, sine = math.cos(heading), math.sin(heading)
+    return forward*cosine-left*sine, forward*sine+left*cosine
+
+
+def pursuit_steering(x, y, robot):
+    """뒷바퀴 축 기준 목표점 (x, y)를 지나는 원호 조향 (pure pursuit)"""
+    steering = math.atan2(2*robot['wheelbase']*y, x*x+y*y)
+    return float(max(-robot['max_steering'], min(robot['max_steering'], steering)))
+
+
+def clear_steering(points, desired, robot, distance, margin, samples=33):
+    """desired 조향으로 distance(m) 가는 동안 차체가 라이다 점에 margin보다 가까워지면
+    desired에 가장 가까운 안전한 조향으로 바꾼다. 반환 (조향, 안전 여부)
+
+    이미 margin 안에 물체가 있으면(옆 라바콘 등) 지금보다 더 가까워지지 않는 조향을 안전으로 본다.
+    안전한 조향이 없으면 여유가 가장 큰 조향과 False.
+    """
+    if len(points) == 0:
+        return float(desired), True
+    here = np.array([[robot['wheelbase']/2, 0.0, 0.0]])
+    need = min(margin, footprint_clearance(points, here, robot)-0.005)
+    if path_clearance(points, desired, robot, distance) >= need:
+        return float(desired), True
+    choices = np.linspace(-robot['max_steering'], robot['max_steering'], samples)
+    best, best_clearance = float(desired), -1.0
+    for steering in choices[np.argsort(np.abs(choices-desired))]:
+        clearance = path_clearance(points, steering, robot, distance)
+        if clearance >= need:
+            return float(steering), True
+        if clearance > best_clearance:
+            best, best_clearance = float(steering), clearance
+    return best, False
+
+
+
 def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, config):
     """Validate scan data and expose measured local obstacle clusters."""
     values = np.asarray(ranges, dtype=float)

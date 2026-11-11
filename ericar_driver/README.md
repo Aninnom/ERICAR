@@ -99,6 +99,29 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 
 조종기 SWB 위(자동)일 때만 차가 움직임. 상태는 `ros2 topic echo /answer/status`.
 
+### 재출발 (미션 시작 지점에서 다시 출발)
+
+규정상 미션 실패·포기 시 차를 그 미션(또는 다음 미션) 시작 지점으로 옮김. 노드를 다시 켤 때 `start_stage`로 시작 미션을 지정 (생략 시 `slow` = 처음부터).
+
+```bash
+ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt start_stage:=fork
+```
+
+| 차를 놓는 곳 | `start_stage` |
+|---|---|
+| 출발선, 서행(방지턱)·서행 유도선 | `slow` |
+| 보행자 표지판 구간 | `pedestrian` |
+| 3차선 장애물, 갈림길 | `fork` |
+| 라바콘, 신호등 | `traffic` |
+| 주차 | `parking` |
+
+### 멈추지 않기 (규정: 정지·진행 불가는 해당 미션 실패 후 재출발)
+
+- 정지선 접근 시간 초과(`approach_timeout`): 영구 정지(`fault`) 대신 차선 주행 계속. 미션 단계는 넘기지 않음 (다음 미션 표지판이 이미 보이는 위치에서 곧장 다음 미션에 들어가는 것 방지). 이후 미션은 `start_stage`로 재출발
+- 정지선이 아직 안 보이면 멈추지 않고 `stop_approach_speed`로 다가가며 찾음
+- 주차 정렬 시간 초과: 현 위치에서 주차 시간표 시작 (부분 점수)
+- 주차 시간표 중 장애물·센서 끊김: 시간표를 멈추고 기다림. 장애물로 `parking.obstacle_wait`(2초) 넘게 막히면 진행
+
 ## 실행 전 확인
 
 - YOLO 모델 클래스 8종 이름이 `params.py`의 `YOLO_CLASSES`와 정확히 같아야 실행됨
