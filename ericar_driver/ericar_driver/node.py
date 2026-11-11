@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from ackermann_msgs.msg import AckermannDrive
-from sensor_msgs.msg import Image, LaserScan
+from sensor_msgs.msg import Image, Imu, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from cv_bridge import CvBridge
@@ -19,6 +19,7 @@ from .common import clip
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
 from .params import YOLO_CLASSES
+from .section import START_SECTION
 
 
 def load_detector(config, weights):
@@ -57,6 +58,9 @@ class DriverNode(Node):
         self.velocity = 0.0
         self.angular_velocity = 0.0
         self.odom_stamp = -1e9
+        self.yaw_rate = 0.0
+        self.imu_stamp = -1e9
+        self.detector_failures = 0
         self.detections = []
         self.detection_stamp = -1e9
         self.lock = threading.Lock()
@@ -70,6 +74,8 @@ class DriverNode(Node):
         self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
         self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
+        # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
+        self.create_subscription(Imu, topics.get('imu', '/imu'), self.on_imu, qos_profile_sensor_data)
         self.timer = self.create_timer(1.0 / self.c['rate_hz'], self.control)
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
@@ -97,6 +103,10 @@ class DriverNode(Node):
         self.velocity = message.twist.twist.linear.x
         self.angular_velocity = message.twist.twist.angular.z
         self.odom_stamp = stamp_of(message)
+
+    def on_imu(self, message):
+        self.yaw_rate = message.angular_velocity.z
+        self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
     def detect(self):
         import torch
@@ -127,9 +137,13 @@ class DriverNode(Node):
                     with self.lock:
                         self.detections = objects
                         self.detection_stamp = stamp
+                    self.detector_failures = 0
                 except Exception as error:
-                    self.get_logger().error(f'YOLO failed: {error}')
-                    self.stop_event.set()
+                    # 예전: 예외 1회로 추론 종료 → 센서 대기로 영구 정지. 지금: 기록만 하고 다음 영상에서 재시도
+                    # 검출이 끊긴 동안은 loop.py가 표지판 미션만 끄고 주행 계속
+                    self.detector_failures += 1
+                    if self.detector_failures <= c['detector']['failure_limit']:
+                        self.get_logger().error(f'YOLO failed ({self.detector_failures}): {error}')
             self.stop_event.wait(1.0 / c['detector']['rate_hz'])
 
     def publish(self, speed, steering):
@@ -146,9 +160,10 @@ class DriverNode(Node):
         with self.lock:
             sensors = Sensors(now=self.now(), image=self.image, image_stamp=self.image_stamp,
                               detections=self.detections, detection_stamp=self.detection_stamp,
-                              detector_ok=not self.stop_event.is_set(),
+                              detector_ok=self.detector_failures < self.c['detector']['failure_limit'],
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
-                              angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp)
+                              angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
+                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp)
         out = self.loop.step(sensors)
         self.publish(out.speed, out.steering)
         if out.lane_mask is not None:
@@ -164,23 +179,31 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false]. --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    yolo = True
-    if '--yolo' in args:
-        i = args.index('--yolo')
-        yolo = args[i + 1].lower() not in ('false', '0', 'no', 'off')
-        args = args[:i] + args[i + 2:]
-    return args, yolo
+    options = {'--yolo': 'true', '--start-stage': ''}
+    for flag in options:
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                raise SystemExit(f'{flag} 뒤에 값이 필요합니다')
+            options[flag] = args[i + 1]
+            args = args[:i] + args[i + 2:]
+    yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
+    return args, yolo, options['--start-stage']
 
 
 def main(config_path=None):
-    # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용
-    args, yolo = parse_args(sys.argv)
+    # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용, 첫 구간(S0)부터 시작
+    args, yolo, start_stage = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
     c = config['answer']
+    if start_stage:
+        if start_stage not in START_SECTION:
+            raise SystemExit(f'start_stage "{start_stage}"는 {list(START_SECTION)} 중 하나여야 합니다')
+        c['missions']['start_stage'] = start_stage
     if not yolo:
         # 차선 시험용: 표지판 미션 없이 주행. 센서 상태 확인에서도 YOLO 제외
         c['detector']['enabled'] = False

@@ -97,7 +97,7 @@ def install(spin_hook):
     module('rclpy.signals', SignalHandlerOptions=types.SimpleNamespace(NO=0))
     module('rclpy.parameter', Parameter=lambda *a, **k: None)
     for pkg, names in {'ackermann_msgs': ['AckermannDrive', 'AckermannDriveStamped'],
-                       'sensor_msgs': ['Image', 'LaserScan'], 'nav_msgs': ['Odometry'],
+                       'sensor_msgs': ['Image', 'Imu', 'LaserScan'], 'nav_msgs': ['Odometry'],
                        'std_msgs': ['String']}.items():
         module(pkg)
         module(pkg + '.msg', **{n: Msg for n in names})

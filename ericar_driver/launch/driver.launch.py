@@ -1,6 +1,7 @@
 # 주행 노드 실행. 센서·차량 드라이버는 별도 실행
 # 사용: ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 # 차선만 시험: ros2 launch ericar_driver driver.launch.py yolo:=false
+# 재출발: ros2 launch ericar_driver driver.launch.py start_stage:=fork  (README 표 참고)
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -15,14 +16,17 @@ def generate_launch_description():
     config = LaunchConfiguration('config')
     model = LaunchConfiguration('model')
     yolo = LaunchConfiguration('yolo')
+    start_stage = LaunchConfiguration('start_stage')
     return LaunchDescription([
         DeclareLaunchArgument('config', default_value=default_config),
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/models/best.pt')),
         DeclareLaunchArgument('yolo', default_value='true', description='false면 YOLO 없이 차선·라이다만'),
+        DeclareLaunchArgument('start_stage', default_value='slow',
+                              description='시작 구간의 미션: slow(S0) | pedestrian(S1) | fork(S2) | cones(S3) | traffic·parking(S4)'),
         Node(
             package='ericar_driver',
             executable='driver',
-            arguments=[config, model, '--yolo', yolo],
+            arguments=[config, model, '--yolo', yolo, '--start-stage', start_stage],
             output='screen',
         ),
     ])
