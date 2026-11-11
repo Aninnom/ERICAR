@@ -176,7 +176,8 @@ def test_stall_guard():
     # (가) 차선 변경 대기: 앞이 막혔고 양옆이 실선 → 예전에는 끝까지 정지
     driver = Driver({'answer': c, 'robot': robot})
     driver.sections.index = 2
-    wall = [(x, y) for x in (0.7,) for y in np.linspace(-0.3, 0.3, 13)]   # 라이다 기준 0.7 m 앞 물체
+    # 라이다 기준 0.35 m 앞 물체 (뒷축 기준 약 0.56 m). lane_change.stop_distance(0.6) 안쪽이라야 접근 없이 바로 대기
+    wall = [(x, y) for x in (0.35,) for y in np.linspace(-0.3, 0.3, 13)]
     t, v, resumed = 0.0, 0.0, None
     while t < limit + 6.0:
         speed, steering, state = driver.update(lane_ok(), scan_with(wide=1, points=wall), [], t, v, t)
