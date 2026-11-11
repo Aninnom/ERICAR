@@ -29,6 +29,7 @@ HALF_LANE = 0.26
 LANE_LINES = [-0.78, -0.26, 0.26, 0.78]  # 3차로 (도면 선 중심 간격 0.52 m)
 LINE = 0.02
 STOP_LINES = [3.0, 7.0, 13.0, 18.0]  # 보행자, (갈림길 구간 통과용), 신호등, 주차 기준
+CORNER_LENGTH = 0.2  # 가짜 코너(IMU에만 넣는 우회전 90°) 길이 m
 OBSTACLE = (10.0, 10.3)  # 차로 중앙 정적 장애물 구간 s (차선 변경 경로 실행용)
 # 시험 기준 카메라 (멘토 시뮬 값). 실차 보정값과 무관하게 고정 → 보정해도 기준값 유지
 REFERENCE_CAMERA = dict(hfov_deg=71.0, x=0.23, y=0.0, z=0.23, pitch=0.2)
@@ -43,8 +44,8 @@ def paint_bgr():
     return cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2BGR)[0, 0]
 
 
-def render(camera, s, y, psi, curve, paint):
-    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 색칠"""
+def render(camera, s, y, psi, curve, paint, stop_paint=None):
+    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 색칠. stop_paint를 주면 정지선만 그 색"""
     v, u = np.indices((H, W), dtype=np.float64)
     focal = W / (2 * math.tan(math.radians(camera['hfov_deg']) / 2))
     p, z, cx = camera['pitch'], camera['z'], camera['x']
@@ -61,11 +62,14 @@ def render(camera, s, y, psi, curve, paint):
     white = np.zeros((H, W), bool)
     for offset in LANE_LINES:
         white |= np.abs(wl - offset) < LINE / 2
+    stop = np.zeros((H, W), bool)
     for line in STOP_LINES:
-        white |= (ws >= line) & (ws < line + 0.03) & (np.abs(wl) < LANE_LINES[-1])
-    white &= np.isfinite(forward) & (forward < 4.0)
+        stop |= (ws >= line) & (ws < line + 0.03) & (np.abs(wl) < LANE_LINES[-1])
+    visible = np.isfinite(forward) & (forward < 4.0)
     image = np.full((H, W, 3), 60, np.uint8)
-    image[white] = paint
+    image[(white | stop) & visible] = paint
+    if stop_paint is not None:
+        image[stop & visible] = stop_paint
     return image
 
 
@@ -84,8 +88,8 @@ def scan_ranges(s, y):
     return n, angles[0], 2 * math.pi / n, ranges
 
 
-def detections_at(s, t, phase):
-    """미션 순서대로 표지판 검출 주입 (면적은 클래스별 하한 위)"""
+def detections_at(s, t, phase, drop=()):
+    """미션 순서대로 표지판 검출 주입 (면적은 클래스별 하한 위). drop의 표지판은 주입하지 않음 (누락 시험)"""
     def box(name):
         return dict(name=name, bbox=[0.4, 0.3, 0.6, 0.5], truncated=False,
                     confidence=0.9, area=0.05, center=(0.5, 0.4))
@@ -100,10 +104,20 @@ def detections_at(s, t, phase):
         names.append('traffic_green' if phase.get('green_after') and t > phase['green_after'] else 'traffic_red')
     if 16.5 < s < 18.0:
         names.append('parking')
-    return [box(n) for n in names]
+    return [box(n) for n in names if n not in drop]
 
 
-def run(config_path):
+def run(config_path, stop_paint=None, drop=(), corners=None, duration=DURATION, on_tick=None,
+        detector=False, detection_gap=None):
+    """기본 인자 = 예전 시나리오 그대로 (IMU 없음, 정지선 차선 색)
+
+    stop_paint: 정지선 BGR 색 (흰색 정지선 시험)
+    drop: 주입하지 않을 표지판 이름
+    corners: 가짜 코너 시작 s 목록. 그 지점부터 CORNER_LENGTH 동안 /imu에만 우회전 90°를 넣음
+             (영상·차량은 직선 그대로 → 구간 관리자만 코너로 인식)
+    on_tick(node, sim, t): 매 주기 호출 (구간 기록용)
+    detector: True면 표지판 검출 사용으로 설정 (검출 끊김 시험). detection_gap = (시작 s, 끝 s) 동안 검출 갱신 중단
+    """
     import yaml
     records = []
     sim = dict(s=0.0, y=0.0, psi=0.0, v=0.0, steer=0.0)
@@ -115,13 +129,14 @@ def run(config_path):
     def spin(node):
         config = yaml.safe_load(open(config_path))
         camera, wheelbase = REFERENCE_CAMERA, config['robot']['wheelbase']
-        steps = int(DURATION / DT)
+        steps = int(duration / DT)
+        node.c['detector']['enabled'] = bool(detector)
         paint = paint_bgr()
         for k in range(steps):
             t = k * DT
             fake_ros.Clock.now_s = 100.0 + t
             stamp = fake_ros.Header(100.0 + t)
-            image = render(camera, sim['s'], sim['y'], sim['psi'], curve, paint)
+            image = render(camera, sim['s'], sim['y'], sim['psi'], curve, paint, stop_paint)
             node.subscriptions[config['topics']['image']](fake_ros.Msg(header=stamp, array=image))
             if k % 2 == 0:
                 n, amin, inc, ranges = scan_ranges(sim['s'], sim['y'])
@@ -132,10 +147,18 @@ def run(config_path):
                 z=sim['v'] / wheelbase * math.tan(sim['steer'])))
             node.subscriptions[config['topics']['odometry']](
                 fake_ros.Msg(header=stamp, twist=fake_ros.Msg(twist=twist)))
-            if k % 4 == 0:
+            if corners is not None:
+                rate = sim['v'] / wheelbase * math.tan(sim['steer'])
+                if any(c <= sim['s'] < c + CORNER_LENGTH for c in corners):
+                    rate -= (math.pi / 2) / CORNER_LENGTH * sim['v']
+                node.subscriptions['/imu'](fake_ros.Msg(header=stamp, angular_velocity=fake_ros.Msg(z=rate)))
+            in_gap = detection_gap is not None and detection_gap[0] <= sim['s'] < detection_gap[1]
+            if k % 4 == 0 and not in_gap:
                 with node.lock:
-                    node.detections = detections_at(sim['s'], t, phase)
+                    node.detections = detections_at(sim['s'], t, phase, drop)
                     node.detection_stamp = 100.0 + t
+            if on_tick is not None:
+                on_tick(node, sim, t)
             before = len(node.published)
             node.timers[0]()
             command = None
@@ -162,8 +185,10 @@ def run(config_path):
 
     fake_ros.install(spin)
     from ericar_driver import params
-    params.ANSWER_CONFIG['detector']['enabled'] = False
-    from ericar_driver import node as node_module
+    params.ANSWER_CONFIG['detector']['enabled'] = False   # 모델 로드 없이 시작. detector=True면 spin에서 켬
+    sys.modules.pop('ericar_driver.node', None)   # 한 프로세스에서 여러 번 실행: 새 가짜 rclpy로 다시 불러옴
+    import importlib
+    node_module = importlib.import_module('ericar_driver.node')
     sys.argv = [sys.argv[0]]
     # 차량별 조향 영점 보정은 판단 로직과 무관 → 시험은 보정 0 (합성 차량은 쏠림 없음)
     import tempfile
