@@ -34,6 +34,13 @@ class LaneDriving:
         h = self.c.get('corner_hold', {})
         return self.hold is not None or now - self.hold_ended < h.get('after_seconds', 0.0)
 
+    def beside_start_lane(self, sections):
+        """마지막(4번) 코너를 돌아 S4에 들어온 뒤 lane.double_line_distance(m)까지, 코너 유지 중 아님 (lane_vision.double_left용)
+        그 구간은 왼쪽에 출발 차로 아래 선이 지금 차로 왼쪽 선과 나란함. 유지 중·다른 구간은 예전 동작 그대로
+        sections: 구간 관리자 (section.py, index·distance)"""
+        return (self.hold is None and sections.index == 4
+                and sections.distance < self.c['lane']['double_line_distance'])
+
     def update(self, lane, now, dt, slow=False, velocity=0.0, yaw_rate=0.0, allow_hold=True, avoiding=False):
         if avoiding:
             # 라바콘·차선 변경이 조향 중: 선 놓침 탐색 시간·거리 누적 안 함 (콘 구간 약 2.1 m에서 선 놓치면

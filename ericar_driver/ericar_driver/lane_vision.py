@@ -33,6 +33,7 @@ class LaneVision:
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
         self.corner_left_limit = None # 우회전 코너 중이면 m 값 (loop가 설정). 기억 없는 한 선 이름 판단 기준
+        self.double_left = False      # 마지막 코너 뒤 왼쪽에 옆 차로 선이 나란한 구간이면 True (loop가 설정). find_starts·label_sides
 
     # ---------- 2. 버드아이뷰 ----------
     def ground_maps(self, image_shape):
@@ -200,7 +201,7 @@ class LaneVision:
                 line_colors[side] = 'white_solid' if solid[side] else 'white'
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
-        source = self.label_sides(fits, lane_px, picked_sets, anchors)
+        source = self.label_sides(fits, lane_px, picked_sets, anchors, line_colors)
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
         self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})
@@ -295,6 +296,18 @@ class LaneVision:
             lo, hi = int(clip(lo, 0, w - 1)), int(clip(hi, 1, w))
             if hi <= lo:
                 continue
+            if side == 'left' and self.double_left:
+                # 마지막(4번) 코너 뒤: 왼쪽 칸에 출발 차로 아래 선과 지금 차로 왼쪽 선이 약 0.22 m 간격으로 함께 들어옴
+                # 세기가 비슷해 픽셀 최대가 프레임마다 두 선을 오가고, 흰 점선 후보가 있으면 예상 위치 규칙이 옆 차로 선을 고름
+                # → 옆 차로 선을 잡은 프레임은 목표가 지금 차로 왼쪽 선 위 (11/11 segA_1111_lap6 218.8~223.2 s, 조향 좌우 뒤집힘 4회)
+                # 사이가 빈 강한 봉우리가 둘 이상이고 차 쪽 둘의 간격이 이중선 범위면 차 쪽 선에서 시작. 그 너머는 옆 차로 선
+                # 모든 구간에 넣으면 코너에서 누운 선 하나가 여러 봉우리로 쪼개져 선을 놓침 (11/10 55577bf 되돌림) → 이 구간만
+                found = self.peaks(hist, lo, hi)
+                strong = sorted(x for x in found if hist[x] >= self.c['double_line_ratio'] * max(hist[p] for p in found))
+                if (len(strong) >= 2 and self.c['double_line_gap_min'] * self.scale <= strong[-1] - strong[-2]
+                        <= self.c['double_line_gap'] * self.scale):
+                    starts[side] = strong[-1]              # x 클수록 오른쪽 = 차 쪽
+                    continue
             if white_hist is not None:
                 expected = center + (-lane_px / 2 if side == 'left' else lane_px / 2)
                 yellow = [x for x in self.peaks(hist, lo, hi) if abs(x - expected) <= tolerance]
@@ -314,7 +327,7 @@ class LaneVision:
             starts.pop('left', None)
         return starts
 
-    def label_sides(self, fits, lane_px, picked_sets, anchors):
+    def label_sides(self, fits, lane_px, picked_sets, anchors, colors=None):
         """좌/우 차선 이름 확정. 반환: {확정 이름: 원래 탐색 쪽}
 
         11/8 실차: 코너에서 한 선만 남으면 시작점 탐색(화면 중앙 기준)이 이름을 잘못 붙이거나
@@ -332,13 +345,18 @@ class LaneVision:
         rows = np.array([self.row_at(c['lookahead']), c['height_px'] - 1.0])
         at = {s: np.polyval(f, rows) for s, f in fits.items()}
         pair = None
+        # 마지막 코너 뒤(double_left)이고 두 선 모두 노랑이면 이중선 기준을 double_line_gap으로 넓히고 이름은 항상 왼쪽
+        # 그 구간 이중선 = 옆(출발) 차로 선 + 지금 차로 왼쪽 선뿐. 기준 0.26 m는 실제 간격 0.21~0.30 m와 겹쳐 정상 차로로 통과 → 목표가 두 선 사이
+        # 이름을 한 선 위치로 정하면 차가 왼쪽 선 위에 있을 때(가까운 끝 0 근처) 오른쪽으로 보고 옆 차로 선을 남김
+        beside = (self.double_left and len(fits) == 2 and colors is not None
+                  and all(colors.get(sd) == 'yellow' for sd in fits))
         if len(fits) == 2:
             # 두 창이 같은 픽셀을 집었으면 같은 선. 곡선 맞춤 비교는 끝부분 맞춤 오차로 놓침 (11/8 실차 4회 76.5 s)
             a, b = picked_sets['left'], picked_sets['right']
             if len(np.intersect1d(a, b)) > 0.3 * min(len(a), len(b)):
                 kept = max(fits, key=lambda sd: len(picked_sets[sd]))      # 픽셀 많은 쪽 곡선 사용
                 fits = {kept: fits[kept]}
-            elif np.mean(np.abs(at['left'] - at['right'])) >= lane_px / 2:
+            elif np.mean(np.abs(at['left'] - at['right'])) >= (c['double_line_gap'] * self.scale if beside else lane_px / 2):
                 return {'left': 'left', 'right': 'right'}
             else:
                 # 픽셀 안 겹치는데 간격 < 차로 폭 절반 = 서로 다른 선 2개 (이중선). 도면 상단: 시작 차로 선과
@@ -351,7 +369,7 @@ class LaneVision:
         if not fits:
             return {}
         kept = 'left' if 'left' in fits else 'right'
-        name = self.single_name(fits[kept], anchors[kept])
+        name = 'left' if beside and pair is not None else self.single_name(fits[kept], anchors[kept])
         if pair is not None:
             pick = max if name == 'left' else min                         # x 클수록 오른쪽
             kept = pick(pair, key=pair.get)

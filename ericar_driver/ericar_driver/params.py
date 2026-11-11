@@ -81,6 +81,12 @@ ANSWER_CONFIG = {
         'view_width': 2.4, 'near': 0.6, 'far': 1.7, 'width_px': 480, 'height_px': 420,
         # 한 선만 보일 때(이력 없음) 좌우 판단 경계 이동량(m), 선 곡률 split_curvature(1/m)에서 최대. label_sides 참고
         'single_line_split': 0.14, 'split_curvature': 1.7,
+        # 마지막(4번) 코너 뒤 이중선: 출발 차로 아래 선과 지금 차로 왼쪽 선이 0.21~0.30 m 간격으로 나란함 (11/11 segA_1111_lap5·6)
+        # 구간 S4 진입 뒤 double_line_distance(m)까지, 코너 유지 중이 아닐 때만 적용 (lane_driving.beside_start_lane)
+        # 시작점: 왼쪽 칸에 칸 최대의 double_line_ratio 이상인 봉우리가 둘 이상이고 차 쪽 둘의 간격이
+        #         double_line_gap_min~double_line_gap(m)이면 차 쪽 선에서 시작 (lane_vision.find_starts)
+        # 좌우 판단: 노란 두 선 간격 < double_line_gap이면 이중선 → 차 쪽 선을 왼쪽 선으로 (label_sides). 실제 차로 폭 최소 0.45
+        'double_line_distance': 3.0, 'double_line_ratio': 0.4, 'double_line_gap_min': 0.12, 'double_line_gap': 0.38,
         'memory_frames': 10,  # 한 선 이름 이어받기: 좌/우 선별로 마지막으로 본 뒤 이 프레임 수까지 기억 (약 0.35 s)
         'lane_width': 0.52,          # 선 중심 간격(m). 도면 직선 0.51~0.52, 11/8 카메라 보정 0.52
         # 코너 차로 폭(m)과 그 폭을 쓰는 선 곡률 범위(1/m, 시작~끝 보간). 도면: 안쪽 R0.59 → 1.7, 바깥 R0.66 → 1.5, 바깥 R1.4 완화 → 0.7

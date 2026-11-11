@@ -130,6 +130,7 @@ class ControlLoop:
             if required_camera and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
                                                  if self.driver.lane_driver.in_corner(now) else None)
+                self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 self.lane_stamp = s.image_stamp
