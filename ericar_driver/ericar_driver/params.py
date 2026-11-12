@@ -34,11 +34,13 @@ ANSWER_CONFIG = {
     # margin 25 → −65°·−155°·−245°·−335°에서 전환. 갈림길 꺾임 45°·차선 변경 흔들림은 못 미침
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
     # enabled False면 구간과 무관하게 모든 미션 허용 (단독 시험용)
+    # hold_distance: 라바콘 통과 중에는 구간 전환 보류 (콘 배치가 우회전을 강제하면 S3 도중 −335°를 넘음, 11/13).
+    # 기준을 넘은 채 이 거리(m)를 가도 라바콘이 안 끝나면 전환 (안전장치)
     # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 11/11 segA_1111_lap1(트랙 옆 라바콘·의자 다리를 통로로 보고
     # 진입 → 4번 코너 이탈)로 꺼 뒀다가 11/12 다시 켬 (유경): 단독 시험 corn_test_1112_193257 통과 (모드 3.1 m, 충돌 없음).
     # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
-                 'off': []},
+                 'hold_distance': 3.0, 'off': []},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감

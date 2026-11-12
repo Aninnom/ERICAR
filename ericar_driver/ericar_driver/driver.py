@@ -47,6 +47,12 @@ class Driver:
     def avoiding(self):
         return self.lane_change.active or self.cones.active
 
+    @property
+    def section_hold(self):
+        """구간 전환 보류 조건: 라바콘 통과 중. 콘 배치에 따라 오른쪽으로 크게 돌 수 있어 누적 회전을 코너로 세면 안 됨
+        문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
+        return self.cones.active or (self.cones.started and not self.cones.done)
+
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
         self.pid.reset()
@@ -273,7 +279,7 @@ class Driver:
         # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
         # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
-        self.sections.update(turn_rate, velocity, dt)
+        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.update_stop_line(lane, velocity, now, dt)
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
