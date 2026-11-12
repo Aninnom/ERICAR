@@ -145,6 +145,14 @@ ANSWER_CONFIG = {
         # 콘이 안 보인 뒤 이 거리(m) 더 가면 차선 주행으로 복귀 (다음 문이 보이면 다시 켜짐). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
         'small_object_memory_distance': 0.3,
         'cone_max_distance': 2.5,    # 안전장치: 첫 진입 시 문까지 거리 + 이 값 넘게 주행하면 끝 (다시 안 켜짐). 라바콘 구간 약 2.1 m + 여유
+        # 카메라 붉은색 (11/12 유경): 주최 측 안내 = 콘은 빨강에 가까운 붉은색. 11/12 cone_lane_3 진입 못 하고 차선 복귀·충돌
+        # 붉은색이 보이면 진입·통과 조건 완화: 문 간격 최대 cone_red_gate_max, 좌우 cone_red_half_width, 거리 cone_red_start_range
+        # 통과 중 붉은색이 보이면 콘이 안 보여도 모드 유지 (cone_max_distance 안전장치는 그대로)
+        # 판정: 화면 아래 cone_red_rows 비율 영역을 1/4로 줄여 HSV, 색상 0~h_low 또는 h_high~180, 채도·밝기 하한, 화소 비율 cone_red_ratio 이상
+        # [실차] 노출 300 기준 추정값. 디버그 화면 cone_red 값 보고 조정 필요
+        'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
+        'cone_red_rows': 0.5, 'cone_red_ratio': 0.002,
+        'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9, 'cone_red_start_range': 1.5,
     },
     'missions': {
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,

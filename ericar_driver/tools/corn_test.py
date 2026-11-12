@@ -69,7 +69,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
 from ericar_driver.common import clip  # noqa: E402
-from ericar_driver.cones import ConeDriving, find_posts  # noqa: E402
+from ericar_driver.cones import ConeDriving, find_posts, red_ratio  # noqa: E402
 from ericar_driver.lidar import scan_sectors  # noqa: E402
 from ericar_driver.loop import load_config  # noqa: E402
 
@@ -90,7 +90,8 @@ class ConeTest:
         self.entries = 0       # 라바콘 모드가 켜진 횟수
         self.finished = None   # 종료 이유. None이면 진행 중
 
-    def step(self, now, scan, velocity, yaw_rate):
+    def step(self, now, scan, velocity, yaw_rate, red=0.0):
+        """red: 카메라 붉은 화소 비율 (cones.red_ratio). 주행 노드와 같이 lane['cone_red']로 넘김"""
         if self.started is None:
             self.started = now
         dt = 0.05 if self.last is None else clip(now-self.last, 0.001, 0.2)
@@ -99,7 +100,7 @@ class ConeTest:
         if self.finished:
             return 0.0, 0.0, 'finished'
         was_active = self.cones.active
-        command = self.cones.update({}, scan, velocity, yaw_rate, dt, True)
+        command = self.cones.update({'cone_red': red}, scan, velocity, yaw_rate, dt, True)
         self.entries += self.cones.active and not was_active
         if command is not None:
             (speed, steering), state, self.since = command, 'cones', 0.0
@@ -157,7 +158,8 @@ def main():
     from rclpy.signals import SignalHandlerOptions
     from ackermann_msgs.msg import AckermannDrive
     from nav_msgs.msg import Odometry
-    from sensor_msgs.msg import Imu, LaserScan
+    from cv_bridge import CvBridge
+    from sensor_msgs.msg import Image, Imu, LaserScan
     from std_msgs.msg import String
 
     config = load_config(options.config)
@@ -170,8 +172,9 @@ def main():
                                  options.limit, options.timeout)
             self.exit = False
             self.scan = None
-            self.scan_seen = self.odom_seen = self.imu_seen = -1e9
-            self.velocity = self.angular_velocity = self.yaw_rate = 0.0
+            self.scan_seen = self.odom_seen = self.imu_seen = self.image_seen = -1e9
+            self.velocity = self.angular_velocity = self.yaw_rate = self.red = 0.0
+            self.bridge = CvBridge()
             self.state, self.printed, self.stop_until = '', -1e9, None
             path = Path(options.log).expanduser()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +185,7 @@ def main():
             self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
             self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
             self.create_subscription(Imu, topics.get('imu', '/imu'), self.on_imu, qos_profile_sensor_data)
+            self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
             self.create_timer(1.0/c['rate_hz'], self.control)
             lidar = c['lidar']
             self.get_logger().info(
@@ -206,6 +210,14 @@ def main():
         def on_imu(self, message):
             self.yaw_rate = message.angular_velocity.z
             self.imu_seen = self.now()
+
+        def on_image(self, message):
+            # 붉은색 비율만 사용 (차선 인식 없음). 실패해도 라이다만으로 계속
+            try:
+                self.red = red_ratio(self.bridge.imgmsg_to_cv2(message, 'bgr8'), c['lidar'])
+                self.image_seen = self.now()
+            except Exception as error:
+                self.get_logger().error(f'image conversion failed: {error}')
 
         def publish(self, speed, steering):
             """node.py와 같은 최종 한계·조향 영점 보정. --dry면 보내지 않음"""
@@ -232,7 +244,9 @@ def main():
                 # 회전 속도: IMU가 최신이면 자이로, 아니면 odom × 보정 (loop.py·driver.py와 같음)
                 imu_ok = now-self.imu_seen < c['sections']['imu_timeout'] and math.isfinite(self.yaw_rate)
                 yaw_rate = self.yaw_rate if imu_ok else self.angular_velocity*c['sections']['odom_yaw_scale']
-                speed, steering, state = self.test.step(now, self.scan, self.velocity, yaw_rate)
+                # 영상이 끊기면(0.5 s) 붉은색 없음으로 봄 → 라이다만으로 판단 (기존 동작)
+                red = self.red if now-self.image_seen < 0.5 else 0.0
+                speed, steering, state = self.test.step(now, self.scan, self.velocity, yaw_rate, red)
                 self.log.write(self.test.row(now, self.scan, self.velocity, yaw_rate, speed, steering, state)+'\n')
             self.publish(speed, steering)
             d = self.test.cones.debug
@@ -243,9 +257,10 @@ def main():
                 self.status.publish(String(data='corn_test: '+text))
             elif now-self.printed >= 0.5 and fresh:
                 self.printed = now
-                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 정면 %.2f m 진행 방향 %+.1f°' % (
+                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 정면 %.2f m 진행 방향 %+.1f° 붉은색 %.4f%s' % (
                     state, speed, math.degrees(steering), d.get('posts', '-'), d.get('gates', '-'),
-                    min(self.scan['front'], 9.99), math.degrees(self.test.cones.heading)))
+                    min(self.scan['front'], 9.99), math.degrees(self.test.cones.heading),
+                    self.red, ' (콘 색)' if self.test.cones.red else ''))
             if state == 'finished':
                 # 정지 명령을 1초 더 보낸 뒤 종료
                 self.stop_until = self.stop_until or now+1.0

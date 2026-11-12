@@ -332,7 +332,8 @@ class Driver:
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request,
-                          avoiding=self.avoiding, cone_active=self.cones.active,
+                          avoiding=self.avoiding, cone_active=self.cones.active, cone_red=self.cones.red,
+                          cone_red_ratio=float(lane.get('cone_red', 0.0)),
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
                           corner_hold=self.lane_driver.hold is not None)
         return float(speed), clip(steering, -self.robot['max_steering'], self.robot['max_steering']), mode if self.state == 'lane' else self.state

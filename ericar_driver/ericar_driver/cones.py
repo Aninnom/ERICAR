@@ -11,6 +11,7 @@
   3. 가까운 문부터 문 중점을 이어 cone_lookahead 앞 지점의 각도로 조향 (pure pursuit)
   4. 문이 안 보이고 콘만 보이면 그 콘에서 기억한 문 폭의 절반만큼 안쪽으로 지나감
   5. 콘이 안 보이면 small_object_memory_distance 더 간 뒤 차선 주행으로 돌려주고, 다음 문이 보이면 다시 켜짐
+  6. 카메라 붉은색(red_ratio) 보조 (11/12): 붉은색이 보이면 진입·문 간격 조건 완화, 통과 중에는 모드 유지
 
 좌표: 차체 기준(원점 = 뒷바퀴 축), 앞 x+, 왼쪽 y+ (REP-103). 각도 + = 왼쪽.
 """
@@ -55,15 +56,32 @@ def find_posts(scan, robot, c):
     return posts+offset, wide+offset
 
 
-def gate_pairs(posts, c):
-    """간격이 cone_gate_min~max인 기둥 쌍 전부 → (중점 K×2, 문 방향 K×2, 간격 K)
+def red_ratio(image, c):
+    """카메라 화면 아래 cone_red_rows 영역에서 붉은 화소 비율 (0~1). 영상이 없으면 0
+
+    1/4 크기로 줄여 계산 (20 Hz 부담 줄임). 노란 차선(색상 약 20~35)은 범위 밖
+    """
+    if image is None:
+        return 0.0
+    import cv2
+    h = image.shape[0]
+    small = cv2.resize(image[int(h*(1-c['cone_red_rows'])):], None, fx=.25, fy=.25, interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    red = (((hue <= c['cone_red_h_low']) | (hue >= c['cone_red_h_high'])) &
+           (saturation >= c['cone_red_s_min']) & (value >= c['cone_red_v_min']))
+    return float(red.mean()) if red.size else 0.0
+
+
+def gate_pairs(posts, c, gate_max=None):
+    """간격이 cone_gate_min~gate_max(기본 cone_gate_max)인 기둥 쌍 전부 → (중점 K×2, 문 방향 K×2, 간격 K)
 
     문 방향 = 두 기둥을 잇는 선에 수직인 단위벡터 (앞뒤 부호는 쓰는 쪽에서 맞춤)
     """
     i, j = np.triu_indices(len(posts), 1)
     span = posts[j]-posts[i]
     gap = np.hypot(span[:, 0], span[:, 1])
-    ok = (gap >= c['cone_gate_min']) & (gap <= c['cone_gate_max'])
+    ok = (gap >= c['cone_gate_min']) & (gap <= (c['cone_gate_max'] if gate_max is None else gate_max))
     span, gap = span[ok], gap[ok]
     normals = np.column_stack((-span[:, 1], span[:, 0]))/gap[:, None]
     return (posts[i[ok]]+posts[j[ok]])/2, normals, gap
@@ -138,7 +156,11 @@ class ConeDriving:
         self.width = self.c['cone_gate_width']   # 문 폭 (지난 문 측정값). 콘 하나만 보일 때 사용
         self.remaining = self.travel = self.max_travel = 0.0
         self.confirm = 0
+        self.red = False     # 이번 주기 카메라에 붉은색(콘 색)이 보이는지. lane['cone_red'] (loop.py가 넣음)
         self.debug = {}
+
+    def gate_max(self):
+        return self.c['cone_red_gate_max'] if self.red else self.c['cone_gate_max']
 
     # ---------- 1. 진입 판단 ----------
     def start_gate(self, posts, wide):
@@ -150,16 +172,19 @@ class ConeDriving:
         3) 문 중점까지 cone_start_range 이내
         4) 넓은 군집이 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth)에 없음 (3차선 차량 장애물 오진입 방지).
            문 기둥 자리에 붙어 놓인 콘 덩어리는 통로 가장자리라 해당 없음
+        카메라에 붉은색이 보이면 1)·3) 완화: 좌우 cone_red_half_width, 간격 최대 cone_red_gate_max, 거리 cone_red_start_range
         """
         c = self.c
-        posts = posts[np.abs(posts[:, 1]) < c['small_object_half_width']]
-        gates = gate_pairs(posts, c)
+        half_width = c['cone_red_half_width'] if self.red else c['small_object_half_width']
+        start_range = c['cone_red_start_range'] if self.red else c['cone_start_range']
+        posts = posts[np.abs(posts[:, 1]) < half_width]
+        gates = gate_pairs(posts, c, self.gate_max())
         k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), c['cone_start_angle'], c['cone_start_angle'])
         if k is None:
             return None
         middle, normal, gap = gates[0][k], gates[1][k], float(gates[2][k])
         distance = float(np.hypot(middle[0], middle[1]))
-        if distance > c['cone_start_range']:
+        if distance > start_range:
             return None
         if len(wide):
             normal = normal if normal[0] > 0 else -normal
@@ -185,7 +210,7 @@ class ConeDriving:
         forward, lateral = posts@aim, posts@left
         distance = np.hypot(forward, lateral)
         # 방위 제한 없음: 옆을 지나는 콘은 가까울수록 방위가 커짐 → 제한하면 지나기 전에 모드가 먼저 꺼짐
-        ok = (forward > 0) & (np.abs(lateral) <= c['cone_gate_max']/2) & (distance <= c['cone_start_range'])
+        ok = (forward > 0) & (np.abs(lateral) <= self.gate_max()/2) & (distance <= c['cone_start_range'])
         if not ok.any():
             return None
         k = int(np.argmin(np.where(ok, distance, np.inf)))
@@ -196,7 +221,7 @@ class ConeDriving:
     def drive(self, posts, scan, velocity, dt):
         c = self.c
         aim = np.array([math.cos(self.heading), math.sin(self.heading)])
-        gates = gate_pairs(posts, c)
+        gates = gate_pairs(posts, c, self.gate_max())
         chosen, direction = gate_path(gates, aim, c)
         if chosen:
             target = lookahead_point(gates[0][chosen], direction, c['cone_lookahead'])
@@ -205,14 +230,15 @@ class ConeDriving:
             target = self.one_side(posts, aim)
         # 종료: 앞에 지나갈 콘이 없어진 뒤 small_object_memory_distance 더 가면 차선 주행으로 돌려줌 (다음 문이 보이면 다시 켜짐)
         # 그동안은 진행 방향 유지. 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m라 오래 끌지 않음
-        seen = target is not None
+        # 카메라에 붉은색이 보이는 동안은 라이다에 콘이 안 잡혀도 유지 (11/12 cone_lane_3: 중간에 차선 복귀·충돌)
+        seen = target is not None or self.red
         self.remaining = (c['small_object_memory_distance'] if seen
                           else max(0.0, self.remaining-abs(velocity)*dt))
         if self.remaining <= 0:
             self.active = False
             self.debug.update(state='wait', confirm=0)
             return None
-        if not seen:
+        if target is None:
             target = aim*c['cone_lookahead']
         angle = math.atan2(target[1], target[0])
         self.heading += c['cone_aim_alpha']*(angle-self.heading)
@@ -221,7 +247,7 @@ class ConeDriving:
         desired = pursuit_steering(float(target[0]), float(target[1]), self.robot)
         steering, safe = clear_steering(body_points(scan, self.robot), desired, self.robot,
                                         c['cone_check_distance'], c['cone_margin'])
-        self.debug = dict(state='active', posts=int(len(posts)), gates=len(chosen), seen=seen,
+        self.debug = dict(state='active', posts=int(len(posts)), gates=len(chosen), seen=seen, red=self.red,
                           target_x=float(target[0]), target_y=float(target[1]), angle=angle,
                           width=self.width, heading=self.heading, travel=self.travel,
                           max_travel=self.max_travel, remaining=self.remaining, desired=desired, safe=safe)
@@ -234,6 +260,7 @@ class ConeDriving:
             self.active, self.confirm = False, 0
             return None
         c = self.c
+        self.red = float((lane or {}).get('cone_red', 0.0)) >= c['cone_red_ratio']
         if self.started:
             # 안전장치: 첫 진입 뒤 (첫 문까지 거리 + cone_max_distance) 넘게 가면 끝. 늦게 끝나면 다음 코너를 못 돎
             self.travel += max(0.0, velocity)*dt
@@ -248,7 +275,7 @@ class ConeDriving:
         if not self.active:
             start = self.start_gate(posts, wide)
             self.confirm = self.confirm+1 if start else 0
-            self.debug = dict(state='wait', confirm=self.confirm, posts=int(len(posts)))
+            self.debug = dict(state='wait', confirm=self.confirm, posts=int(len(posts)), red=self.red)
             if self.confirm < c['cone_confirm_count']:
                 return None
             middle, gap = start

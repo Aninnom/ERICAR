@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from .common import clip
+from .cones import red_ratio
 from .driver import Driver
 from .lane_vision import LaneVision
 from .params import ANSWER_CONFIG
@@ -133,6 +134,9 @@ class ControlLoop:
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
+                # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산
+                self.lane_cache['cone_red'] = (red_ratio(s.image, c['lidar'])
+                                               if self.driver.sections.allows('cones') else 0.0)
                 self.lane_stamp = s.image_stamp
                 self.lane_bias = self.driver.fork_bias
             lane = self.lane_cache
