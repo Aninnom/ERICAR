@@ -164,7 +164,8 @@ class ControlLoop:
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
             keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
-                    'fits', 'fit_spans', 'pursuit', 'curvature')
+                    'fits', 'fit_spans', 'pursuit', 'curvature',
+                    'colors', 'solid', 'zigzag', 'abnormal', 'stop_distance', 'stop_candidates')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,
                            controller_state=self.driver.state)
@@ -174,7 +175,8 @@ class ControlLoop:
                           lane={key: lane[key] for key in keys if key in lane},
                           display=dict(lane=c['lane'], pid=c['pid'], detector=dict(timeout=c['detector']['timeout']),
                                        sensor_timeout=c['sensor_timeout']))
-            out.telemetry = json.dumps(packet)
+            # default: 담당별 debug 값에 numpy 형이 섞여도 제어 주기가 죽지 않게 (표시 전용 값)
+            out.telemetry = json.dumps(packet, default=lambda v: v.tolist() if hasattr(v, 'tolist') else str(v))
             self.detection_debug_stamp = now
         if state != self.last_state:
             out.status = state
