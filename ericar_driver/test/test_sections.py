@@ -76,10 +76,10 @@ def test_section_manager():
     assert disabled.allows('parking') and disabled.allows('lane_change')
     manager = SectionManager(c)
     assert manager.allows('slow') and not manager.allows('pedestrian') and not manager.allows('cones')
-    # 라바콘은 기본값에서 꺼 둠 (sections.off). 목록에서 빼면 S3에서만 켜짐
-    assert 'cones' in c['off'] and not SectionManager(c, 3).allows('cones') and not disabled.allows('cones')
-    on = SectionManager(dict(c, off=[]), 3)
-    assert on.allows('cones') and not SectionManager(dict(c, off=[]), 2).allows('cones')
+    # 라바콘: 기본값에서 S3에서만 켜짐 (11/12 sections.off에서 뺌). 목록에 넣으면 구간과 무관하게 꺼짐
+    assert 'cones' not in c['off'] and SectionManager(c, 3).allows('cones') and not SectionManager(c, 2).allows('cones')
+    off = dict(c, off=['cones'])
+    assert not SectionManager(off, 3).allows('cones') and not SectionManager(dict(off, enabled=False)).allows('cones')
     print('구간 관리자 단독 통과')
 
 

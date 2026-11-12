@@ -33,6 +33,7 @@
 | `bag_timeline.py` | 녹화 주행 구간 시계열 (거리·방향·조향·오차·검출 선) | `python3 tools/bag_timeline.py ~/bags/<이름>` |
 | `bag_frames.py` | 녹화 지정 시각 카메라 + BEV 창·곡선·목표점 한 장 | `python3 tools/bag_frames.py ~/bags/<이름> 29.0,30.6` → `/tmp/frames.jpg` |
 | `replay_bag.py` | 녹화 영상을 지금 코드에 다시 넣어 결과 CSV (수정 전후 비교) | `python3 tools/replay_bag.py ~/bags/<이름> > after.csv` |
+| `corn_test.py` | 라바콘 단독 실차 시험 (차선·표지판·구간 없이 `cones.py`만, `sections.off`와 무관). 기록 `~/bags/corn_test_<시각>.csv` | 터미널 1 `ros2 launch ericar_driver bringup.launch.py driver:=false record:=true`, 터미널 2 `python3 tools/corn_test.py` (`--dry`: 명령 없이 인식만). 접속부터 기록 복사까지 칠 명령 전체는 파일 머리말 |
 
 ### 디버그 화면 용어
 
