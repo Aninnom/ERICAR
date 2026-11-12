@@ -334,5 +334,20 @@ class Driver:
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request,
                           avoiding=self.avoiding, cone_active=self.cones.active,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
-                          corner_hold=self.lane_driver.hold is not None)
+                          corner_hold=self.lane_driver.hold is not None,
+                          # 아래는 디버그 화면(tools/debug_view.py) 표시 전용. 판단에 쓰지 않음
+                          velocity=velocity, state_time=now-self.state_started if self.state_started else None,
+                          missions=sorted(self.sections.missions()), done=sorted(self.done),
+                          off=list(self.c['sections'].get('off', ())),
+                          sign_counts=dict(self.sign_counts),
+                          cooldowns={name: until-now for name, until in self.cooldowns.items() if until > now},
+                          slow_left=max(0.0, self.slow_until-now), signs_lost=self.signs_lost,
+                          stopped_for=None if self.stopped_since is None else now-self.stopped_since,
+                          zigzag_left=self.lane_driver.zigzag_left, lane_lost=now-self.lane_driver.last_seen,
+                          search_distance=self.lane_driver.search_distance,
+                          scan_valid=scan['valid_fraction'], wide_objects=scan.get('wide_objects'),
+                          narrow_objects=scan.get('narrow_objects'), blocked=bool(blocked),
+                          cones=self.cones.debug,
+                          lane_change=dict(self.lane_change.debug, active=self.lane_change.active,
+                                           waiting=self.lane_change.waiting, direction=self.lane_change.direction))
         return float(speed), clip(steering, -self.robot['max_steering'], self.robot['max_steering']), mode if self.state == 'lane' else self.state
