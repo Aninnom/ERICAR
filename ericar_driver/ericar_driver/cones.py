@@ -56,21 +56,44 @@ def find_posts(scan, robot, c):
     return posts+offset, wide+offset
 
 
-def red_ratio(image, c):
-    """카메라 화면 아래 cone_red_rows 영역에서 붉은 화소 비율 (0~1). 영상이 없으면 0
+def red_pixels(image, c):
+    """카메라 화면 아래 cone_red_rows 영역의 붉은 화소 판정 (1/4 크기, bool 배열). 영상이 없으면 None
 
     1/4 크기로 줄여 계산 (20 Hz 부담 줄임). 노란 차선(색상 약 20~35)은 범위 밖
     """
     if image is None:
-        return 0.0
+        return None
     import cv2
     h = image.shape[0]
     small = cv2.resize(image[int(h*(1-c['cone_red_rows'])):], None, fx=.25, fy=.25, interpolation=cv2.INTER_AREA)
     hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
     hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    red = (((hue <= c['cone_red_h_low']) | (hue >= c['cone_red_h_high'])) &
-           (saturation >= c['cone_red_s_min']) & (value >= c['cone_red_v_min']))
-    return float(red.mean()) if red.size else 0.0
+    return (((hue <= c['cone_red_h_low']) | (hue >= c['cone_red_h_high'])) &
+            (saturation >= c['cone_red_s_min']) & (value >= c['cone_red_v_min']))
+
+
+def red_ratio(image, c):
+    """화면 아래 cone_red_rows 영역의 붉은 화소 비율 (0~1). 영상이 없으면 0"""
+    red = red_pixels(image, c)
+    return float(red.mean()) if red is not None and red.size else 0.0
+
+
+def red_info(image, c):
+    """붉은색 판정 결과 → lane에 넣는 값 {cone_red, cone_red_left, cone_red_right}
+
+    cone_red: 화면 아래 cone_red_rows 영역 전체 비율
+    cone_red_left·right: 화면 위쪽 cone_red_side_top을 뺀 아래 영역의 왼쪽·오른쪽 끝 cone_red_side_width 띠 비율
+      → 확인용 (red_check·corn_test 출력). 판단에는 안 씀
+    """
+    red = red_pixels(image, c)
+    if red is None or not red.size:
+        return dict(cone_red=0.0, cone_red_left=0.0, cone_red_right=0.0)
+    full_h = red.shape[0]/c['cone_red_rows']
+    top = max(0, int(full_h*c['cone_red_side_top'])-int(full_h-red.shape[0]))
+    side = max(1, int(red.shape[1]*c['cone_red_side_width']))
+    lower = red[top:]
+    return dict(cone_red=float(red.mean()), cone_red_left=float(lower[:, :side].mean()),
+                cone_red_right=float(lower[:, -side:].mean()))
 
 
 def gate_pairs(posts, c, gate_max=None):
@@ -158,6 +181,8 @@ class ConeDriving:
         self.confirm = 0
         self.red = False     # 카메라 붉은색(콘 색)이 최근에 보였는지. lane['cone_red'] (loop.py가 넣음)
         self.red_since = float('inf')   # 붉은색이 마지막으로 보인 뒤 주행 거리(m)
+        self.corridor = False           # 화면 전체 붉은 비율이 진입 기준(cone_red_enter_ratio) 이상을 최근에 넘었는지
+        self.corridor_since = float('inf')
         self.debug = {}
 
     def gate_max(self):
@@ -167,11 +192,12 @@ class ConeDriving:
     def start_gate(self, posts, wide):
         """라바콘 모드로 바꿀 때면 (진입 기준점, 문 폭), 아니면 None. 기준점 방향이 첫 진행 방향
 
-        A. 카메라 붉은색 (11/12 유경): 붉은색이 보이고 라이다 콘 후보가 라이다 앞 cone_enter_distance(앞 방향 거리)
-           안, 좌우 cone_red_half_width 안으로 다가오면 켬. 문(쌍)을 못 찾아도 켜고, 진행 방향은 정면에서 시작
-           (문이 보이면 문 중점). 통과 중 조향은 drive가 문·한쪽 콘으로 정함.
+        A. 카메라 붉은색 (11/12 유경): 화면 붉은 비율이 cone_red_enter_ratio 이상(corridor)이고 라이다 콘 후보가 라이다 앞
+           cone_enter_distance(앞 방향 거리) 안, 좌우 cone_red_half_width 안으로 다가오면 켬. 문(쌍)을 못 찾아도 켜고,
+           진행 방향은 정면에서 시작 (문이 보이면 문 중점). 통과 중 조향은 drive가 문·한쪽 콘으로 정함.
+           11/13 사진(red_1113_000127): 화면 전체 붉은색만 보면 코너 도는 중 한쪽 콘 줄·관중석 의자로 일찍 켜짐
            11/12 문 중점 0.3 m 기준은 실차에서 안 켜짐: 차가 차로 중앙, 문 중점이 옆으로 비켜 있으면 0.3 m 안에 안 들어옴
-        B. 붉은색 없음 (카메라 끊김 대비): 라이다만으로 문을 찾음
+        B. 붉은색이 아예 없음 (카메라 끊김 대비): 라이다만으로 문을 찾음. 붉은색은 보이지만 양쪽이 아니면 켜지 않음
            1) 차 정면 좌우 small_object_half_width 안 기둥 2개가 문 (간격 cone_gate_min~max)
            2) 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내 (코너 도는 중에는 안 켬)
            3) 문 중점이 라이다 앞 cone_enter_distance(앞 방향 거리) 안
@@ -180,7 +206,9 @@ class ConeDriving:
         """
         c = self.c
         lidar_x = self.robot['lidar']['x']
-        if self.red:
+        if self.red and not self.corridor:
+            return None
+        if self.corridor:
             near = posts[(posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
                          (np.abs(posts[:, 1]) < c['cone_red_half_width'])]
             if not len(near):
@@ -274,11 +302,15 @@ class ConeDriving:
             return None
         c = self.c
         # 붉은색: 지금 보이거나 마지막으로 보인 뒤 cone_red_memory(m) 안. 콘 바로 앞에서는 콘이 화면 밖으로 빠질 수 있음
-        if float((lane or {}).get('cone_red', 0.0)) >= c['cone_red_ratio']:
-            self.red_since = 0.0
-        else:
-            self.red_since += abs(velocity)*dt
+        # red: 화면에 콘 색 (통과 중 모드 유지·문 간격 완화). corridor: 붉은 비율 cone_red_enter_ratio 이상 (진입)
+        lane = lane or {}
+        step = abs(velocity)*dt
+        seen = float(lane.get('cone_red', 0.0)) >= c['cone_red_ratio']
+        both = float(lane.get('cone_red', 0.0)) >= c['cone_red_enter_ratio']
+        self.red_since = 0.0 if seen else self.red_since+step
+        self.corridor_since = 0.0 if both else self.corridor_since+step
         self.red = self.red_since <= c['cone_red_memory']
+        self.corridor = self.corridor_since <= c['cone_red_memory']
         if self.started:
             # 안전장치: 첫 진입 뒤 (첫 문까지 거리 + cone_max_distance) 넘게 가면 끝. 늦게 끝나면 다음 코너를 못 돎
             self.travel += max(0.0, velocity)*dt

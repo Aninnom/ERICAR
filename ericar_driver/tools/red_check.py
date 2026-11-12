@@ -6,10 +6,11 @@ bringup을 driver:=false로 켜 둔 상태에서 실행. 명령을 보내지 않
     /usr/bin/python3 ~/try_yang_ws/src/ericar/ericar_driver/tools/red_check.py --every 0.5 # 0.5초마다 연속 (Ctrl+C로 끝)
     - dl_env의 python3 금지 (영상 변환 libgdal/libtiff 충돌)
 1장 모드 출력: 지금 기준 비율, 화면 전체·위쪽 비율, 채도 높은 화소의 색상(H) 분포 → ~/bags/red_check.jpg
-연속 모드: ~/bags/red_<시각>/NNN_r<붉은 비율>_c<라이다 앞 거리>.jpg 저장, 한 줄씩 출력
-  - r: 붉은 화소 비율 (판정 기준 cone_red_ratio). c: 라이다 앞 방향으로 가장 가까운 콘 후보 거리(m, 좌우 cone_red_half_width 안,
-    없으면 x). 진입 조건 = r ≥ 기준 이고 c ≤ cone_enter_distance
-  - 사진: 위 = 원본(값 글자), 아래 = 붉은색 판정 화소(흰색). 장당 약 50 KB라 노트북으로 복사 가능
+연속 모드: ~/bags/red_<시각>/NNN_r<전체>_L<왼쪽 띠>_R<오른쪽 띠>_c<라이다 앞 거리>.jpg 저장, 한 줄씩 출력
+  - r: 붉은 화소 비율 (진입 기준 cone_red_enter_ratio). L·R: 양쪽 끝 띠 비율 (확인용)
+  - c: 라이다 앞 방향으로 가장 가까운 콘 후보 거리(m, 좌우 cone_red_half_width 안, 없으면 x)
+  - 진입 표시 = r ≥ cone_red_enter_ratio 이고 c ≤ cone_enter_distance
+  - 사진: 위 = 원본(값 글자), 아래 = 붉은색 판정 화소(흰색)·양쪽 띠(초록 상자). 장당 약 50 KB라 노트북으로 복사 가능
 """
 import argparse
 import os
@@ -21,7 +22,7 @@ import numpy as np
 
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
-from ericar_driver.cones import find_posts, red_ratio  # noqa: E402
+from ericar_driver.cones import find_posts, red_info, red_ratio  # noqa: E402
 from ericar_driver.lidar import scan_sectors  # noqa: E402
 from ericar_driver.loop import load_config  # noqa: E402
 
@@ -68,14 +69,22 @@ def nearest_cone(scan, robot, c):
     return float(posts[:, 0].min()-robot['lidar']['x']) if len(posts) else None
 
 
-def save_frame(folder, index, image, c, ratio, near):
+def save_frame(folder, index, image, c, info, near):
+    """info = cones.red_info. 진입 표시 = 붉은 비율 cone_red_enter_ratio 이상 + 라이다 앞 콘 cone_enter_distance 안 (기억 거리 제외)"""
     import cv2
     shown = image.copy()
-    enter = ratio >= c['cone_red_ratio'] and near is not None and near <= c['cone_enter_distance']
-    text = 'red %.4f  cone %s  %s' % (ratio, '-' if near is None else '%.2f m' % near, 'ENTER' if enter else '')
-    cv2.putText(shown, text, (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0) if enter else (255, 255, 255), 2)
+    both = info['cone_red'] >= c['cone_red_enter_ratio']
+    enter = both and near is not None and near <= c['cone_enter_distance']
+    text = 'red %.3f L %.3f R %.3f cone %s %s' % (info['cone_red'], info['cone_red_left'], info['cone_red_right'],
+                                                 '-' if near is None else '%.2f' % near, 'ENTER' if enter else '')
+    cv2.putText(shown, text, (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0) if enter else (255, 255, 255), 2)
+    h, w = image.shape[:2]
     mask = cv2.cvtColor((red_mask(image, c)*255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-    name = '%03d_r%.4f_c%s.jpg' % (index, ratio, 'x' if near is None else '%.2f' % near)
+    side, top = int(w*c['cone_red_side_width']), int(h*c['cone_red_side_top'])
+    for x0, x1 in ((0, side), (w-side, w-1)):   # 양쪽 띠 (확인용)
+        cv2.rectangle(mask, (x0, top), (x1, h-1), (0, 255, 0), 2)
+    name = '%03d_r%.3f_L%.3f_R%.3f_c%s.jpg' % (index, info['cone_red'], info['cone_red_left'], info['cone_red_right'],
+                                               'x' if near is None else '%.2f' % near)
     cv2.imwrite(str(folder / name), np.vstack([shown, mask]), [cv2.IMWRITE_JPEG_QUALITY, 60])
     return name, enter
 
@@ -122,9 +131,8 @@ def main():
                 last = time.time()
                 image = bridge.imgmsg_to_cv2(frames[-1], 'bgr8')
                 del frames[:-1]
-                ratio = red_ratio(image, c)
                 near = nearest_cone(state['scan'], robot, c)
-                name, enter = save_frame(folder, index, image, c, ratio, near)
+                name, enter = save_frame(folder, index, image, c, red_info(image, c), near)
                 print('%s%s' % (name, '  ← 진입' if enter else ''))
                 index += 1
         except KeyboardInterrupt:

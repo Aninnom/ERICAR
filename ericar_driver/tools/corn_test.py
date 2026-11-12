@@ -71,7 +71,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
 from ericar_driver.common import clip  # noqa: E402
-from ericar_driver.cones import ConeDriving, find_posts, red_ratio  # noqa: E402
+from ericar_driver.cones import ConeDriving, find_posts, red_info  # noqa: E402
 from ericar_driver.lidar import scan_sectors  # noqa: E402
 from ericar_driver.loop import load_config  # noqa: E402
 
@@ -92,8 +92,8 @@ class ConeTest:
         self.entries = 0       # 라바콘 모드가 켜진 횟수
         self.finished = None   # 종료 이유. None이면 진행 중
 
-    def step(self, now, scan, velocity, yaw_rate, red=0.0):
-        """red: 카메라 붉은 화소 비율 (cones.red_ratio). 주행 노드와 같이 lane['cone_red']로 넘김"""
+    def step(self, now, scan, velocity, yaw_rate, red=None):
+        """red: 카메라 붉은색 판정 (cones.red_info). 주행 노드와 같이 lane으로 넘김"""
         if self.started is None:
             self.started = now
         dt = 0.05 if self.last is None else clip(now-self.last, 0.001, 0.2)
@@ -102,7 +102,7 @@ class ConeTest:
         if self.finished:
             return 0.0, 0.0, 'finished'
         was_active = self.cones.active
-        command = self.cones.update({'cone_red': red}, scan, velocity, yaw_rate, dt, True)
+        command = self.cones.update(dict(red or {}), scan, velocity, yaw_rate, dt, True)
         self.entries += self.cones.active and not was_active
         if command is not None:
             (speed, steering), state, self.since = command, 'cones', 0.0
@@ -175,7 +175,8 @@ def main():
             self.exit = False
             self.scan = None
             self.scan_seen = self.odom_seen = self.imu_seen = self.image_seen = -1e9
-            self.velocity = self.angular_velocity = self.yaw_rate = self.red = 0.0
+            self.velocity = self.angular_velocity = self.yaw_rate = 0.0
+            self.red = red_info(None, c['lidar'])
             self.bridge = CvBridge()
             self.state, self.printed, self.stop_until = '', -1e9, None
             path = Path(options.log).expanduser()
@@ -216,7 +217,7 @@ def main():
         def on_image(self, message):
             # 붉은색 비율만 사용 (차선 인식 없음). 실패해도 라이다만으로 계속
             try:
-                self.red = red_ratio(self.bridge.imgmsg_to_cv2(message, 'bgr8'), c['lidar'])
+                self.red = red_info(self.bridge.imgmsg_to_cv2(message, 'bgr8'), c['lidar'])
                 self.image_seen = self.now()
             except Exception as error:
                 self.get_logger().error(f'image conversion failed: {error}')
@@ -247,7 +248,7 @@ def main():
                 imu_ok = now-self.imu_seen < c['sections']['imu_timeout'] and math.isfinite(self.yaw_rate)
                 yaw_rate = self.yaw_rate if imu_ok else self.angular_velocity*c['sections']['odom_yaw_scale']
                 # 영상이 끊기면(0.5 s) 붉은색 없음으로 봄 → 라이다만으로 판단 (기존 동작)
-                red = self.red if now-self.image_seen < 0.5 else 0.0
+                red = self.red if now-self.image_seen < 0.5 else None
                 speed, steering, state = self.test.step(now, self.scan, self.velocity, yaw_rate, red)
                 self.log.write(self.test.row(now, self.scan, self.velocity, yaw_rate, speed, steering, state)+'\n')
             self.publish(speed, steering)
@@ -259,10 +260,11 @@ def main():
                 self.status.publish(String(data='corn_test: '+text))
             elif now-self.printed >= 0.5 and fresh:
                 self.printed = now
-                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 정면 %.2f m 진행 방향 %+.1f° 붉은색 %.4f%s' % (
+                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 정면 %.2f m 진행 방향 %+.1f° 붉은색 %.3f 좌 %.3f 우 %.3f%s%s' % (
                     state, speed, math.degrees(steering), d.get('posts', '-'), d.get('gates', '-'),
                     min(self.scan['front'], 9.99), math.degrees(self.test.cones.heading),
-                    self.red, ' (콘 색)' if self.test.cones.red else ''))
+                    self.red['cone_red'], self.red['cone_red_left'], self.red['cone_red_right'],
+                    ' (콘 색)' if self.test.cones.red else '', ' (진입 색)' if self.test.cones.corridor else ''))
             if state == 'finished':
                 # 정지 명령을 1초 더 보낸 뒤 종료
                 self.stop_until = self.stop_until or now+1.0
