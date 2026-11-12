@@ -31,9 +31,14 @@ class Driver:
         self.stopped_since = self.line_distance = None
         self.line_seen = -1e9
         self.slow_until = 0.0
-        self.fork = ForkMission(self.c['lane_change']['lane_count'], self.c['missions']['fork_distance'])
+        m = self.c['missions']
+        self.fork = ForkMission(self.c['lane_change']['lane_count'], m['fork_distance'], far=self.c['lane']['far'],
+                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3))
         self.sync_fork()
         self.traffic_stop_completed = False
+        self.traffic_seen = -1e9     # 신호등(색 무관, 작은 박스 포함)을 마지막으로 본 시각 (소민)
+        self.traffic_red_area = 0.0  # 이번 프레임 빨강·노랑 박스 최대 면적 비율
+        self.line_kind = None        # line_distance가 가리키는 선: 'crosswalk'(횡단보도 바로 앞) / 'plain'
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
         self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
@@ -137,26 +142,44 @@ class Driver:
         image_stamp = lane.get('stamp', now)
         new_image = image_stamp != self.last_lane_stamp
         self.last_lane_stamp = image_stamp
-        if new_image and lane['stop_distance'] is not None:
+        cross = lane.get('crosswalk_distance')
+        if new_image and (cross is not None or lane['stop_distance'] is not None):
+            # 횡단보도 바로 앞 선이 보이면 그 선 우선. 한 번 잡으면 일반 흰 선(서행 시작선·횡단보도 뒤 선)으로 안 바꿈 (소민)
+            kind = 'crosswalk' if cross is not None else 'plain'
             # A delayed image measures the stripe at exposure, not at this tick.
-            candidate = lane['stop_distance'] - velocity * max(0.0, now-image_stamp)
+            candidate = (lane['stop_distance'] if cross is None else cross) - velocity * max(0.0, now-image_stamp)
             tracking_stop = self.state.endswith('_approach') or self.state.endswith('_hold') or self.state == 'parking_align'
             # Once the first stop stripe is selected, do not jump to a farther
             # crosswalk stripe when the first leaves the camera's field of view.
             same_line = self.line_distance is None or abs(candidate - self.line_distance) < m['line_match_tolerance']
-            if not tracking_stop or same_line:
+            # 차선 주행 중에도 가까운 선을 고른 뒤에는 더 먼 선(횡단보도 뒤쪽 선 등)으로 건너뛰지 않음.
+            # 가까운 선이 카메라 아래(앞 0.4 m 안)로 사라진 뒤 신호등을 확정하면 뒤쪽 선에 서거나
+            # 선을 잃고 그냥 지나가던 문제 (11/12 실차, 소민). 지난 선(-0.05 m)은 아래에서 지움
+            nearer = self.line_distance is None or candidate < self.line_distance + m['line_match_tolerance']
+            upgrade = kind == 'crosswalk' and self.line_kind != 'crosswalk'
+            keep_crosswalk = kind == 'plain' and self.line_kind == 'crosswalk' and self.line_distance is not None
+            if not keep_crosswalk and ((not tracking_stop and nearer) or same_line or upgrade):
                 self.line_distance = candidate
                 self.line_seen = image_stamp
+                self.line_kind = kind
         if (now - self.line_seen > m['stop_line_memory'] and
                 not self.state.endswith(('_hold', '_approach')) and self.state != 'parking_align'):
             self.line_distance = None
         if self.state == 'lane' and self.line_distance is not None and self.line_distance < -0.05:
             self.line_distance = None
+        if self.line_distance is None:
+            self.line_kind = None
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
         names = self.confirmed(detections, detection_stamp)
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
+        # 신호등 감시: 확정 전·작은 박스라도 신호등이 보이면 시각 기록 (S4 감속용), 빨강·노랑 최대 면적
+        traffic = [d for d in detections if d['name'] in MISSION_SIGNS['traffic'] and
+                   d['area'] >= m.get('traffic_watch_area', .002)]
+        if traffic:
+            self.traffic_seen = now
+        self.traffic_red_area = max([d['area'] for d in traffic if d['name'] != 'traffic_green'] or [0.0])
         green_only = 'traffic_green' in names and not ({'traffic_red', 'traffic_yellow'} & names)
         if 'slow' in ready and self.allowed('slow'):
             self.advance('slow')
@@ -187,27 +210,42 @@ class Driver:
     def stop_missions(self, speed, velocity, green_only, now):
         m = self.c['missions']
         if self.state.endswith('_approach'):
+            # 신호등: 횡단보도 바로 앞 선에만 정지 (서행 시작 흰 선에 서지 않음). 선 못 찾으면 저속 접근·큰 빨강 예비 정지
+            traffic = self.state == 'traffic_approach'
+            line = self.line_distance
+            if traffic and m.get('traffic_crosswalk_only', True) and self.line_kind != 'crosswalk':
+                line = None
+            offset = m.get('traffic_stop_offset', m['stop_offset']) if traffic else m['stop_offset']
             crossing_on_green = (self.state == 'traffic_approach' and green_only and
                                  (not m.get('traffic_require_stop', True) or self.traffic_stop_completed))
+            red_now = self.state == 'traffic_approach' and self.traffic_red_area > 0.0
             if now - self.state_started > m['approach_timeout']:
+                if red_now:
+                    # 빨강·노랑이 보이는데 정지선을 못 찾음: 지나가지 않고 그 자리 정지 (신호 위반 방지, 소민)
+                    self.transition('traffic_hold', now)
+                    return 0.0
                 # 정지선에 도달하지 못함: 멈춰 있지 않고 차선 주행으로 복귀 (미션 단계는 유지)
                 self.leave_mission(self.state.replace('_approach', ''), now)
                 return speed
-            if self.line_distance is None:
+            if line is None and red_now and self.traffic_red_area >= m.get('traffic_stop_area', .04):
+                # 정지선 없이 신호등이 충분히 가까움(박스가 큼): 예비 정지
+                self.transition('traffic_hold', now)
+                return 0.0
+            if line is None:
                 # 정지선이 아직 안 보이면 멈추지 않고 저속으로 다가가며 찾는다.
                 # (멈춰 있으면 정지선이 계속 안 보여 결국 시간 초과 실패)
                 speed = min(speed, m['stop_approach_speed'])
             elif crossing_on_green:
                 # Seeing green far away is not mission completion. Keep watching
                 # red/yellow until the measured front axle crosses this stripe.
-                if self.line_distance < -m['stop_tolerance']:
+                if line < -m['stop_tolerance']:
                     for name in ['traffic_red', 'traffic_yellow', 'traffic_green']:
                         self.cooldowns[name] = now + m['sign_cooldown']
                     self.advance('traffic')
                     self.line_distance = None
                     self.transition('lane', now)
             else:
-                remaining = self.line_distance - m['stop_offset']
+                remaining = line - offset
                 speed = min(speed, m['stop_approach_speed'], max(0.0, remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
@@ -300,6 +338,10 @@ class Driver:
                                                   avoiding=self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         stuck_change = False
+        # 분기 입구(흰 점선 끝) 추적. 입구에서 목표 차로가 아니면 manual(정지), 입구 뒤 차선 변경 금지 (소민)
+        if self.sections.allows('fork') or self.fork.running:
+            self.fork.observe(lane, self.lane_change.index, self.lane_change.active, velocity, dt)
+            self.sync_fork()
         if self.state == 'lane':
             # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
             requested = self.fork_request
@@ -308,7 +350,8 @@ class Driver:
             preferred = self.fork.direction if self.fork.running else 0
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.lane_change_off <= 0, requested, preferred)
+                                            and self.lane_change_off <= 0
+                                            and self.fork.allows_change(self.lane_change.active), requested, preferred)
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt, self.sections.allows('cones') and self.fork_remaining <= 0)
             if change is not None:
@@ -337,8 +380,15 @@ class Driver:
         speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0
+        if self.fork.phase == 'manual':
+            # 분기 입구인데 가운데·반대편 차로: 교통섬을 가로지르지 않고 정지 (멈춤 방지보다 우선)
+            speed, steering, mode = 0.0, 0.0, 'fork_manual: wrong lane at fork entrance'
         if self.state == 'parked':
             speed = 0.0
+        if (self.state == 'lane' and self.allowed('traffic') and
+                now - self.traffic_seen < self.c['missions'].get('traffic_watch_hold', 1.5)):
+            # S4에서 신호등이 보이기 시작하면 확정 전에 미리 감속 → 횡단보도 앞 정지선을 카메라에서 놓치기 전에 확정 (소민)
+            speed = min(speed, self.c['missions'].get('traffic_watch_speed', .18))
         if self.state == 'lane' and (self.allowed('fork') or self.fork_remaining > 0):
             # 표지판이 가까워질 때까지 기본 0.4 m/s로 접근하지 않도록 준비 속도 적용
             speed = min(speed, self.c['missions'].get('fork_prepare_speed', .18))
@@ -354,6 +404,11 @@ class Driver:
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_phase=self.fork.phase, fork_destination=self.fork.destination,
+                          fork_dash_left=self.fork.dash_left, fork_late=self.fork.late,
+                          traffic_watch=now - self.traffic_seen < self.c['missions'].get('traffic_watch_hold', 1.5),
+                          traffic_red_area=self.traffic_red_area, line_kind=self.line_kind,
+                          crosswalk_distance=lane.get('crosswalk_distance'),
+                          dash_end=lane.get('dash_end'),
                           fork_follow_travel=self.fork.travel,
                           lane_change_direction=self.lane_change.direction if self.lane_change.active else 0,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,

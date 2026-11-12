@@ -51,8 +51,9 @@ ANSWER_CONFIG = {
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         'confirm_frames_by_class': {'left': 3, 'right': 3},
         'minimum_area_by_class': {
-            'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.025, 'traffic_yellow': 0.025,
-            'traffic_green': 0.025, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
+            # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
+            'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
+            'traffic_green': 0.003, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
@@ -148,6 +149,11 @@ ANSWER_CONFIG = {
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,
         # 미션 순서는 구간 관리자가 결정 (위 sections, section.py SECTION_MISSIONS). 예전 sequence·enforce_order 제거
+        # 신호등 감시 (소민 11/12, 실차 전): S4에서 화면 traffic_watch_area 이상 신호등이 보이면 traffic_watch_hold(s) 동안
+        # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
+        'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
+        # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.088,
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
         # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
         'fork_distance': 3.0,

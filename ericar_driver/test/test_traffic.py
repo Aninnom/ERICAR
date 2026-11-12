@@ -57,6 +57,7 @@ class TrafficTest(unittest.TestCase):
         self.green()
         d = self.driver
         d.line_distance = d.c['missions']['stop_offset']
+        d.line_kind = 'crosswalk'   # 신호등은 횡단보도 바로 앞 선에만 정지 (11/12)
         self.assertEqual(d.stop_missions(.4, 0.0, True, 1.0), 0.0)
         self.assertEqual(d.state, 'traffic_hold')
         d.stop_missions(.4, 0.0, False, 1.5)
