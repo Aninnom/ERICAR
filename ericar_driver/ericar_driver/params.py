@@ -142,7 +142,6 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
-        'fork_prepare_distance': 0.15,  # 방향 확정 후 출구 정렬 전 추가 전진(m). 장애물 회피는 즉시
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
@@ -150,10 +149,9 @@ ANSWER_CONFIG = {
         'line_match_tolerance': 0.1,
         # 미션 순서는 구간 관리자가 결정 (위 sections, section.py SECTION_MISSIONS). 예전 sequence·enforce_order 제거
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
-        # 갈림길 표지판 인식 후 차선 변경 유지·라바콘 모드 금지 거리(m). 표지판 기둥을 라바콘으로 오인하지 않을 만큼만.
-        # 도면상 인식 지점 → 라바콘 시작선 약 5.1~6.1 m라 5 m면 라바콘 입구에서 아직 꺼져 있을 수 있음
+        # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
         'fork_distance': 3.0,
-        'fork_wait_for_obstacles': True, 'fork_clear_distance': 0.1, 'pedestrian_require_line': True,
+        'pedestrian_require_line': True,
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
     'parking': {

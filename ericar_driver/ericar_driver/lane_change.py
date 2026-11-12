@@ -82,18 +82,27 @@ class LaneChange:
         - preferred(이미 읽은 갈림길 표지판 방향) 쪽이 조건을 만족하면 그쪽 먼저 (반대로 피하면 다시 건너와야 함, 소민)
         """
         c = self.c
+        rejected = self.debug['rejected'] = {}
         best, best_free = 0, free[0]+c['free_gain']
         for direction, side in ((1, 'left'), (-1, 'right')):
             if requested and direction != requested:
+                rejected[side] = 'opposite_to_request'
                 continue
             if not 0 <= self.index+direction < c['lane_count']:
+                rejected[side] = 'outside_lane_count'
                 continue
             # YOLO 요청도 노란 바깥선·교통섬 경계 횡단 금지. 점선 차로에서 정렬 필요
             if lane.get('colors', {}).get(side) == 'yellow':
+                rejected[side] = 'yellow_boundary'
                 continue
             if not requested and lane.get('solid', {}).get(side, False):
+                rejected[side] = 'solid_boundary'
                 continue
             enough = free[direction] >= c['min_free_distance']
+            if not enough:
+                rejected[side] = 'insufficient_free_distance'
+            elif not requested and free[direction] <= free[0]+c['free_gain']:
+                rejected[side] = 'insufficient_free_gain'
             if enough and not requested and direction == preferred and free[direction] > free[0]+c['free_gain']:
                 return direction
             if enough and (requested or free[direction] > best_free):
@@ -108,6 +117,7 @@ class LaneChange:
         desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
         self.debug.update(desired=desired, safe=safe, error=error)
+        self.debug['reason'] = 'changing' if safe else 'no_safe_steering'
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
         return (c['speed'] if safe else 0.0), steering
 
@@ -141,6 +151,7 @@ class LaneChange:
                 return None
             return self.steer(points, dt)
         if not enabled or not lane['valid']:
+            self.debug = dict(reason='disabled' if not enabled else 'lane_invalid')
             return None
         # 넓은 군집 분류가 빠져도 실제 주행 통로의 라이다 점으로 회피 판단 필요
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
@@ -152,12 +163,16 @@ class LaneChange:
         self.debug = dict(free=free, index=self.index)
         # 차체가 진행할 통로 안의 전방 장애물만 확인한다.
         if free[0] >= self.c['trigger_distance'] and not requested:
+            self.debug['reason'] = 'front_clear'
             return None
         direction = self.choose_direction(free, lane, requested, preferred)
         self.debug['choice'] = direction
         if direction == 0 and requested:
             # 목표 쪽 막힘: 목표는 유지하고 일반 장애물 회피로 우회 가능
-            return self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
+            rejected = dict(self.debug['rejected'])
+            result = self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
+            self.debug['request_rejected'] = rejected
+            return result
         if direction == 0:
             # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
             # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
@@ -167,8 +182,10 @@ class LaneChange:
                                                 self.c['safety_horizon'], self.c['margin'])
                 if safe:
                     self.debug['approach'] = True
+                    self.debug['reason'] = 'approaching_blocked_lane'
                     return self.c['approach_speed'], steering
             self.waiting = True
+            self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
         self.active, self.direction = True, direction
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.

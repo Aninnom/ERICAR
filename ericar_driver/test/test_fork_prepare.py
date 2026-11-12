@@ -58,33 +58,30 @@ def test_front_points_without_wide_cluster():
     assert d.lane_change.active and result is not None and result[0] > 0, '넓은 군집 아님 → 전방 회피 누락'
 
 
-def test_short_approach_before_alignment():
+def test_goal_alignment_without_extra_delay():
     for name, direction in [('left', 1), ('right', -1)]:
-        d = driver(prepare_distance=.15)
+        d = driver()
         for stamp in (1., 1.2, 1.4):
             detect(d, [name], stamp)
-        assert d.fork_goal == direction and d.fork_pending and d.fork_request == 0
-        # 멈춘 채 시간만 흐르면 출구 정렬 시작 금지
-        for i in range(20):
-            d.update_signs({'wide_objects': 0}, [], 2+i*.05, 0., 2+i*.05, .05)
-        assert d.fork_request == 0
-        # 표지판을 놓쳐도 거리만큼 접근한 뒤 기억한 방향으로 요청
-        for i in range(20):
-            d.update_signs({'wide_objects': 0}, [], 4+i*.05, .2, 4+i*.05, .05)
-        assert not d.fork_pending and d.fork_request == direction
-    d = driver(prepare_distance=.15)
+        assert d.fork.phase == 'locked' and d.fork_request == direction
+        d.update_signs({'wide_objects': 0}, [], 2., 0., 2., .05)
+        assert d.fork.phase == 'align' and d.fork_request == direction
+        assert d.fork.sign == name
+    d = driver()
     for stamp in (1., 1.2, 1.4):
         detect(d, ['right'], stamp)
     lane = dict(valid=True, heading=0., error=0., stamp=2., colors={}, solid={})
-    scan = dict(points=[[.8-d.robot['lidar']['x'], 0.]], wide_objects=0)
+    x = d.robot['lidar']['x']
+    scan = dict(points=[[.8-x, 0.], [.7-x, -.52]], wide_objects=0)
     result = d.lane_change.update(lane, scan, 0., 0., .05, True, requested=d.fork_request,
                                   preferred=d.fork_goal)
-    assert d.fork_pending and d.lane_change.active and result[0] > 0, '출구 준비 대기 중 장애물 회피 지연'
+    assert d.lane_change.active and d.lane_change.direction == 1 and result[0] > 0
+    assert d.fork.direction == -1 and d.fork.destination == 0, '회피로 출구 목적지 변경'
 
 
 if __name__ == '__main__':
     test_prepare()
     test_prepare_speed()
     test_front_points_without_wide_cluster()
-    test_short_approach_before_alignment()
+    test_goal_alignment_without_extra_delay()
     print('조기 화살표 확인·목표 방향 고정 시험 통과')

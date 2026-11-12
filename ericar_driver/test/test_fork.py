@@ -14,10 +14,9 @@ from ericar_driver.params import ANSWER_CONFIG
 from ericar_driver.lane_vision import LaneVision
 
 
-def driver(prepare_distance=0.):
+def driver():
     c = copy.deepcopy(ANSWER_CONFIG)
     c['missions']['start_stage'] = 'fork'
-    c['missions']['fork_prepare_distance'] = prepare_distance  # 기존 즉시 요청 시험은 대기 제외
     robot = yaml.safe_load((HERE.parent / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
     return Driver({'answer': c, 'robot': robot})
 
@@ -40,29 +39,24 @@ def test_both_directions():
         d.lane_change.index = start
         for t in (0., .1, .2):
             signs(d, [name], t, wide=1)
-        assert not d.fork_pending and d.fork_request == direction
+        assert d.fork.phase == 'locked' and d.fork_request == direction
         for i in range(15):
             signs(d, [], .2+i*.05)
         assert d.fork_request == direction
         d.lane_change.active = True
         signs(d, [], 1.)
-        assert d.fork_request == direction, '이동 중 방향 요청 소실'
+        assert d.fork_request == 0 and d.fork.direction == direction, '이동 중 목적지 변경'
         d.lane_change.active = False
         d.lane_change.index = start+direction
         signs(d, [], 1.1)
         assert d.fork_request == direction, '두 번째 차로 이동 누락'
-        # 카메라 확인 전 거리 제한 만료 시 이전 요청 제거 확인
-        d.fork_remaining = 0
-        signs(d, [], 1.15)
-        assert d.fork_request == 0
-        d.fork_remaining = 1
-        d.fork_target = direction*.55
         d.lane_change.index = destination
         signs(d, [], 1.2)
-        assert d.fork_request == 0
-        d.fork_remaining = 0
-        signs(d, [], 1.3)
-        assert d.fork_request == 0 and not d.fork_pending
+        assert d.fork.phase == 'follow' and d.fork_request == 0
+        for i in range(400):
+            signs(d, [], 2+i*.05)
+        assert d.fork.phase == 'done' and d.fork_request == 0
+        assert d.fork.sign == name
 
 
 def test_immediate_and_memory():
