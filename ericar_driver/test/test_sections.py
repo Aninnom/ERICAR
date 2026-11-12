@@ -5,6 +5,7 @@
    표지판 하나를 빼도 이후 미션이 동작하는지 (예전 미션 사슬은 이후 전부 미동작)
 3) 멈춤 방지: 표지판 검출이 끊겨도 주행 계속, 신호등 대기 중 끊기면 포기 후 진행,
    차선 변경 대기·전방 비상 정지가 stall.seconds 넘으면 강제 전환
+4) 서행·방지턱 (slow_zone.py): 표지판·거리 진입, 방지턱 감지 뒤 해제, 감지 실패 대비, 턱에서 멈춤
 
 실행: python3 test/test_sections.py   (약 2분, numpy·opencv·pyyaml 필요)
 """
@@ -228,9 +229,91 @@ def test_stall_guard():
     print('멈춤 방지 시험 통과')
 
 
+# ---------- 4. 서행·방지턱 ----------
+
+def slow_run(sign=(0.8, 1.4), bump=None, stuck=None, corner=None, length=7.0, tilt=True, **override):
+    """S0 직선 주행. sign: slow 표지판이 보이는 s 구간(None = 누락), bump: 앞바퀴가 턱에 닿는 s (자이로 y에 기울기 주입),
+    stuck: (s, 초) 그 지점에서 명령 0.2 이하로는 구르지 않음, corner: 1번 코너 시작 s. 반환 [(s, 명령 속도, 조향, mode)]"""
+    import yaml
+    from ericar_driver.driver import Driver
+    c = copy.deepcopy(ANSWER_CONFIG)
+    c['slow_zone'].update(override)
+    driver = Driver({'answer': c, 'robot': yaml.safe_load(open(CONFIG))['robot']})
+    s = v = t = 0.0
+    log, stuck_left = [], stuck[1] if stuck else 0.0
+    while s < length and t < 120.0:
+        names = ['slow'] if sign and sign[0] <= s < sign[1] else []
+        boxes = [dict(name=n, truncated=False, area=0.05) for n in names]
+        # 앞바퀴·뒷바퀴(축거 0.2 m)가 턱을 오르내림: 6°를 0.05 m 동안 올랐다가 0.05 m 동안 내려옴
+        rate = 0.0
+        for start, sign_ in ((bump, 1), (bump + 0.05, -1), (bump + 0.2, -1), (bump + 0.25, 1)) if bump is not None else ():
+            if start <= s < start + 0.05:
+                rate = sign_ * math.radians(6.0) / 0.05 * v
+        yaw = -(math.pi / 2) / 1.0 * v if corner is not None and corner <= s < corner + 1.0 else 0.0
+        lane = lane_ok()
+        if rate:
+            lane['error'] = 0.3    # 턱 위 카메라 흔들림 → 차선 오차 튐
+        speed, steering, mode = driver.update(lane, scan_with(), boxes, t, v, t, yaw_rate=yaw,
+                                              tilt_rate=(0.0, rate) if tilt else None)
+        log.append((s, speed, steering, mode))
+        target = speed
+        if stuck and s >= stuck[0] and stuck_left > 0 and speed <= 0.2:
+            target = 0.0
+            stuck_left -= DT
+        v += (target - v) * 0.4
+        s += v * DT
+        t += DT
+    return log, driver
+
+
+def speed_at(log, s):
+    return next(row[1] for row in log if row[0] >= s)
+
+
+def test_slow_zone():
+    z = ANSWER_CONFIG['slow_zone']
+    base = ANSWER_CONFIG['base_speed']
+    # (가) 표지판 → 감속, 방지턱(2.0 m) 감지 뒤 0.5 m에서 해제. 출발 직후는 기본 속도 (감속이 눈에 보여야 함)
+    log, driver = slow_run(bump=2.0)
+    assert speed_at(log, 0.5) > 0.3 and speed_at(log, 1.0) == z['speed'] and speed_at(log, 2.3) == z['speed']
+    assert 2.0 <= driver.slow_zone.bump_at + 0.8 <= 2.1, driver.slow_zone.bump_at
+    assert speed_at(log, 2.7) > 0.3 and 'slow' in driver.done
+    assert max(row[1] for row in log if 0.85 <= row[0] < 2.45) <= 0.2
+    # 턱 위 조향 고정: 차선 오차가 튀어도 조향은 직전 값(직선 0)
+    assert max(abs(row[2]) for row in log if 2.0 <= row[0] < 2.45) < 0.02
+    print('  표지판 + 방지턱 감지: 0.8 m 감속, %.2f m 해제' % next(r[0] for r in log if r[0] > 1.0 and r[1] > 0.3))
+    # (나) 표지판 누락 → entry_distance에서 감속
+    log, driver = slow_run(sign=None, bump=2.0)
+    assert speed_at(log, 1.3) > 0.3 and speed_at(log, 1.6) == z['speed'] and speed_at(log, 2.7) > 0.3
+    # (다) 방지턱 감지 실패(IMU 없음) → 1번 코너(S1)에서 해제, 그 전에는 서행 유지
+    log, driver = slow_run(tilt=False, corner=3.0, length=5.0)
+    assert speed_at(log, 2.9) == z['speed'] and driver.slow_zone.state == 'done' and 'slow' in driver.done
+    assert driver.sections.index == 1
+    # (라) 감지 실패 + 현장 실측 exit_distance → 그 거리에서 해제
+    log, driver = slow_run(tilt=False, exit_distance=2.6)
+    assert speed_at(log, 2.5) == z['speed'] and speed_at(log, 2.8) > 0.3
+    # (마) 감지 실패 + 코너 없음 → max_distance에서 해제 (끝없이 서행하지 않음)
+    log, driver = slow_run(tilt=False)
+    assert speed_at(log, 0.8 + z['max_distance'] - 0.2) == z['speed'] and speed_at(log, 0.8 + z['max_distance'] + 0.3) > 0.3
+    # (바) 턱에서 멈춤: 0.2 이하 명령으로는 3초 동안 안 구름 → 단계적으로 올려 넘어감, 넘은 뒤 서행 속도 복귀
+    log, driver = slow_run(bump=2.0, stuck=(2.0, 3.0))
+    peak = max(row[1] for row in log if 1.95 <= row[0] < 2.2)
+    assert 0.2 < peak <= z['boost_speeds'][-1], peak   # 차선 주행 속도(턱 위 오차로 감속)보다 높이지는 않음
+    assert log[-1][0] >= 6.9 and speed_at(log, 2.35) == z['speed'] and 'slow' in driver.done
+    # (사) 감속 직후 차체 숙임(3°)은 방지턱으로 보지 않음: arm_distance 안
+    log, driver = slow_run(bump=0.75, tilt_threshold=2.0, length=2.0)
+    assert driver.slow_zone.bump_at is None or driver.slow_zone.bump_at >= z['arm_distance']
+    # (아) entry_distance 없음(None) + 표지판 누락 → 서행 안 함 (거리 진입을 끈 설정 확인)
+    log, driver = slow_run(sign=None, length=3.0, entry_distance=None)
+    assert min(row[1] for row in log if row[0] > 0.5) > 0.3
+    assert base > 2 * z['speed'] - 1e-9 and z['speed'] <= 0.2
+    print('서행·방지턱 시험 통과')
+
+
 if __name__ == '__main__':
     test_section_manager()
     test_stall_guard()
+    test_slow_zone()
     test_missing_signs()
     test_detector_loss()
     print('구간 관리자·멈춤 방지 시험 통과')

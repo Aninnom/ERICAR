@@ -73,6 +73,7 @@ class Sensors:
     odom_stamp: float
     yaw_rate: float = 0.0        # IMU 자이로 z (rad/s, + 왼쪽)
     imu_stamp: float = -1e9      # IMU 수신 시각. 오래되면 odom 회전으로 대체
+    tilt_rate: tuple = (0.0, 0.0)   # IMU 자이로 x·y (rad/s). 방지턱 감지용 (slow_zone)
 
 
 @dataclass
@@ -119,6 +120,7 @@ class ControlLoop:
                             now - self.started < c['detector']['startup_wait'])
         # 회전 속도: IMU가 최신이면 IMU, 아니면 odom × 보정 (driver.update에서 처리)
         imu_ok = 0 <= now - s.imu_stamp < c['sections']['imu_timeout'] and math.isfinite(s.yaw_rate)
+        tilt_ok = imu_ok and all(math.isfinite(rate) for rate in s.tilt_rate)
         if (not sensor_ready or waiting_detector or
                 not math.isfinite(s.velocity) or not math.isfinite(s.angular_velocity)):
             self.driver.debug['published_speed'] = 0.0
@@ -140,7 +142,8 @@ class ControlLoop:
             speed, steering, state = self.driver.update(lane, s.scan, s.detections if signs_ok else [],
                                                          s.detection_stamp, s.velocity, now, s.angular_velocity,
                                                          yaw_rate=s.yaw_rate if imu_ok else None,
-                                                         signs_ok=signs_ok or not c['detector']['enabled'])
+                                                         signs_ok=signs_ok or not c['detector']['enabled'],
+                                                         tilt_rate=s.tilt_rate if tilt_ok else None)
             if was_avoiding and not self.driver.avoiding:
                 self.vision.memory = {}
                 self.vision.previous_center = None

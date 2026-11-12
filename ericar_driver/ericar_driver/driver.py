@@ -8,6 +8,7 @@ from .lane_driving import LaneDriving
 from .lidar import body_points, clear_steering
 from .parking import Parking
 from .section import SectionManager, START_SECTION
+from .slow_zone import SlowZone
 
 # 정지 미션 시간 초과 후 같은 표지판에 바로 다시 반응하지 않도록 쿨다운을 거는 표지판
 MISSION_SIGNS = {
@@ -29,7 +30,8 @@ class Driver:
         self.last_time = self.last_lane_stamp = self.last_detection_stamp = None
         self.stopped_since = self.line_distance = None
         self.line_seen = -1e9
-        self.slow_until = self.fork_remaining = self.fork_bias = self.fork_target = 0.0
+        self.fork_remaining = self.fork_bias = self.fork_target = 0.0
+        self.slow_zone = SlowZone(self.c['slow_zone'])   # 서행·방지턱 (slow_zone.py)
         self.fork_pending, self.fork_clear_distance = False, 0.0
         self.fork_request = 0
         self.traffic_stop_completed = False
@@ -123,9 +125,8 @@ class Driver:
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
         green_only = 'traffic_green' in names and not ({'traffic_red', 'traffic_yellow'} & names)
         if 'slow' in ready and self.allowed('slow'):
-            self.advance('slow')
-            self.slow_until = now + m['slow_seconds']
-            self.cooldowns['slow'] = now + m['sign_cooldown']
+            # 감속·해제는 slow_zone이 판단 (예전: 표지판 뒤 14초 고정). 끝나면 update에서 advance
+            self.slow_zone.sign = True
         if ('left' in ready or 'right' in ready) and self.allowed('fork') and self.fork_remaining <= 0.0:
             self.advance('fork')
             self.fork_target = m['fork_bias'] if 'left' in ready else -m['fork_bias']
@@ -262,9 +263,10 @@ class Driver:
         return speed, steering, blocked
 
     def update(self, lane, scan, detections, detection_stamp, velocity, now, angular_velocity=0.0,
-               yaw_rate=None, signs_ok=True):
+               yaw_rate=None, signs_ok=True, tilt_rate=None):
         """yaw_rate: 실측 회전 속도(IMU, rad/s). None이면 odom 값 × sections.odom_yaw_scale
-        signs_ok: 표지판 검출이 최신인지 (False면 detections는 빈 목록으로 들어옴)"""
+        signs_ok: 표지판 검출이 최신인지 (False면 detections는 빈 목록으로 들어옴)
+        tilt_rate: IMU 자이로 (x, y) rad/s, 방지턱 감지용. IMU가 없으면 None"""
         if self.last_time is not None and now < self.last_time:
             self.__init__({'answer': self.c, 'robot': self.robot})
         dt = .05 if self.last_time is None else clip(now-self.last_time, .001, .2)
@@ -280,10 +282,18 @@ class Driver:
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
         in_fork = self.fork_pending or self.fork_remaining > 0
-        speed, steering = self.lane_driver.update(lane, now, dt, now < self.slow_until, velocity, angular_velocity,
+        speed, steering = self.lane_driver.update(lane, now, dt, False, velocity, angular_velocity,
                                                   allow_hold=self.state == 'lane' and not self.avoiding and not in_fork,
                                                   avoiding=self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
+        # 서행·방지턱: 차선 주행 결과에 속도 상한·턱 위 조향 고정 (차선 코드는 그대로)
+        if self.state == 'lane' and not self.avoiding:
+            speed, steering, finished = self.slow_zone.update(
+                self.allowed('slow'), self.sections.distance, tilt_rate, velocity, speed, steering, now, dt)
+            if finished:
+                self.advance('slow')
+            if self.slow_zone.state == 'slow' and mode == 'lane':
+                mode = 'slow_zone'
         stuck_change = False
         if self.state == 'lane':
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
@@ -326,6 +336,8 @@ class Driver:
                           stage=self.stage(), section=self.sections.index,
                           section_distance=self.sections.distance, section_turned=self.sections.turned,
                           yaw_deg=self.sections.yaw*57.29578, yaw_source='odom' if yaw_rate is None else 'imu',
+                          slow_zone=self.slow_zone.state, slow_tilt_deg=self.slow_zone.tilt_deg,
+                          slow_bump_at=self.slow_zone.bump_at, slow_boost=self.slow_zone.boost,
                           stall_time=self.stall_time, lane_change_off=self.lane_change_off, signs_ok=signs_ok,
                           front=scan['front'], rear=scan['rear'],
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
@@ -341,7 +353,7 @@ class Driver:
                           off=list(self.c['sections'].get('off', ())),
                           sign_counts=dict(self.sign_counts),
                           cooldowns={name: until-now for name, until in self.cooldowns.items() if until > now},
-                          slow_left=max(0.0, self.slow_until-now), signs_lost=self.signs_lost,
+                          signs_lost=self.signs_lost,
                           stopped_for=None if self.stopped_since is None else now-self.stopped_since,
                           zigzag_left=self.lane_driver.zigzag_left, lane_lost=now-self.lane_driver.last_seen,
                           search_distance=self.lane_driver.search_distance,

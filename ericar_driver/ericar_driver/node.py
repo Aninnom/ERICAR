@@ -33,6 +33,9 @@ def load_detector(config, weights):
     import torch
     threads = int(c['detector'].get('cpu_threads', config['environment'].get('cpu_threads', 2)))
     torch.set_num_threads(threads)
+    # device 'auto': GPU가 있으면 GPU. 차 CPU 추론은 1장 약 1초(검출 나이 중앙 1.0 s, 영상 처리까지 밀림) → GPU 약 0.05초 (11/12 실측)
+    if c['detector']['device'] == 'auto':
+        c['detector']['device'] = 0 if torch.cuda.is_available() else 'cpu'
     detector.add_callback('on_predict_start', lambda _: torch.set_num_threads(threads))
     if set(detector.names.values()) != set(YOLO_CLASSES):
         raise SystemExit(f'모델 클래스 {sorted(detector.names.values())}가 params.py의 YOLO_CLASSES 8종과 다름')
@@ -59,6 +62,7 @@ class DriverNode(Node):
         self.angular_velocity = 0.0
         self.odom_stamp = -1e9
         self.yaw_rate = 0.0
+        self.tilt_rate = (0.0, 0.0)
         self.imu_stamp = -1e9
         self.detector_failures = 0
         self.detections = []
@@ -106,6 +110,8 @@ class DriverNode(Node):
 
     def on_imu(self, message):
         self.yaw_rate = message.angular_velocity.z
+        # 방지턱 감지용 x·y (slow_zone). 축 방향은 장착에 따라 달라 크기만 사용
+        self.tilt_rate = (getattr(message.angular_velocity, 'x', 0.0), getattr(message.angular_velocity, 'y', 0.0))
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
     def detect(self):
@@ -163,7 +169,8 @@ class DriverNode(Node):
                               detector_ok=self.detector_failures < self.c['detector']['failure_limit'],
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
-                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp)
+                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
+                              tilt_rate=self.tilt_rate)
         out = self.loop.step(sensors)
         self.publish(out.speed, out.steering)
         if out.lane_mask is not None:

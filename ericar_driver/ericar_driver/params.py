@@ -38,6 +38,18 @@ ANSWER_CONFIG = {
     # 라바콘·의자 다리를 통로로 보고 진입 → 4번 코너 이탈). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
                  'off': ['cones']},
+    # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
+    # speed: 서행 속도. 상한 0.2와 차이를 분명히
+    # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
+    # exit_distance: 방지턱 감지 실패 시 해제할 S0 거리(m). 현장 실측 = 방지턱 끝 + 뒷바퀴 여유. None이면 미사용
+    # max_distance: 감속 시작 뒤 이 거리(m)면 무조건 해제 (예전 14초 × 0.2 m/s = 2.8 m)
+    # tilt_threshold(°)·tilt_decay(s): 자이로 x·y 누설 적분 기울기가 문턱 넘으면 방지턱. arm_distance(m): 감속 직후 숙임 무시
+    # release_distance: 첫 감지 뒤 해제까지 거리(m). 뒷바퀴 기준 = 축거 0.2 + 턱 길이 + 여유
+    # hold_distance: 첫 감지 뒤 조향 고정 거리(m, 앞·뒷바퀴 통과). stuck_*: 턱에서 멈추면 boost_speeds를 단계로 올림, boost_distance 구르면 복귀
+    'slow_zone': {'speed': 0.15, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
+                  'tilt_threshold': 2.0, 'tilt_decay': 0.5, 'arm_distance': 0.15, 'release_distance': 0.5,
+                  'hold_distance': 0.35, 'stuck_speed': 0.03, 'stuck_seconds': 0.7,
+                  'boost_speeds': [0.2, 0.3], 'boost_distance': 0.1},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
@@ -46,7 +58,7 @@ ANSWER_CONFIG = {
               'creep_speed': 0.08, 'creep_horizon': 0.3, 'creep_margin': 0.02},
 
     'detector': {
-        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
+        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'auto', 'rate_hz': 5.0,   # auto = GPU 있으면 GPU (node.load_detector)
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         'minimum_area_by_class': {
             'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.025, 'traffic_yellow': 0.025,
@@ -139,7 +151,7 @@ ANSWER_CONFIG = {
         'cone_max_distance': 2.5,    # 안전장치: 진입 시 첫 콘까지 거리 + 이 값 넘게 주행하면 종료. 라바콘 구간 약 2.1 m + 여유
     },
     'missions': {
-        'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
+        'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
