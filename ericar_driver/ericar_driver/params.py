@@ -127,8 +127,9 @@ ANSWER_CONFIG = {
         'cone_gate_width': 0.6,      # 콘 하나만 보일 때 쓰는 문 폭 기본값 (문을 보면 측정값으로 교체)
         'cone_group_max_width': 0.6, # 이 폭까지는 붙어 놓인 콘 덩어리로 보고 나눠서 사용. 넘으면 벽·큰 물체로 무시
         'cone_view_distance': 1.5,   # 라이다에서 이 거리 안의 콘만 사용
-        # 진입 판단: 차 앞 cone_start_range 안에 문, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
+        # 진입 판단: 문 중점이 라이다에서 cone_enter_distance(아래) 안, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
         # cone_confirm_count 주기(20 Hz) 연속. 코너 도는 중(문이 비스듬함)에는 켜지 않음
+        # cone_start_range: 통과 중 문 없이 콘 하나만 보일 때 그 콘을 쓰는 최대 거리 (11/12부터 진입에는 안 씀)
         'cone_start_range': 1.2, 'cone_start_angle': 0.6, 'cone_confirm_count': 3,
         # 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth, 기둥에서 cone_wide_margin 안쪽)에 넓은 군집이 있으면 진입 안 함
         'cone_wide_depth': 0.6, 'cone_wide_margin': 0.08,
@@ -154,7 +155,11 @@ ANSWER_CONFIG = {
         # (아래 50%만 볼 때 0.040, 위쪽만 0.153) → 판정 영역 아래 75%로 넓힘. 먼 콘(약 2 m)은 아래 50%에 안 들어옴
         'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
         'cone_red_rows': 0.75, 'cone_red_ratio': 0.002,
-        'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9, 'cone_red_start_range': 1.5,
+        'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9,
+        # 진입 시점: 문 중점(좌·우 콘 가운데)이 라이다에서 이 거리(m) 안에 들어와야 라바콘 모드로 바꿈.
+        # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지
+        # 콘 자체가 아니라 문 중점 기준: 콘은 옆에 있어 문 폭 절반(0.3~0.8 m) 밑으로 가까워지지 않음
+        'cone_enter_distance': 0.3,
     },
     'missions': {
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,

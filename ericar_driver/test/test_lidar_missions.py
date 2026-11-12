@@ -225,7 +225,9 @@ def test_cones_pass():
         r = run_cones(*cone_layout(kind, seed))
         print(f"라바콘 {kind:6s} {seed}: 시작 x {r['start_x']!s:.5} 종료 x {r['end_x']!s:.5} "
               f"최소 여유 {r['min_clear']:.3f} m, 바깥 통과 {r['wrong_side']}, 종료 후 y {r['final_y']:+.3f}")
-        assert r['start_x'] is not None and r['start_x'] < -0.2, (kind, seed, r)
+        # 11/12 진입 시점을 문 중점이 라이다 0.3 m 안으로 늦춤 → 엇갈림 배치(첫 문이 비스듬)는 차 앞부분이 첫 콘 옆일 때 진입
+        # (shift 0.06, random 0 0.03). 바깥 통과·접촉 없음이 기준. 대회 배치는 좌·우 쌍(test_cone_gates)
+        assert r['start_x'] is not None and r['start_x'] < 0.1, (kind, seed, r)
         assert r['end_x'] is not None and r['end_x'] > 2.0, (kind, seed, r)
         assert r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'], (kind, seed, r)
 

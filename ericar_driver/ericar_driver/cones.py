@@ -169,14 +169,13 @@ class ConeDriving:
         1) 차 정면 좌우 small_object_half_width 안 기둥 2개가 문을 이룸 (간격 cone_gate_min~max)
         2) 문 중점 방위와 문 방향이 차 정면에서 cone_start_angle 이내
            → 코너를 아직 도는 중(문이 크게 비스듬함)에는 켜지 않고 차선 주행으로 더 돈 뒤 진입
-        3) 문 중점까지 cone_start_range 이내
+        3) 문 중점이 라이다에서 cone_enter_distance 이내 (11/12: 코너 유지 중 일찍 켜져 차선 이탈 → 콘 바로 앞에서 켬)
         4) 넓은 군집이 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth)에 없음 (3차선 차량 장애물 오진입 방지).
            문 기둥 자리에 붙어 놓인 콘 덩어리는 통로 가장자리라 해당 없음
-        카메라에 붉은색이 보이면 1)·3) 완화: 좌우 cone_red_half_width, 간격 최대 cone_red_gate_max, 거리 cone_red_start_range
+        카메라에 붉은색이 보이면 1) 완화: 좌우 cone_red_half_width, 간격 최대 cone_red_gate_max
         """
         c = self.c
         half_width = c['cone_red_half_width'] if self.red else c['small_object_half_width']
-        start_range = c['cone_red_start_range'] if self.red else c['cone_start_range']
         posts = posts[np.abs(posts[:, 1]) < half_width]
         gates = gate_pairs(posts, c, self.gate_max())
         k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), c['cone_start_angle'], c['cone_start_angle'])
@@ -184,7 +183,8 @@ class ConeDriving:
             return None
         middle, normal, gap = gates[0][k], gates[1][k], float(gates[2][k])
         distance = float(np.hypot(middle[0], middle[1]))
-        if distance > start_range:
+        lidar = [self.robot['lidar']['x'], self.robot['lidar'].get('y', 0.0)]
+        if float(np.hypot(middle[0]-lidar[0], middle[1]-lidar[1])) > c['cone_enter_distance']:
             return None
         if len(wide):
             normal = normal if normal[0] > 0 else -normal

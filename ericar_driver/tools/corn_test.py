@@ -191,9 +191,9 @@ def main():
             self.create_timer(1.0/c['rate_hz'], self.control)
             lidar = c['lidar']
             self.get_logger().info(
-                '라바콘 단독 시험 시작%s. 문 간격 %.2f~%.2f m, 진입 거리 %.1f m, 속도 %.2f m/s, 기록 %s' % (
+                '라바콘 단독 시험 시작%s. 문 간격 %.2f~%.2f m, 진입 거리(라이다~문 중점) %.2f m, 속도 %.2f m/s, 기록 %s' % (
                     ' (--dry: 명령 안 보냄)' if options.dry else '', lidar['cone_gate_min'], lidar['cone_gate_max'],
-                    lidar['cone_start_range'], lidar['avoidance_speed'], path))
+                    lidar['cone_enter_distance'], lidar['avoidance_speed'], path))
 
         def now(self):
             return self.get_clock().now().nanoseconds/1e9
