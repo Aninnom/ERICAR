@@ -50,8 +50,8 @@ class Driver:
     @property
     def section_hold(self):
         """구간 전환 보류 조건: 라바콘 통과 중. 콘 배치에 따라 오른쪽으로 크게 돌 수 있어 누적 회전을 코너로 세면 안 됨
-        cone_fixed(유경)는 문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
-        return self.cones.active or (getattr(self.cones, 'started', False) and not self.cones.done)
+        문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
+        return self.cones.active or (self.cones.started and not self.cones.done)
 
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
@@ -338,7 +338,8 @@ class Driver:
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request,
-                          avoiding=self.avoiding, cone_active=self.cones.active,
+                          avoiding=self.avoiding, cone_active=self.cones.active, cone_red=self.cones.red,
+                          cone_red_ratio=float(lane.get('cone_red', 0.0)), cone_corridor=self.cones.corridor,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
                           corner_hold=self.lane_driver.hold is not None,
                           # 아래는 디버그 화면(tools/debug_view.py) 표시 전용. 판단에 쓰지 않음

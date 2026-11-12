@@ -36,10 +36,11 @@ ANSWER_CONFIG = {
     # enabled False면 구간과 무관하게 모든 미션 허용 (단독 시험용)
     # hold_distance: 라바콘 통과 중에는 구간 전환 보류 (콘 배치가 우회전을 강제하면 S3 도중 −335°를 넘음, 11/13).
     # 기준을 넘은 채 이 거리(m)를 가도 라바콘이 안 끝나면 전환 (안전장치)
-    # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 실차 확인 전이라 끔 (11/11 segA_1111_lap1: 트랙 옆에 세워 둔
-    # 라바콘·의자 다리를 통로로 보고 진입 → 4번 코너 이탈). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인
+    # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 11/11 segA_1111_lap1(트랙 옆 라바콘·의자 다리를 통로로 보고
+    # 진입 → 4번 코너 이탈)로 꺼 뒀다가 11/12 다시 켬 (유경): 단독 시험 corn_test_1112_193257 통과 (모드 3.1 m, 충돌 없음).
+    # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
-                 'hold_distance': 3.0, 'off': ['cones']},
+                 'hold_distance': 3.0, 'off': []},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
@@ -121,24 +122,53 @@ ANSWER_CONFIG = {
         'small_object_min_width': 0.015, 'small_object_max_width': 0.12, 'small_object_range': 1.8,
         'planning_point_range': 3.0, 'cluster_min_points': 2, 'wide_object_half_width': 0.9,
         'small_object_half_width': 0.75,
-        # ---- 라바콘 (cones.py). 거리는 뒷바퀴 축 기준 m ----
-        # 진입 판단: 앞 cone_start_range 안에 콘 cone_start_min_cones개 이상, 좌·우에 각각 콘,
-        # 가장 가까운 좌·우 콘 간격 cone_gate_min~max. cone_confirm_count 주기(20 Hz) 연속이면 시작
-        # [실차] 간격 범위는 실제 라바콘 배치 보고 조정 (참고 코드 0.6~0.95, 차폭 0.22)
-        'cone_start_range': 1.5, 'cone_start_min_cones': 3, 'cone_confirm_count': 3,
+        # ---- 라바콘 (cones.py). 거리는 뒷바퀴 축 기준 m, 각도 rad ----
+        # 11/12: 콘 두 줄 가정 제거 → 좌·우 콘 쌍(문) 사이 각도로 조향. 쌍 개수·간격 모름
+        # 문 = 간격 cone_gate_min~max인 콘 2개. [실차] 실제 배치 보고 조정 (참고 코드 0.6~0.95, 차폭 0.225)
         'cone_gate_min': 0.35, 'cone_gate_max': 1.0,
-        'cone_gate_width': 0.6,      # 한쪽 줄만 보일 때 쓰는 좌·우 간격 기본값 (진입 시 측정값으로 교체)
-        'cone_gate_window': 0.5,     # 같은 줄에서 가장 가까운 콘부터 이 앞 거리 안의 콘 중 가장 안쪽을 통로 경계로
-        'cone_view_distance': 1.5,   # 통과 중 보는 콘 앞 거리
-        'cone_band_margin': 0.15,    # 통로(중앙 ± cone_gate_max/2) 밖 이 거리 넘는 물체는 무시 (표지판 기둥 등)
-        'cone_center_alpha': 0.5,    # 통로 중앙 갱신 비율 (1 = 이번 측정만)
-        'cone_lookahead': 0.6,       # 통로 중앙의 몇 m 앞 지점으로 조향할지
+        'cone_gate_width': 0.6,      # 콘 하나만 보일 때 쓰는 문 폭 기본값 (문을 보면 측정값으로 교체)
+        'cone_group_max_width': 0.6, # 이 폭까지는 붙어 놓인 콘 덩어리로 보고 나눠서 사용. 넘으면 벽·큰 물체로 무시
+        'cone_view_distance': 1.5,   # 라이다에서 이 거리 안의 콘만 사용
+        # 진입 판단: 문 중점이 라이다에서 cone_enter_distance(아래) 안, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
+        # cone_confirm_count 주기(20 Hz) 연속. 코너 도는 중(문이 비스듬함)에는 켜지 않음
+        # cone_start_range: 통과 중 문 없이 콘 하나만 보일 때 그 콘을 쓰는 최대 거리 (11/12부터 진입에는 안 씀)
+        'cone_start_range': 1.2, 'cone_start_angle': 0.6, 'cone_confirm_count': 3,
+        # 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth, 기둥에서 cone_wide_margin 안쪽)에 넓은 군집이 있으면 진입 안 함
+        'cone_wide_depth': 0.6, 'cone_wide_margin': 0.08,
+        # 통과 중: 진행 방향에서 cone_gate_angle 이내를 마주 보는 문만 사용 (같은 쪽 콘 2개 = 90°라 제외),
+        # 문 중점 방위는 진행 방향에서 cone_gate_bearing 이내 (옆으로 크게 벗어난 물체 쌍 제외)
+        'cone_gate_angle': 0.95, 'cone_gate_bearing': 0.7,
+        'cone_path_gates': 4,        # 가까운 문부터 몇 개까지 이어서 볼지
+        'cone_gate_step': 0.15,      # 이어지는 문 사이 최소 앞 거리 (붙은 콘이 만드는 겹친 문 건너뜀)
+        'cone_lookahead': 0.5,       # 문 중점을 이은 경로에서 몇 m 앞 지점으로 조향할지
+        'cone_aim_alpha': 0.5,       # 진행 방향·문 폭 갱신 비율 (1 = 이번 측정만)
         'cone_check_distance': 0.35, 'cone_margin': 0.03,   # 충돌 검사 원호 길이, 차체-콘 최소 여유
         'avoidance_speed': 0.13,     # 라바콘 통과 속도
         'cone_creep_speed': 0.05,    # 안전한 원호가 없을 때 속도 (정지 = 미션 실패라 멈추지 않음)
-        # 라바콘 모드 종료: 마지막 라바콘을 라이다가 지난 뒤 이동 거리(m). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
+        # 콘이 안 보인 뒤 이 거리(m) 더 가면 차선 주행으로 복귀 (다음 문이 보이면 다시 켜짐). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
         'small_object_memory_distance': 0.3,
-        'cone_max_distance': 2.5,    # 안전장치: 진입 시 첫 콘까지 거리 + 이 값 넘게 주행하면 종료. 라바콘 구간 약 2.1 m + 여유
+        'cone_max_distance': 2.5,    # 안전장치: 첫 진입 시 문까지 거리 + 이 값 넘게 주행하면 끝 (다시 안 켜짐). 라바콘 구간 약 2.1 m + 여유
+        # 카메라 붉은색 (11/12 유경): 주최 측 안내 = 콘은 빨강에 가까운 붉은색. 11/12 cone_lane_3 진입 못 하고 차선 복귀·충돌
+        # 붉은색이 보이면 진입·통과 조건 완화: 문 간격 최대 cone_red_gate_max, 좌우 cone_red_half_width, 거리 cone_red_start_range
+        # 통과 중 붉은색이 보이면 콘이 안 보여도 모드 유지 (cone_max_distance 안전장치는 그대로)
+        # 판정: 화면 아래 cone_red_rows 비율 영역을 1/4로 줄여 HSV, 색상 0~h_low 또는 h_high~180, 채도·밝기 하한, 화소 비율 cone_red_ratio 이상
+        # 11/12 실차 red_check (노출 300, 콘 약 1 m): 콘 H 0~9·170~179, S 약 190, V 약 130 → 색 범위 맞음.
+        # 노란 선(H 20~39, V 40 전후)·흰 선·검은 바닥은 판정 0. 카메라가 낮아 콘 몸통은 대부분 화면 가운데보다 위
+        # (아래 50%만 볼 때 0.040, 위쪽만 0.153) → 판정 영역 아래 75%로 넓힘. 먼 콘(약 2 m)은 아래 50%에 안 들어옴
+        'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
+        # 11/12 유경: 판정 영역 화면 전체로 (콘 바로 앞 위치는 사진 확인 못 함). 마지막으로 보인 뒤 cone_red_memory(m)까지 유지
+        'cone_red_rows': 1.0, 'cone_red_ratio': 0.03, 'cone_red_memory': 0.5,
+        # 11/13 실차 사진 18장(red_1113_000127, 코너 앞 → 콘 통로): 관중석 붉은 의자만 보여도 전체 0.010~0.015
+        # → 기준 0.002에서 0.03으로 올림 (콘 1개가 화면 끝에 보일 때 0.07).
+        # 진입은 화면 전체 붉은 비율 cone_red_enter_ratio 이상일 때만 (11/13 유경 결정). 같은 사진: 의자 0.01, 콘 1개 0.07,
+        # 코너 중 콘 줄 0.17~0.27, 통로 정면 0.30, 통로 안 0.39~0.45. 0.27(회전 중 한쪽 줄)은 진입함
+        'cone_red_enter_ratio': 0.2,
+        'cone_red_side_width': 0.2, 'cone_red_side_top': 0.4,   # 양쪽 끝 띠 비율: 확인용 출력만 (판단에 안 씀)
+        'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9,
+        # 진입 시점: 라바콘 모드로 바꾸는 라이다 앞 방향 거리(m). 붉은색이 보이면 콘 후보 하나, 아니면 문 중점 기준.
+        # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지.
+        # 같은 날 문 중점 직선거리 0.3 m는 안 켜짐 (차로 중앙과 문 중점이 옆으로 어긋남) → 붉은색 + 콘 앞 방향 거리로 변경
+        'cone_enter_distance': 0.3,
     },
     'missions': {
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
