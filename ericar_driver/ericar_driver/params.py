@@ -149,9 +149,11 @@ ANSWER_CONFIG = {
         # 붉은색이 보이면 진입·통과 조건 완화: 문 간격 최대 cone_red_gate_max, 좌우 cone_red_half_width, 거리 cone_red_start_range
         # 통과 중 붉은색이 보이면 콘이 안 보여도 모드 유지 (cone_max_distance 안전장치는 그대로)
         # 판정: 화면 아래 cone_red_rows 비율 영역을 1/4로 줄여 HSV, 색상 0~h_low 또는 h_high~180, 채도·밝기 하한, 화소 비율 cone_red_ratio 이상
-        # [실차] 노출 300 기준 추정값. 디버그 화면 cone_red 값 보고 조정 필요
+        # 11/12 실차 red_check (노출 300, 콘 약 1 m): 콘 H 0~9·170~179, S 약 190, V 약 130 → 색 범위 맞음.
+        # 노란 선(H 20~39, V 40 전후)·흰 선·검은 바닥은 판정 0. 카메라가 낮아 콘 몸통은 대부분 화면 가운데보다 위
+        # (아래 50%만 볼 때 0.040, 위쪽만 0.153) → 판정 영역 아래 75%로 넓힘. 먼 콘(약 2 m)은 아래 50%에 안 들어옴
         'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
-        'cone_red_rows': 0.5, 'cone_red_ratio': 0.002,
+        'cone_red_rows': 0.75, 'cone_red_ratio': 0.002,
         'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9, 'cone_red_start_range': 1.5,
     },
     'missions': {
