@@ -5,10 +5,46 @@
 문(좌·우 콘 쌍)이 보일 때까지 직진 → 라바콘 모드 → 콘이 끝나면 --after(m) 더 직진 후 정지·종료.
 구간 관리자를 거치지 않으므로 params.py의 sections.off와 무관 (수정 불필요).
 
-실행 (차, 터미널 2개. 주행 노드와 같이 켜면 명령이 겹치므로 반드시 driver:=false)
-  1) ros2 launch ericar_driver bringup.launch.py driver:=false record:=true bag:=$HOME/bags/cone_<이름>
-  2) python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py
-  조종기 SWB 위(자동)일 때만 움직임. 중단은 Ctrl+C (정지 명령을 보낸 뒤 종료)
+==================== 터미널에 칠 명령 (순서대로) ====================
+노트북과 차를 같은 휴대폰 핫스팟에 연결한 뒤 시작. <차 IP>는 차 화면이나 핫스팟 연결 목록에서 확인.
+
+[0] 노트북 → 차 접속 (터미널 창 2개에서 각각. 비밀번호는 직접 입력)
+    ssh wego@<차 IP>
+
+[1] 차, 터미널 A: 코드 받기 + 빌드 (코드가 바뀌었을 때만)
+    cd ~/ericar_dev_ws/src/ericar && git fetch && git switch cone_fixed && git pull
+    cd ~/ericar_dev_ws && colcon build --packages-select ericar_driver
+
+[2] 차, 터미널 A·B 둘 다: ROS 환경 불러오기 (ssh 접속할 때마다 한 번)
+    source /opt/ros/humble/setup.bash && source ~/wego_ws/install/setup.bash && source ~/ericar_dev_ws/install/setup.bash
+
+[3] 차, 터미널 A: 배터리 확인 (battery_voltage 11 V 미만이면 충전 후 시험)
+    ros2 topic echo /limo_status --once | grep battery_voltage
+
+[4] 차, 터미널 A: 바퀴·라이다·카메라 + 녹화 켜기 (주행 노드 없이. 켜 둔 채로 둠)
+    ros2 launch ericar_driver bringup.launch.py driver:=false record:=true bag:=$HOME/bags/cone_1
+    - 반드시 driver:=false. 주행 노드가 같이 켜지면 명령이 겹쳐서 이 시험은 스스로 종료함
+    - bag 이름(cone_1)은 주행마다 새 이름으로. 이미 있는 이름이면 녹화가 시작되지 않음
+    - 녹화가 필요 없으면 record:=true bag:=... 부분을 뺌
+
+[5] 차, 터미널 B: 인식만 확인 (명령을 보내지 않음. 차를 손으로 밀어 콘 쪽으로 가져가 봄)
+    python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py --dry
+    - 화면에 "콘 N 문 N"이 실제 배치와 맞게 나오고 상태가 approach → cones로 바뀌면 정상
+    - Ctrl+C로 끝냄
+
+[6] 차, 터미널 B: 실제 주행 (차를 첫 콘 쌍 앞 0.5~1.5 m에 통로를 보게 두고, 조종기 SWB를 위(자동)로)
+    python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py
+    - 끝나면 스스로 정지·종료하고 "종료: <이유>. 주행 ... 기록 <CSV 경로>"를 출력
+    - 급할 때: 조종기 SWB를 아래로(즉시 정지) 또는 터미널 B에서 Ctrl+C
+    - 다시 달릴 때는 차를 출발 위치로 옮기고 [6]만 반복 (녹화를 나누려면 [4]를 Ctrl+C 후 새 bag 이름으로 다시)
+
+[7] 끝낼 때: 터미널 B가 끝난 뒤 터미널 A에서 Ctrl+C (녹화 저장)
+
+[8] 기록 확인 (차) / 노트북으로 복사 (노트북에서 실행. CSV는 작아서 복사해도 됨, bag은 복사 금지)
+    ls -t ~/bags/corn_test_*.csv | head -3
+    scp "wego@<차 IP>:~/bags/corn_test_*.csv" .
+======================================================================
+
 옵션
   --dry            명령을 보내지 않고 판단만 출력·기록 (차를 손으로 밀거나 조종기로 몰며 인식 확인)
   --approach 0.15  문을 찾는 동안·통과 뒤 직진 속도 (m/s)
