@@ -28,12 +28,14 @@
     - 녹화가 필요 없으면 record:=true bag:=... 부분을 뺌
 
 [5] 차, 터미널 B: 인식만 확인 (명령을 보내지 않음. 차를 손으로 밀어 콘 쪽으로 가져가 봄)
-    python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py --dry
+    /usr/bin/python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py --dry
+    - 반드시 /usr/bin/python3. dl_env(conda)의 python3는 영상 변환에서 libgdal/libtiff 충돌
+      → "image conversion failed: ... TIFFReadRGBATileExt" 반복, 붉은색 항상 0 (11/12 실차)
     - 화면에 "콘 N 문 N"이 실제 배치와 맞게 나오고 상태가 approach → cones로 바뀌면 정상
     - Ctrl+C로 끝냄
 
 [6] 차, 터미널 B: 실제 주행 (차를 첫 콘 쌍 앞 0.5~1.5 m에 통로를 보게 두고, 조종기 SWB를 위(자동)로)
-    python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py
+    /usr/bin/python3 ~/ericar_dev_ws/src/ericar/ericar_driver/tools/corn_test.py
     - 끝나면 스스로 정지·종료하고 "종료: <이유>. 주행 ... 기록 <CSV 경로>"를 출력
     - 급할 때: 조종기 SWB를 아래로(즉시 정지) 또는 터미널 B에서 Ctrl+C
     - 다시 달릴 때는 차를 출발 위치로 옮기고 [6]만 반복 (녹화를 나누려면 [4]를 Ctrl+C 후 새 bag 이름으로 다시)
