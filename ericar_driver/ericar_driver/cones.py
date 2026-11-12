@@ -156,7 +156,8 @@ class ConeDriving:
         self.width = self.c['cone_gate_width']   # 문 폭 (지난 문 측정값). 콘 하나만 보일 때 사용
         self.remaining = self.travel = self.max_travel = 0.0
         self.confirm = 0
-        self.red = False     # 이번 주기 카메라에 붉은색(콘 색)이 보이는지. lane['cone_red'] (loop.py가 넣음)
+        self.red = False     # 카메라 붉은색(콘 색)이 최근에 보였는지. lane['cone_red'] (loop.py가 넣음)
+        self.red_since = float('inf')   # 붉은색이 마지막으로 보인 뒤 주행 거리(m)
         self.debug = {}
 
     def gate_max(self):
@@ -164,27 +165,39 @@ class ConeDriving:
 
     # ---------- 1. 진입 판단 ----------
     def start_gate(self, posts, wide):
-        """차 앞에 지나갈 문이 있으면 (중점, 폭), 없으면 None
+        """라바콘 모드로 바꿀 때면 (진입 기준점, 문 폭), 아니면 None. 기준점 방향이 첫 진행 방향
 
-        1) 차 정면 좌우 small_object_half_width 안 기둥 2개가 문을 이룸 (간격 cone_gate_min~max)
-        2) 문 중점 방위와 문 방향이 차 정면에서 cone_start_angle 이내
-           → 코너를 아직 도는 중(문이 크게 비스듬함)에는 켜지 않고 차선 주행으로 더 돈 뒤 진입
-        3) 문 중점이 라이다에서 cone_enter_distance 이내 (11/12: 코너 유지 중 일찍 켜져 차선 이탈 → 콘 바로 앞에서 켬)
-        4) 넓은 군집이 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth)에 없음 (3차선 차량 장애물 오진입 방지).
-           문 기둥 자리에 붙어 놓인 콘 덩어리는 통로 가장자리라 해당 없음
-        카메라에 붉은색이 보이면 1) 완화: 좌우 cone_red_half_width, 간격 최대 cone_red_gate_max
+        A. 카메라 붉은색 (11/12 유경): 붉은색이 보이고 라이다 콘 후보가 라이다 앞 cone_enter_distance(앞 방향 거리)
+           안, 좌우 cone_red_half_width 안으로 다가오면 켬. 문(쌍)을 못 찾아도 켜고, 진행 방향은 정면에서 시작
+           (문이 보이면 문 중점). 통과 중 조향은 drive가 문·한쪽 콘으로 정함.
+           11/12 문 중점 0.3 m 기준은 실차에서 안 켜짐: 차가 차로 중앙, 문 중점이 옆으로 비켜 있으면 0.3 m 안에 안 들어옴
+        B. 붉은색 없음 (카메라 끊김 대비): 라이다만으로 문을 찾음
+           1) 차 정면 좌우 small_object_half_width 안 기둥 2개가 문 (간격 cone_gate_min~max)
+           2) 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내 (코너 도는 중에는 안 켬)
+           3) 문 중점이 라이다 앞 cone_enter_distance(앞 방향 거리) 안
+           4) 넓은 군집이 문 안쪽 통로에 없음 (3차선 차량 장애물 오진입 방지)
+        신호등(빨간불) 등 다른 붉은 물체: 라바콘은 S3 구간에서만 켜지므로 해당 없음
         """
         c = self.c
-        half_width = c['cone_red_half_width'] if self.red else c['small_object_half_width']
-        posts = posts[np.abs(posts[:, 1]) < half_width]
+        lidar_x = self.robot['lidar']['x']
+        if self.red:
+            near = posts[(posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
+                         (np.abs(posts[:, 1]) < c['cone_red_half_width'])]
+            if not len(near):
+                return None
+            gates = gate_pairs(posts[np.abs(posts[:, 1]) < c['cone_red_half_width']], c, self.gate_max())
+            k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), c['cone_start_angle'], c['cone_start_angle'])
+            if k is not None:
+                return gates[0][k], float(gates[2][k])
+            return np.array([float(near[:, 0].min()), 0.0]), c['cone_gate_width']
+        posts = posts[np.abs(posts[:, 1]) < c['small_object_half_width']]
         gates = gate_pairs(posts, c, self.gate_max())
         k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), c['cone_start_angle'], c['cone_start_angle'])
         if k is None:
             return None
         middle, normal, gap = gates[0][k], gates[1][k], float(gates[2][k])
         distance = float(np.hypot(middle[0], middle[1]))
-        lidar = [self.robot['lidar']['x'], self.robot['lidar'].get('y', 0.0)]
-        if float(np.hypot(middle[0]-lidar[0], middle[1]-lidar[1])) > c['cone_enter_distance']:
+        if middle[0]-lidar_x > c['cone_enter_distance']:
             return None
         if len(wide):
             normal = normal if normal[0] > 0 else -normal
@@ -260,7 +273,12 @@ class ConeDriving:
             self.active, self.confirm = False, 0
             return None
         c = self.c
-        self.red = float((lane or {}).get('cone_red', 0.0)) >= c['cone_red_ratio']
+        # 붉은색: 지금 보이거나 마지막으로 보인 뒤 cone_red_memory(m) 안. 콘 바로 앞에서는 콘이 화면 밖으로 빠질 수 있음
+        if float((lane or {}).get('cone_red', 0.0)) >= c['cone_red_ratio']:
+            self.red_since = 0.0
+        else:
+            self.red_since += abs(velocity)*dt
+        self.red = self.red_since <= c['cone_red_memory']
         if self.started:
             # 안전장치: 첫 진입 뒤 (첫 문까지 거리 + cone_max_distance) 넘게 가면 끝. 늦게 끝나면 다음 코너를 못 돎
             self.travel += max(0.0, velocity)*dt
