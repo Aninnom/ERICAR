@@ -28,11 +28,11 @@ AutoRace 2026 본선용 LIMO 주행 코드. 팀원 모두 이 레포에서 Claud
 
 - 접속: 휴대폰 핫스팟에 차·노트북 연결 → `ssh wego@<차 IP>` (비밀번호는 사람이 입력)
   - IPv4를 못 받으면 링크 로컬 IPv6: `ping6 ff02::1%<인터페이스>`로 탐색 후 `ssh wego@<fe80::...>%<인터페이스>`
-- 실행은 `bringup.launch.py` 한 줄 (바퀴 `limo_base_ackerman`·라이다·카메라 노출 300·주행 노드·디버그 화면·녹화). 인자 표 `ericar_driver/README.md`
+- 실행은 `bringup.launch.py` 한 줄 (바퀴 `limo_base_ackerman`·라이다·카메라 노출은 설정값·주행 노드·디버그 화면·녹화). 인자 표 `ericar_driver/README.md`
 - 디버그 화면: 노트북에서 `ssh -L 8080:localhost:8080 wego@<차>` 후 `http://localhost:8080`. 주행 노드 재시작 후 새로고침
 - 명령 `/limo/ack_cmd` (`AckermannDrive`, 조향 + = 왼쪽, 약 ±0.42 rad). 조종기 SWB 위(자동)일 때만 움직임, 아래면 정지
 - wego `teleop_launch.py` 사용 금지 (차동 모드라 아커만 odom 미계산, 바퀴 드라이버 중복)
-- 카메라 노출 수동 300 (자동 노출은 노란 선 색이 날아감). bringup이 자동 설정
+- 카메라 노출은 적절한 값을 찾기 위해 값을 수정 중(자동 노출은 노란 선 색이 날아감). bringup이 자동 설정
 - 배터리 11 V 미만이면 충전 후 시험 (`/limo_status`의 `battery_voltage`)
 - 녹화는 차 `~/bags/`. 와이파이로 큰 bag 복사 금지 (망 포화) → 분석은 차에서
 - ssh로 백그라운드 실행한 노드는 SIGINT 무시 → 종료는 SIGTERM. `pkill -f` 패턴이 ssh 명령 자체와 겹치면 셸이 끊김 → PID로 종료
