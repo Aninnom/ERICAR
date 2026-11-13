@@ -157,6 +157,14 @@ def draw_camera(camera, telemetry):
     scale = h / camera.shape[0]
     for x0, y0, x1, y1 in white.get('segments') or []:
         cv2.line(img, (int(x0 * scale), int(y0 * scale)), (int(x1 * scale), int(y1 * scale)), YELLOW, 2)
+    feedback=(((telemetry or {}).get('control', {}).get('parking') or {}).get('feedback') or {})
+    if feedback:
+        color=CYAN if feedback.get('active') else GREY
+        for x0,y0,x1,y1 in feedback.get('pixel_segments') or []:
+            cv2.line(img,(int(x0*scale),int(y0*scale)),(int(x1*scale),int(y1*scale)),color,3)
+        target=feedback.get('reference_pixel')
+        if target:cv2.drawMarker(img,tuple(int(q*scale) for q in target),color,cv2.MARKER_CROSS,14,2)
+        put(img,f"PARK PD {feedback.get('reason','')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f}",6,36,color,.42)
     t = telemetry or {}
     control, lane, lc = t.get('control', {}), t.get('lane', {}), lane_config(t)
     if lc:
@@ -387,6 +395,9 @@ def draw_parking(img, control, live=None):
     if park.get('state')=='parking_approach':
         approach=park.get('approach') or {}
         return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
+    feedback=park.get('feedback') or {}
+    if feedback.get('active'):
+        return f"PARK PD {feedback.get('source')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f} steer {feedback.get('steering_rad',0):+.2f}"
     return (f"PARK {park.get('state', '')} {','.join(states) or 'no gap'}  "
             f"search {park.get('search_distance_m', 0):.2f} turn {park.get('turn_distance_m', 0):.2f}m")[:64]
 
@@ -552,7 +563,11 @@ def status_panel(width, t):
         approach=park.get('approach') or {}
         line(f"TURN IN {approach.get('remaining_m',0):+.2f} m  lead {approach.get('turn_lead_m',0):.2f} m", CYAN)
     stall, limit = control.get('stall_time', 0.0), (ANSWER.get('stall') or {}).get('seconds', 8.0)
-    line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
+    feedback=park.get('feedback') or {}
+    if park.get('state')=='parking_turn' and feedback:
+        line(f"PD {feedback.get('reason','')} steer {feedback.get('steering_rad',0):+.2f}",CYAN if feedback.get('active') else ORANGE)
+    else:
+        line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
     reasons = stop_reasons(t)
     if reasons:
         put(panel, 'SPEED 0: ' + ' / '.join(reasons), 8, min(y + 4, INFO_H - 8), RED, 0.5)

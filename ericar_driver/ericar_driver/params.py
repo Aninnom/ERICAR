@@ -220,6 +220,16 @@ ANSWER_CONFIG = {
         # 양수 offset: 더 일찍 회전. 음수: 더 늦게 회전. 시작 오차·초과 허용은 m
         'approach_start_offset': 0., 'approach_start_tolerance': .02, 'approach_passed_tolerance': .06,
         'approach_timeout': 15., 'approach_distance_limit': 1.2,
+        # 주차 전용 PD. 도색 칸 폭 사용, 장애물 사이 폭과 분리. I항 0으로 초기 적용
+        'pd': {'enabled': True, 'kp': 1.5, 'ki': 0., 'kd': .08,
+               'integral_limit': .10, 'derivative_alpha': .25, 'heading_weight': .35,
+               'reference_distance': .55, 'activate_heading': .70, 'full_heading': .20,
+               'slot_width': .50, 'width_tolerance': .12, 'center_association': .30,
+               'single_association': .12, 'direction_tolerance': .25, 'parallel_tolerance': .15,
+               'merge_distance': .035, 'minimum_ground_length': .10,
+               'ground_near': .30, 'ground_far': 2., 'maximum_extrapolation': .20,
+               'maximum_lateral': 1., 'feedback_timeout': .30, 'steering_rate': .8},
+
         'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 8., 'turn_distance_limit': .85,
         'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
         'slot_depth': .59, 'view_near': .30,

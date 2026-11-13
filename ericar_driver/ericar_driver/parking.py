@@ -1,15 +1,17 @@
-"""parking_auto1: FREE 목표 저장 → 회전 시작점 접근 → 우회전 → 흰 직선 소실 정지"""
+"""parking_auto1: FREE 목표 저장 → 시작점 접근 → 흰 경계선 PD 우회전 → 흰 선 소실 정지"""
 import math
 import numpy as np
 from .common import clip
 from .lidar import body_points
 from .parking_gap import gap_candidates,classify_gap
 from .parking_white import parking_straight_lines
+from .parking_control import ParkingPD
 
 
 class Parking:
     def __init__(self,config):
         self.c=config['answer']['parking'];self.robot=config['robot']
+        self.pd=ParkingPD(self.robot,self.c)
         if not -self.robot['max_steering']<=self.c['turn_steering']<0:raise ValueError('turn_steering must be a bounded right turn')
         if not math.isfinite(self._turn_lead()) or self._turn_lead()<=0:raise ValueError('positive turn lead required')
         if not 0<=self.c['approach_start_tolerance']<=self.c['approach_passed_tolerance']:raise ValueError('invalid approach tolerances')
@@ -20,6 +22,7 @@ class Parking:
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
 
     def start(self,now):
+        self.pd.reset()
         self.state='parking_scan';self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
         self.started=self.last_tick=now;self.turn_started=None;self.selected=None
         self.last_scan=self.last_image=None;self.line_seen=False;self.line_present=False
@@ -37,11 +40,15 @@ class Parking:
         self.state='parking_cancelled';self.reason='EXTERNAL_CANCEL'
 
     def pause(self,now):
+        self.pd.pause()
         self.last_tick=now;self.motion_since=None;self.reason='WAITING_FOR_FRESH_SENSORS'
 
     def _output(self,speed=0.,steering=0.):
+        feedback=dict(self.pd.debug)
+        if self.state in ('parked','parking_failed','parking_cancelled'):
+            feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None)
         self.debug=dict(mode='parking_auto1',state=self.state,reason=self.reason,gap=self.gap_debug,
-                        selected_gap=self.selected,approach=self.approach_debug,white_line=self.line_debug,line_seen=self.line_seen,
+                        selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,white_line=self.line_debug,line_seen=self.line_seen,
                         search_distance_m=self.search_distance,turn_distance_m=self.turn_distance,
                         published_speed=float(speed),steering=float(steering))
         return float(speed),float(steering),self.state
@@ -71,6 +78,7 @@ class Parking:
         if stamp==self.last_image:return False
         self.last_image=stamp
         _,lines=parking_straight_lines(image,self.c)
+        if self.selected is not None:self.pd.update(lines,image.shape,self.selected,stamp)
         self.line_present=bool(lines)
         if lines:self.line_seen=True;self.loss_frames=0
         elif self.line_seen:self.loss_frames+=1
@@ -110,7 +118,7 @@ class Parking:
             return None
         if remaining<=self.c['approach_start_tolerance']:
             self.state='parking_turn';self.turn_started=now;self.turn_distance=0.
-            self.line_seen=False;self.last_image=None;self.reason='ALIGNED_START_FIXED_RIGHT_TURN'
+            self.line_seen=False;self.last_image=None;self.pd.reset();self.reason='ALIGNED_START_FIXED_RIGHT_TURN'
         return None
 
     def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,camera_info=None,search_command=None,angular_velocity=0.):
@@ -160,6 +168,7 @@ class Parking:
             elif rejected_late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             elif self.reason!='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP':self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
         else:
+            self._move_target(self.selected,dt,velocity,angular_velocity)
             self.turn_distance+=abs(velocity)*dt
             if now-self.turn_started>self.c['turn_timeout']:return self.fail('TURN_TIMEOUT')
             if self.turn_distance>self.c['turn_distance_limit']:return self.fail('TURN_DISTANCE_LIMIT')
@@ -169,12 +178,18 @@ class Parking:
                 return self._output()
             if not self.line_seen and now-self.turn_started>self.c['white_acquire_timeout']:
                 return self.fail('WHITE_LINE_NEVER_SEEN')
-            speed=self.c['turn_speed'];steering=self.c['turn_steering']
-            self.reason='RIGHT_TURN_UNTIL_WHITE_LINE_DISAPPEARS'
+            speed=self.c['turn_speed'];steering,ready=self.pd.command(now,dt)
+            if not ready:
+                self.reason='WAITING_FOR_PARKING_LINE_FEEDBACK';self.motion_since=None
+                return self._output()
+            self.reason='PARKING_PD_BOUNDARY_ALIGNMENT' if self.pd.debug.get('active') else 'RIGHT_TURN_UNTIL_WHITE_LINE_DISAPPEARS'
         steering=clip(steering,-self.robot['max_steering'],self.robot['max_steering'])
         if not self._clear(scan,steering,speed):
             self.reason=self.clear_reason;self.motion_since=None
             return self._output()
+        if self.state=='parking_turn' and self.pd.debug.get('steering_transition'):
+            self.reason='PARKING_PD_STEERING_TRANSITION';self.motion_since=None
+            return self._output(0.,steering)
         if abs(velocity)>.005:self.motion_since=now
         elif self.motion_since is None:self.motion_since=now
         elif now-self.motion_since>self.c['motion_timeout']:return self.fail('NO_ODOMETRY_MOTION')
