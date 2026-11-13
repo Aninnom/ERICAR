@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from .common import clip
+from .cones import red_info
 from .driver import Driver
 from .lane_vision import LaneVision
 from .params import ANSWER_CONFIG
@@ -135,6 +136,9 @@ class ControlLoop:
                 self.vision.fork_direction = self.driver.fork_direction()
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
+                # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산
+                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') else None,
+                                                c['lidar']))
                 self.lane_stamp = s.image_stamp
                 self.lane_bias = self.driver.fork_bias
             lane = self.lane_cache
@@ -166,7 +170,8 @@ class ControlLoop:
         if now - self.detection_debug_stamp >= 1.0 / c['debug_rate_hz']:
             lane = self.lane_cache or {}
             keys = ('valid', 'error', 'heading', 'center_px', 'forward', 'windows',
-                    'fits', 'fit_spans', 'pursuit', 'curvature', 'colors')
+                    'fits', 'fit_spans', 'pursuit', 'curvature',
+                    'colors', 'solid', 'zigzag', 'abnormal', 'stop_distance', 'stop_candidates')
             control = dict(self.driver.debug, steering=steering, speed=speed,
                            state=state, sensor_ready=sensor_ready,
                            controller_state=self.driver.state)
@@ -176,7 +181,8 @@ class ControlLoop:
                           lane={key: lane[key] for key in keys if key in lane},
                           display=dict(lane=c['lane'], pid=c['pid'], detector=dict(timeout=c['detector']['timeout']),
                                        sensor_timeout=c['sensor_timeout']))
-            out.telemetry = json.dumps(packet)
+            # default: 담당별 debug 값에 numpy 형이 섞여도 제어 주기가 죽지 않게 (표시 전용 값)
+            out.telemetry = json.dumps(packet, default=lambda v: v.tolist() if hasattr(v, 'tolist') else str(v))
             self.detection_debug_stamp = now
         if state != self.last_state:
             out.status = state

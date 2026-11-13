@@ -7,6 +7,9 @@
 margin(°) 안으로 들어오면 구간 +1 (margin 25 → −65°, −155°, −245°, −335°). 되돌아가지 않음
 - 갈림길 45° 꺾임·차선 변경·수동 조작 뒤 복귀처럼 구간 안에서 좌우로 크게 흔들려도 누적 각도는 기준에 못 미침
   (11/11 segA_1111_lap2b: "최근 2 m 안 65° 회전" 방식은 수동 개입 뒤 복귀 회전을 코너로 잘못 셈 → 누적 각도로 변경)
+- 전환 보류(hold): 라바콘 통과 중에는 콘 배치가 차를 오른쪽으로 크게 돌릴 수 있음 → 그동안 누적 회전은 계속 쌓되
+  구간은 올리지 않음. 보류가 풀린 시점에도 기준을 넘어 있으면 그때 전환 (라바콘이 4번 코너 안에서 끝난 경우)
+  (11/13 유경 라바콘 영상: 우회전을 강제하는 배치에서 통과 도중 S3 → S4, 라바콘 꺼지고 차선 추종)
 - IMU 실측: 정지 치우침 0.3°/분 이하, 한 바퀴 누적 −354~−366° → 한 바퀴 동안 오차는 여유 안
 """
 import math
@@ -30,6 +33,8 @@ class SectionManager:
         self.distance = 0.0       # 이 구간에 들어온 뒤 주행 거리(m)
         self.yaw = -math.radians(90.0*self.index)   # 출발 뒤 누적 회전(rad, + 왼쪽). 재출발은 그 구간 직선 방향에서 시작
         self.turned = 0.0         # 이 구간 직선 방향에서 오른쪽으로 돈 각도(°)
+        self.held = False         # 전환 기준을 넘었지만 보류 중인지 (디버그 표시용)
+        self.held_distance = 0.0  # 기준을 넘은 채 보류로 주행한 거리(m)
 
     def missions(self):
         return SECTION_MISSIONS[self.index]
@@ -40,13 +45,21 @@ class SectionManager:
             return False
         return not self.c['enabled'] or mission in self.missions()
 
-    def update(self, yaw_rate, velocity, dt):
+    def update(self, yaw_rate, velocity, dt, hold=False):
+        """hold: 이번 주기 구간 전환 보류 (driver.section_hold). 회전·거리 적분은 그대로"""
         self.yaw += yaw_rate*dt
         self.distance += abs(velocity)*dt
         self.turned = -math.degrees(self.yaw)-90.0*self.index
         if self.turned >= 90.0-self.c['margin'] and self.index < len(SECTION_MISSIONS)-1:
+            # 안전장치: 보류가 안 풀려도 기준을 넘은 채 hold_distance(m) 가면 전환 (다음 구간 미션이 영영 안 켜지는 일 방지)
+            if hold and self.held_distance < self.c.get('hold_distance', 3.0):
+                self.held = True
+                self.held_distance += abs(velocity)*dt
+                return False
+            self.held, self.held_distance = False, 0.0
             self.index += 1
             self.distance = 0.0
             self.turned -= 90.0
             return True
+        self.held, self.held_distance = False, 0.0
         return False

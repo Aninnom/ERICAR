@@ -33,13 +33,13 @@ DT = 0.05
 # ---------- 1. 구간 관리자 단독 ----------
 
 def drive(manager, segments, speed=0.3, bias=0.0, scale=1.0):
-    """segments: (거리 m, 회전 °, + 왼쪽) 목록을 speed로 주행. 구간 번호 기록 반환"""
+    """segments: (거리 m, 회전 °, + 왼쪽[, 전환 보류]) 목록을 speed로 주행. 구간 번호 기록 반환"""
     seen = [manager.index]
-    for length, turn in segments:
+    for length, turn, *hold in segments:
         steps = max(1, int(round(length / speed / DT)))
         rate = math.radians(turn) / (steps * DT)
         for _ in range(steps):
-            manager.update(rate * scale + bias, speed, DT)
+            manager.update(rate * scale + bias, speed, DT, hold=bool(hold and hold[0]))
             if manager.index != seen[-1]:
                 seen.append(manager.index)
     return seen
@@ -72,14 +72,27 @@ def test_section_manager():
     assert drive(SectionManager(c), [(2, 0), (0.6, -58), (1.0, -32), (2, 0)], speed=0.2) == [0, 1]
     # 재출발 구간 지정 (그 구간 직선 방향에서 시작), 마지막 구간 뒤에는 더 올라가지 않음
     assert drive(SectionManager(c, 3), [(1, 0), (1, -90), (2, 0), (1, -90), (1, 0)]) == [3, 4]
+    # 라바콘이 우회전을 강제하는 배치 (11/13 유경 영상): 통과 중(보류) 오른쪽 80° → 되돌아옴. S3 유지, 뒤 4번 코너에서만 S4
+    cones_right = [(1, 0), (0.8, -80, True), (0.5, 0, True), (0.8, 80, True)]
+    assert drive(SectionManager(c, 3), cones_right + [(0.5, 0)]) == [3]
+    assert drive(SectionManager(c, 3), cones_right + [(0.3, 0), (1, -90), (2, 0)]) == [3, 4]
+    assert drive(SectionManager(c, 3), [(1, 0), (0.8, -80), (0.5, 0)]) == [3, 4], '보류 없으면 예전처럼 전환 (문제 재현)'
+    # 라바콘이 4번 코너 안에서 끝남: 보류가 풀리는 순간 전환
+    late = SectionManager(c, 3)
+    assert drive(late, [(1, 0), (0.9, -80, True)]) == [3] and late.held
+    assert drive(late, [(0.1, -10), (1, 0)]) == [3, 4] and not late.held and abs(late.turned) < 1
+    # 보류가 끝내 안 풀림: 기준 넘은 채 hold_distance 가면 전환
+    stuck = SectionManager(c, 3)
+    assert drive(stuck, [(1, 0), (1, -90, True), (c['hold_distance']-0.5, 0, True)]) == [3]
+    assert drive(stuck, [(0.6, 0, True)]) == [3, 4]
     disabled = SectionManager(dict(c, enabled=False))
     assert disabled.allows('parking') and disabled.allows('lane_change')
     manager = SectionManager(c)
     assert manager.allows('slow') and not manager.allows('pedestrian') and not manager.allows('cones')
-    # 라바콘은 기본값에서 꺼 둠 (sections.off). 목록에서 빼면 S3에서만 켜짐
-    assert 'cones' in c['off'] and not SectionManager(c, 3).allows('cones') and not disabled.allows('cones')
-    on = SectionManager(dict(c, off=[]), 3)
-    assert on.allows('cones') and not SectionManager(dict(c, off=[]), 2).allows('cones')
+    # 라바콘: 기본값에서 S3에서만 켜짐 (11/12 sections.off에서 뺌). 목록에 넣으면 구간과 무관하게 꺼짐
+    assert 'cones' not in c['off'] and SectionManager(c, 3).allows('cones') and not SectionManager(c, 2).allows('cones')
+    off = dict(c, off=['cones'])
+    assert not SectionManager(off, 3).allows('cones') and not SectionManager(dict(off, enabled=False)).allows('cones')
     print('구간 관리자 단독 통과')
 
 
@@ -228,8 +241,48 @@ def test_stall_guard():
     print('멈춤 방지 시험 통과')
 
 
+def test_cone_hold():
+    """라바콘 통과 중 오른쪽으로 80° 돌아도 S3·라바콘 모드 유지, 끝난 뒤 4번 코너에서 S4 (11/13)"""
+    import yaml
+    from ericar_driver.driver import Driver
+    robot = yaml.safe_load(open(CONFIG))['robot']
+
+    def run(hold):
+        c = copy.deepcopy(ANSWER_CONFIG)
+        c['sections']['off'] = []
+        c['missions']['start_stage'] = 'cones'
+        driver = Driver({'answer': c, 'robot': robot})
+        cones = driver.cones
+        # 라바콘 담당 코드 대신 가짜: 켜져 있는 동안 고정 명령, 구간이 허용하지 않으면 꺼짐 (실제 update와 같은 규칙)
+        def fake(lane, scan, velocity, yaw_rate, dt, enabled):
+            if not enabled or cones.done:
+                cones.active = False
+                return None
+            return (0.2, -0.3) if cones.active else None
+        cones.update = fake
+        cones.active = hold
+        t, log = 0.0, []
+        # 1.6 s 동안 오른쪽 80° → 0.5 s 직진 → 1.6 s 동안 왼쪽 80° (콘 통로), 그 뒤 라바콘 끝 → 직진 1 s → 4번 코너 90° → 직진
+        for seconds, turn, in_cones in [(1.6, -80, True), (0.5, 0, True), (1.6, 80, True),
+                                        (1.0, 0, False), (3.0, -90, False), (1.0, 0, False)]:
+            if not in_cones and cones.active:
+                cones.active, cones.done = False, True
+            for _ in range(int(round(seconds/DT))):
+                _, _, mode = driver.update(lane_ok(), scan_with(), [], t, 0.3, t,
+                                           yaw_rate=math.radians(turn)/seconds)
+                log.append((in_cones, driver.sections.index, mode))
+                t += DT
+        return log
+
+    log = run(True)
+    assert all(index == 3 and mode == 'cones' for inside, index, mode in log if inside), '라바콘 도중 구간 전환'
+    assert log[-1][1] == 4 and [i for _, i, _ in log].count(4) < 2.5/DT, '라바콘 뒤 4번 코너에서 S4 전환 안 됨'
+    print('라바콘 중 구간 전환 보류 통과')
+
+
 if __name__ == '__main__':
     test_section_manager()
+    test_cone_hold()
     test_stall_guard()
     test_missing_signs()
     test_detector_loss()
