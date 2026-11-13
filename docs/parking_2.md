@@ -1,6 +1,6 @@
 # parking_2: 단순 FREE 트리거·흰 직선 소실 정지
 
-main 4c59fb3에서 별도 브랜치 구성. 이전 parking_yolo_demo의 경로 계획·Pure Pursuit·odom 상대경로·가시성 구간 검사·가상 통로 모델을 실행하지 않음. main의 단일 AckermannDrive 발행 경로 유지.
+main 단일 노드에 내장. 이전 parking_yolo_demo의 경로 계획·Pure Pursuit·odom 상대경로·가시성 구간 검사·가상 통로 모델을 실행하지 않음. main의 단일 AckermannDrive 발행 경로 유지.
 
 ## 요청 동작
 
@@ -14,7 +14,7 @@ main 4c59fb3에서 별도 브랜치 구성. 이전 parking_yolo_demo의 경로 �
             parked: 속도 0 명령, 재출발 안 함
 ```
 
-FREE는 기존 검출과 같은 기준: 오른쪽 두 반사점 군집 사이 폭·행 정렬 검사, 내부 장애물 점 거부, 12개 검사점 중 최소 8개를 넘어가는 유효 반사 확인. 디버그와 제어가 같은 gap_candidates/classify_gap 사용. UNKNOWN을 FREE로 바꾸지 않음. FREE 이후 UNKNOWN 깜빡임은 진입을 취소하지 않음.
+FREE는 기존 검출과 같은 기준: 오른쪽 두 반사점 군집 사이 폭·행 정렬 검사, 내부 장애물 점 거부, 12개 검사점 중 최소 8개를 넘어가는 유효 반사 확인. 두 물체 사이에 낀 군집이 앞줄보다 깊으면(빈틈 너머로 보이는 가벽 조각) 건너뛰고 앞줄 쌍을 검사. 디버그와 제어가 같은 gap_candidates/classify_gap 사용. UNKNOWN을 FREE로 바꾸지 않음. FREE 이후 UNKNOWN 깜빡임은 진입을 취소하지 않음.
 
 검색 중에는 main의 조향을 사용(차선 valid일 때), 차선을 못 보면 직진 조향으로 서행. 이전처럼 lane.valid=false만으로 검색 전진을 차단하지 않음. 실제 예상 차체 경로에 장애물 점이 있으면 정지. NaN 등 무효 scan 비율이 높으면 정지. 무반사 0 해석은 robot.yaml의 기존 zero_is_no_return 정책 유지.
 
@@ -42,27 +42,11 @@ FREE는 기존 검출과 같은 기준: 오른쪽 두 반사점 군집 사이 �
 
 ## 리모 설치
 
-별도 workspace 권장. 기존 센서·주행을 먼저 종료:
+레포 `CLAUDE.md` "작업 흐름" 그대로 (차는 받기만 함). 기존 센서·주행을 먼저 종료:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/wego_ws/install/setup.bash
-mkdir -p ~/parking_2_ws/src
-git clone --single-branch --branch parking_2 https://github.com/Aninnom/ERICAR.git ~/parking_2_ws/src/ERICAR
-cd ~/parking_2_ws
-colcon build --packages-select ericar_driver
-source install/setup.bash
-```
-
-재업데이트:
-
-```bash
-cd ~/parking_2_ws/src/ERICAR
-git status --short
-git pull --ff-only origin parking_2
-cd ~/parking_2_ws
-colcon build --packages-select ericar_driver
-source install/setup.bash
+cd ~/ericar_dev_ws/src/ericar && git fetch && git switch <브랜치> && git pull
+cd ~/ericar_dev_ws && colcon build --packages-select ericar_driver && source install/setup.bash
 ```
 
 ## 실행
@@ -72,7 +56,7 @@ source install/setup.bash
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/wego_ws/install/setup.bash
-source ~/parking_2_ws/install/setup.bash
+source ~/ericar_dev_ws/install/setup.bash
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=0
 ros2 launch ericar_driver bringup.launch.py driver:=false debug:=true record:=false
@@ -85,7 +69,7 @@ ros2 launch ericar_driver bringup.launch.py driver:=false debug:=true record:=fa
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/wego_ws/install/setup.bash
-source ~/parking_2_ws/install/setup.bash
+source ~/ericar_dev_ws/install/setup.bash
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=0
 export OMP_NUM_THREADS=2

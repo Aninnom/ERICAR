@@ -35,22 +35,28 @@ def gap_candidates(scan,robot,config,road_angle=0.):
     tangent=np.array([c,s]);normal=np.array([s,-c])
     candidates=[];gaps=[]
     padding=config['gap_edge_padding']
-    for first,second in zip(clusters,clusters[1:]):
-        left=float(first['hi'][0]+padding);right=float(second['lo'][0]-padding)
-        width=right-left
-        level=float(max(first['hi'][1],second['hi'][1])+config['gap_front_padding'])
-        reason='CANDIDATE'
-        if abs(first['hi'][1]-second['hi'][1])>config['gap_row_tolerance']:reason='FRONTS_NOT_ALIGNED'
-        elif not robot['width']+2*config['body_margin']+config['gap_extra_width']<=width<=config['gap_max_width']:reason='GAP_WIDTH_REJECTED'
-        elif (left+right)/2<config['view_near']:reason='GAP_BEHIND_APPROACH'
-        gaps.append(dict(width=width,reason=reason,center_road=[(left+right)/2,level]))
-        if reason!='CANDIDATE':continue
-        entrance=np.array([(left+right)/2,level])@rotation.T
-        depth=config['slot_depth']
-        polygon=np.array([entrance-width/2*tangent,entrance+width/2*tangent,
-                          entrance+width/2*tangent+depth*normal,entrance-width/2*tangent+depth*normal])
-        candidates.append(dict(entrance=entrance.tolist(),tangent=tangent.tolist(),normal=normal.tolist(),
-            width=width,depth=depth,polygon=polygon.tolist(),source='lidar_obstacle_gap',requires_measured_rays=True))
+    # 앞줄 물체 쌍 검사. 사이에 낀 군집이 앞줄보다 깊으면(빈틈 너머로 보이는 벽 조각 등) 건너뜀
+    # 칸 안쪽에 있는 군집은 classify_gap의 내부 반사점 검사가 OCCUPIED로 처리
+    for i,first in enumerate(clusters):
+        for j in range(i+1,len(clusters)):
+            second=clusters[j]
+            front=max(first['hi'][1],second['hi'][1])-config['gap_row_tolerance']
+            if any(between['hi'][1]>front for between in clusters[i+1:j]):break
+            left=float(first['hi'][0]+padding);right=float(second['lo'][0]-padding)
+            width=right-left
+            level=float(max(first['hi'][1],second['hi'][1])+config['gap_front_padding'])
+            reason='CANDIDATE'
+            if abs(first['hi'][1]-second['hi'][1])>config['gap_row_tolerance']:reason='FRONTS_NOT_ALIGNED'
+            elif not robot['width']+2*config['body_margin']+config['gap_extra_width']<=width<=config['gap_max_width']:reason='GAP_WIDTH_REJECTED'
+            elif (left+right)/2<config['view_near']:reason='GAP_BEHIND_APPROACH'
+            gaps.append(dict(width=width,reason=reason,center_road=[(left+right)/2,level]))
+            if reason!='CANDIDATE':continue
+            entrance=np.array([(left+right)/2,level])@rotation.T
+            depth=config['slot_depth']
+            polygon=np.array([entrance-width/2*tangent,entrance+width/2*tangent,
+                              entrance+width/2*tangent+depth*normal,entrance-width/2*tangent+depth*normal])
+            candidates.append(dict(entrance=entrance.tolist(),tangent=tangent.tolist(),normal=normal.tolist(),
+                width=width,depth=depth,polygon=polygon.tolist(),source='lidar_obstacle_gap',requires_measured_rays=True))
     boxes=[]
     for i,b in enumerate(clusters):
         lo,hi=b['lo'],b['hi']

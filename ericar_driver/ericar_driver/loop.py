@@ -46,8 +46,8 @@ def sensor_status(config, state, ages, available):
     """Require the inputs used by this state, keeping lidar/odometry mandatory.
 
     표지판 검출(YOLO)은 필수 아님: 끊기면 표지판 미션만 꺼지고 차선·라이다 주행 계속 (ControlLoop.step)"""
-    grid_tracking = state in ('parking_plan','parking_track','parking_verify','parking_failed','parking_cancelled','parked')
-    required_camera = not grid_tracking
+    parking_ended = state in ('parking_failed', 'parking_cancelled', 'parked')
+    required_camera = not parking_ended
     ready = (available['scan'] and 0 <= ages['scan'] < config['sensor_timeout'] and
              0 <= ages['odometry'] < config['odometry_timeout'])
     if required_camera:
@@ -153,7 +153,7 @@ class ControlLoop:
                 self.vision.memory = {}
                 self.vision.previous_center = None
                 self.lane_stamp = None
-            if self.driver.state not in ('parking_plan','parking_track','parking_verify','parking_failed','parking_cancelled','parked'):
+            if self.driver.state not in ('parking_failed', 'parking_cancelled', 'parked'):
                 age = max(now-s.image_stamp, .001)
                 limit = c.get('max_image_travel', .04) / age
                 speed = clip(speed, -limit, limit)

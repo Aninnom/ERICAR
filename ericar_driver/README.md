@@ -1,5 +1,3 @@
-> **parking_2 브랜치:** parking 표지판 → 서행 FREE 검색 → 고정 우회전 → 흰 직선 소실 정지. [설치·동작·설정](../docs/parking_2.md). 이전 경로 계획 방식 사용하지 않음.
-
 # ericar_driver
 
 실차 주행 노드. 멘토 ORDA `answer.py`(hello-osy/2026-orda-mentoring, 613c9b4)를 역할별 파일로 분리. 노드 하나 구조 유지.

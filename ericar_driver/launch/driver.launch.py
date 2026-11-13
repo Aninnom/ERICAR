@@ -22,7 +22,7 @@ def generate_launch_description():
         DeclareLaunchArgument('config', default_value=default_config),
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/models/best.pt')),
         DeclareLaunchArgument('yolo', default_value='true', description='false면 YOLO 없이 차선·라이다만'),
-        DeclareLaunchArgument('parking_test', default_value='false', description='true면 0.12m/s 차선 주행·표지판 후 격자 탐색하는 주차 시험'),
+        DeclareLaunchArgument('parking_test', default_value='false', description='true면 주차 단독 시험: 0.12 m/s 차선 주행, parking 표지판 뒤 빈칸 탐색'),
         DeclareLaunchArgument('start_stage', default_value='slow',
                               description='시작 구간의 미션: slow(S0) | pedestrian(S1) | fork(S2) | cones(S3) | traffic·parking(S4)'),
         Node(

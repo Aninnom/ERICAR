@@ -173,6 +173,18 @@ def test_viewer_and_controller_use_same_white_and_gap_decisions(monkeypatch):
     assert normal.shape==frame.shape
 
 
+def test_wall_seen_through_gap_does_not_hide_free_slot():
+    # 대회장 가벽: 두 LIMO 사이로 보이는 뒤쪽 벽 조각이 군집으로 끼어도 앞줄 쌍을 검사
+    c=config();p=c['answer']['parking']
+    for wall_y in (-.95,-1.1,-1.3):
+        data=laser(c,boxes=[(.15,.4,-.84,-.25),(.95,1.2,-.84,-.25),(-1.,3.,wall_y-.05,wall_y)])
+        candidates,_=gap_candidates(data,c['robot'],p)
+        assert [classify_gap(b,data,c['robot'],p)[0] for b in candidates]==['FREE'],wall_y
+    # 앞줄 물체가 사이에 있으면 건너뛰지 않음 (가운데 칸 점유)
+    data=laser(c,boxes=[(.15,.4,-.84,-.25),(.55,.8,-.84,-.25),(.95,1.2,-.84,-.25),(-1.,3.,-1.,-.95)])
+    assert not gap_candidates(data,c['robot'],p)[0]
+
+
 def test_line_acquisition_timeout_and_turn_limit_are_stops():
     c=config();p=Parking(c);p.start(0.);step(p,laser(c))
     p.turn_distance=c['answer']['parking']['turn_distance_limit']

@@ -2,10 +2,8 @@
 # 출처: hello-osy/2026-orda-mentoring src/orda_sim/orda_sim/answer.py (613c9b4)
 from pathlib import Path
 import sys
-import math
 import json
 import cv2
-from collections import deque
 import threading
 
 import rclpy
@@ -13,7 +11,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from ackermann_msgs.msg import AckermannDrive
-from sensor_msgs.msg import Image, Imu, LaserScan, CameraInfo
+from sensor_msgs.msg import Image, Imu, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
@@ -37,6 +35,7 @@ def load_detector(config, weights):
     import torch
     threads = int(c['detector'].get('cpu_threads', config['environment'].get('cpu_threads', 2)))
     torch.set_num_threads(threads)
+    detector.add_callback('on_predict_start', lambda _: torch.set_num_threads(threads))
     names=set(detector.names.values())
     if c['parking'].get('test_wait_for_sign',False):
         if 'parking' not in names:
@@ -67,9 +66,6 @@ class DriverNode(Node):
         self.velocity = 0.0
         self.angular_velocity = 0.0
         self.odom_stamp = -1e9
-        self.pose = None
-        self.camera_info = None
-        self.pose_history = deque(maxlen=120)
         self.yaw_rate = 0.0
         self.imu_stamp = -1e9
         self.detector_failures = 0
@@ -84,7 +80,6 @@ class DriverNode(Node):
         self.debug = self.create_publisher(Image, topics.get('debug_image', '/answer/debug_image'), qos_profile_sensor_data)
         self.detection_output = self.create_publisher(String, topics.get('detections', '/answer/detections'), 10)
         self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
-        self.create_subscription(CameraInfo, topics.get('camera_info','/camera/color/camera_info'), self.on_camera_info, qos_profile_sensor_data)
         self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
         # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
@@ -94,7 +89,7 @@ class DriverNode(Node):
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
             self.worker.start()
-        self.get_logger().info('PARKING_2: sign → slow FREE search → fixed right turn → white-line loss stop')
+        self.get_logger().info('정답 코드 시작: YOLO + camera lane + lidar; absolute pose is unused.')
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
@@ -108,10 +103,6 @@ class DriverNode(Node):
         except Exception as error:
             self.get_logger().error(f'image conversion failed: {error}')
 
-    def on_camera_info(self,message):
-        self.camera_info=dict(width=message.width,height=message.height,k=tuple(message.k),
-                              d=tuple(message.d),model=message.distortion_model)
-
     def on_scan(self, message):
         self.scan = scan_sectors(message.ranges, message.angle_min, message.angle_increment,
                                  message.range_min, message.range_max, self.c['lidar'])
@@ -121,24 +112,6 @@ class DriverNode(Node):
         self.velocity = message.twist.twist.linear.x
         self.angular_velocity = message.twist.twist.angular.z
         self.odom_stamp = stamp_of(message)
-        self.pose=None
-        try:
-            if message.header.frame_id!='odom' or message.child_frame_id!='base_link':
-                return
-            p=message.pose.pose.position;q=message.pose.pose.orientation
-            norm=math.sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w)
-            if norm<1e-8 or not all(math.isfinite(v) for v in (p.x,p.y,p.z,norm)):
-                return
-            x,y,z,w=q.x/norm,q.y/norm,q.z/norm,q.w/norm
-            if 1-2*(x*x+y*y)<math.cos(math.radians(5)):
-                return
-            self.pose=(p.x,p.y,math.atan2(2*(w*z+x*y),1-2*(y*y+z*z)))
-            if self.pose_history and self.odom_stamp<=self.pose_history[-1][0]:
-                self.pose_history.clear()
-            self.pose_history.append((self.odom_stamp,self.pose))
-        except (AttributeError,ValueError):
-            # 기존 가짜 센서/불완전 odom은 일반 주행 가능, 주차 위치 제어는 대기
-            self.pose=None
 
     def on_parking_cancel(self,message):
         if message.data and (self.loop.driver.state.startswith('parking_') or self.loop.driver.state=='parked' or self.c['parking'].get('test_wait_for_sign',False)):
@@ -152,6 +125,7 @@ class DriverNode(Node):
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
     def detect(self):
+        import torch
         c = self.c
         last_stamp = None
         while not self.stop_event.is_set():
@@ -167,6 +141,7 @@ class DriverNode(Node):
                     results = self.detector.predict(frame, conf=c['detector']['confidence'],
                                                     imgsz=c['detector']['image_size'],
                                                     device=c['detector']['device'], verbose=False)[0]
+                    torch.set_num_threads(self.threads)
                     objects = []
                     h, w = frame.shape[:2]
                     for box in results.boxes:
@@ -207,8 +182,7 @@ class DriverNode(Node):
                               detector_ok=self.detector_failures < self.c['detector']['failure_limit'],
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
-                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
-                              pose=self.pose,pose_history=tuple(self.pose_history),camera_info=self.camera_info)
+                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp)
         out = self.loop.step(sensors)
         elapsed=self.now()-sensors.now
         fresh=0<=elapsed<self.c['parking']['command_deadline']

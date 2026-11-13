@@ -66,7 +66,7 @@ class Driver:
 
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
-        if self.state in ('parking_scan','parking_turn','parking_plan','parking_track','parking_verify'):
+        if self.state in ('parking_scan', 'parking_turn'):
             self.parking.pause(now)
 
     def leave_mission(self, mission, now):
