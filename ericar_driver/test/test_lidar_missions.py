@@ -148,6 +148,38 @@ def cone_layout(kind, seed=0):
     return left, right
 
 
+def gate_layout(kind, seed=0):
+    """좌·우 한 쌍(문)이 띄엄띄엄 놓인 배치. 줄이 아니고 쌍 개수·간격을 모름 (11/12 미션 설명). 반환 (왼쪽, 오른쪽)"""
+    def pairs(gates):   # gates: [(앞 거리, 중앙 y, 폭)]
+        return [(x, y + w/2) for x, y, w in gates], [(x, y - w/2) for x, y, w in gates]
+    if kind == 'two':          # 구간 처음과 끝에만 한 쌍씩
+        return pairs([(0, 0, .55), (2.0, 0, .55)])
+    if kind == 'three':        # 1 m마다 한 쌍
+        return pairs([(0, 0, .6), (1.0, 0, .6), (2.0, 0, .6)])
+    if kind == 'shift':        # 쌍마다 중앙이 옆으로 옮겨 감 (차선과 무관한 새 길)
+        return pairs([(0, 0, .55), (0.9, .25, .55), (1.8, -.05, .55)])
+    if kind == 'stuck':        # 쌍마다 한쪽에 콘 3개를 붙여 놓음 (라이다에는 넓은 한 덩어리)
+        left, right = pairs([(0, 0, .6), (1.0, .1, .6), (2.0, 0, .6)])
+        return [(x + d, y) for x, y in left for d in (0, .08, .16)], right
+    # random: 쌍 2~5개, 구간 2.1 m, 폭 0.45~0.75, 중앙 ±0.2씩 이동(최대 ±0.3), 좌·우 콘 앞뒤 ±0.08 어긋남
+    rng = np.random.default_rng(seed)
+    count = int(rng.integers(2, 6))
+    xs = np.linspace(0, 2.1, count) + np.r_[0, rng.uniform(-.15, .15, count - 1)]
+    left, right, y = [], [], 0.0
+    for x in xs:
+        w = rng.uniform(.45, .75)
+        left.append((x + rng.uniform(-.08, .08), y + w/2))
+        right.append((x + rng.uniform(-.08, .08), y - w/2))
+        y = float(np.clip(y + rng.uniform(-.2, .2), -.3, .3))
+    return left, right
+
+
+def corner_start(first_x=0.0, angle=45.0, radius=0.9, straight=0.5):
+    """우회전 코너를 angle(도) 남긴 위치·방향. 코너가 끝나고 straight(m) 뒤에 첫 콘(first_x)"""
+    a = math.radians(angle)
+    return first_x - straight - radius*math.sin(a), -radius*(1 - math.cos(a)), a
+
+
 def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_speed=0.3):
     c = config()
     cones_driver = ConeDriving(c, ROBOT)
@@ -155,16 +187,19 @@ def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_s
     cones = list(left) + list(right) + list(others)
     obstacles = outline(cones, boxes)
     end_x = max(x for x, _ in cones) + 1.5
-    result = dict(start_x=None, end_x=None, min_clear=np.inf, wrong_side=0, stalled=False)
-    scan = None
+    result = dict(start_x=None, end_x=None, min_clear=np.inf, wrong_side=0, stalled=False, entries=0)
+    scan, was_active = None, False
     for k in range(int(40/DT)):
         if k % 2 == 0:
             scan = scan_at(car.pose, cones, list(boxes), c['lidar'])
         command = cones_driver.update(lane_seen(car.pose, 0.0), scan, car.v, car.yaw_rate(), DT, True)
         if cones_driver.active and result['start_x'] is None:
             result['start_x'] = car.x
-        if cones_driver.done and result['end_x'] is None:
+        # 콘이 안 보이는 사이 차선 주행으로 돌아갔다 다시 켜질 수 있음 → 마지막으로 꺼진 위치를 종료로 봄
+        if was_active and not cones_driver.active:
             result['end_x'] = car.x
+        result['entries'] += cones_driver.active and not was_active
+        was_active = cones_driver.active
         if command is None:
             command = (lane_speed, follow(car.pose, 0.0))
         previous_x = car.x
@@ -190,9 +225,31 @@ def test_cones_pass():
         r = run_cones(*cone_layout(kind, seed))
         print(f"라바콘 {kind:6s} {seed}: 시작 x {r['start_x']!s:.5} 종료 x {r['end_x']!s:.5} "
               f"최소 여유 {r['min_clear']:.3f} m, 바깥 통과 {r['wrong_side']}, 종료 후 y {r['final_y']:+.3f}")
-        assert r['start_x'] is not None and r['start_x'] < -0.2, (kind, seed, r)
+        # 11/12 진입 시점을 문 중점이 라이다 0.3 m 안으로 늦춤 → 엇갈림 배치(첫 문이 비스듬)는 차 앞부분이 첫 콘 옆일 때 진입
+        # (shift 0.06, random 0 0.03). 바깥 통과·접촉 없음이 기준. 대회 배치는 좌·우 쌍(test_cone_gates)
+        assert r['start_x'] is not None and r['start_x'] < 0.1, (kind, seed, r)
         assert r['end_x'] is not None and r['end_x'] > 2.0, (kind, seed, r)
         assert r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'], (kind, seed, r)
+
+
+def test_cone_gates():
+    """줄이 아닌 좌·우 쌍 배치: 정면 진입 + 코너를 30°·45° 남기고 비스듬히 진입"""
+    layouts = ([('two', 0), ('three', 0), ('shift', 0), ('stuck', 0)] + [('random', s) for s in range(12)])
+    starts = {'정면': (-1.6, 0.03, 0.04), '코너 30°': corner_start(angle=30), '코너 45°': corner_start(angle=45)}
+    failed = []
+    for kind, seed in layouts:
+        left, right = gate_layout(kind, seed)
+        last = max(x for x, _ in left + right)
+        for name, start in starts.items():
+            r = run_cones(left, right, start=start)
+            ok = (r['start_x'] is not None and r['start_x'] < -0.1 and r['end_x'] is not None
+                  and r['end_x'] > last and r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'])
+            print(f"라바콘 쌍 {kind:6s} {seed:2d} {name:7s}: 시작 x {r['start_x']!s:.5} 종료 x {r['end_x']!s:.5} "
+                  f"진입 {r['entries']}회, 최소 여유 {r['min_clear']:.3f} m, 바깥 통과 {r['wrong_side']}"
+                  f"{'' if ok else '  ← 실패'}")
+            if not ok:
+                failed.append((kind, seed, name))
+    assert not failed, failed
 
 
 def test_cones_not_started_by_other_objects():
@@ -295,6 +352,7 @@ def test_three_lane_random(seeds=30):
 
 if __name__ == '__main__':
     test_cones_pass()
+    test_cone_gates()
     test_cones_not_started_by_other_objects()
     test_three_lane_left_right()
     test_three_lane_random()

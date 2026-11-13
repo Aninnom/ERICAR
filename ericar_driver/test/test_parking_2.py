@@ -162,11 +162,15 @@ def test_viewer_and_controller_use_same_white_and_gap_decisions(monkeypatch):
     path=Path(__file__).resolve().parents[1]/'tools/debug_view.py'
     spec=importlib.util.spec_from_file_location('p2_view',path)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    module.VIEW_CONFIG=(c['robot'],c['answer']['parking'])
+    module.ROBOT=c['robot'];module.ANSWER=c['answer']
     import time
     data=laser(c);r=data['parking_rays']
-    frame=module.compose(picture(),None,None,(r['distances'],r['angles'],.01,12.,time.monotonic()))
-    assert frame.shape==(478,1320,3)
+    from types import SimpleNamespace
+    scan=SimpleNamespace(ranges=r['distances'],angle_min=r['angles'][0],angle_increment=r['increment'],range_min=.01,range_max=12.)
+    frame=module.compose(picture(),None,None,scan)
+    assert frame.shape==(596,1291,3)
+    normal=module.compose(picture(),None,{'control': {'section': 0, 'controller_state': 'lane'}},scan)
+    assert normal.shape==frame.shape
 
 
 def test_line_acquisition_timeout_and_turn_limit_are_stops():
@@ -216,3 +220,14 @@ def test_empty_or_all_unmeasured_scan_cannot_command_motion():
     assert step(p,data)[0]==0 and p.reason=='INVALID_SCAN_HEALTH'
     data['valid_fraction']=float('nan')
     assert step(p,data,1.1)[0]==0
+
+
+def test_main_merge_preserves_new_fork_and_arrow_confirmation():
+    c=config();d=Driver(c)
+    assert not d.fork.running
+    assert c['answer']['detector']['confirm_frames_by_class']['left']==3
+    assert c['answer']['detector']['minimum_area_by_class']['left']==.0015
+    assert c['answer']['detector']['minimum_area_by_class']['parking']==.002
+    d.state='parking_turn';d.parking.motion_since=1.
+    d.sensor_failure(2.)
+    assert d.parking.motion_since is None and d.parking.last_tick==2.

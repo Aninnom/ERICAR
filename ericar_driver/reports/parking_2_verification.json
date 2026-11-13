@@ -1,7 +1,7 @@
 {
   "branch": "parking_2",
-  "base": "main 4c59fb3",
-  "tests_passed": 18,
+  "base": "main 32820453d497588c6eed67bb4d31a4cfdf5b15fd",
+  "tests_passed": 17,
   "build": "colcon package build passed",
   "logic": [
     "parking sign arms slow search",
@@ -25,5 +25,10 @@
     "cancel and no-motion stop"
   ],
   "interface": "main single /limo/ack_cmd publisher",
-  "hardware_verified": false
+  "hardware_verified": false,
+  "tests": "pytest ericar_driver/test/test_parking_2.py -q: 17 passed",
+  "main_integration": "ForkMission, three-lane, cones, traffic and six-panel dashboard preserved",
+  "additional_checks": "40 parking/fork/lane-boundary tests passed before final parking-only run; installed package source and launch verified",
+  "full_suite": "Stopped at user request; parking-only suite is the final acceptance check",
+  "golden": "Existing hash mismatch also reproduced on unmodified main 3282045; golden unchanged"
 }
