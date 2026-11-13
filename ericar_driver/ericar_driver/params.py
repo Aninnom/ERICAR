@@ -52,7 +52,8 @@ ANSWER_CONFIG = {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
-        'confirm_frames_by_class': {'left': 3, 'right': 3},
+        # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
+        'confirm_frames_by_class': {'left': 3, 'right': 3, 'traffic_red': 1, 'traffic_yellow': 1},
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
             'parking': 0.002, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,

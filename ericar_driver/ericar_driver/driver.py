@@ -143,6 +143,8 @@ class Driver:
         # 충돌 해소 후 새 녹색 프레임을 confirm_frames만큼 다시 확인
         if stamp != self.last_detection_stamp:
             self.sign_counts = {name: self.sign_counts.get(name, 0) + 1 for name in names}
+            if {'traffic_red', 'traffic_yellow'} & names:
+                self.sign_counts['traffic_green'] = 0   # 빨강·노랑과 겹친 녹색은 버리고 새 프레임부터 다시 셈 (11/14)
             self.last_detection_stamp = stamp
         return {name for name in names
                 if self.sign_counts.get(name, 0) >= self.c['detector'].get('confirm_frames_by_class', {}).get(
