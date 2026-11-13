@@ -139,7 +139,9 @@ ANSWER_CONFIG = {
         # cone_wall_min_length 1.0: 붙은 콘 0.5 m + 같은 줄 콘 3개(이어진 길이 합 약 0.74 m)를 벽으로 보지 않는 값
         # cone_wall_beyond: 직선 너머 2·cone_wall_margin 밖에 점이 이 개수보다 많으면 벽이 아님 (벽 앞에 선 촘촘한 콘 줄).
         # 벽은 끊김 없이 사방을 두른 판이라 그 너머는 안 보임 (11/13 유경). 잡음으로 튄 점 2개까지 허용
-        'cone_wall_min_length': 1.0, 'cone_wall_margin': 0.07, 'cone_wall_beyond': 2,
+        # cone_wall_side: 'left' = 차 왼쪽 직선만 벽 (대회 = 시계 방향이라 외곽벽은 왼쪽), 'both' = 양쪽, 'off' = 벽 제외 안 함.
+        # 연습장은 오른쪽에도 벽이 있어 'both'가 필요할 수 있음 → corn_test.py --wall-side로 바꿔 가며 확인 (11/13 유경)
+        'cone_wall_min_length': 1.0, 'cone_wall_margin': 0.07, 'cone_wall_beyond': 2, 'cone_wall_side': 'left',
         'cone_view_distance': 1.5,   # 라이다에서 이 거리 안의 콘만 사용
         # 진입 판단: 문 중점이 라이다에서 cone_enter_distance(아래) 안, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
         # cone_confirm_count 주기(20 Hz) 연속. 코너 도는 중(문이 비스듬함)에는 켜지 않음

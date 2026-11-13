@@ -44,10 +44,12 @@ def wall_lines(points, c):
     군집 단위(폭 넘는 군집만 벽)로 보지 않는 이유: 콘 그림자·거리 잡음으로 벽이 짧은 조각으로만 보이는 주기가 있음.
     콘은 하나당 이어진 길이 약 0.08 m라 한 줄로 놓여도 합이 기준에 못 미침 (붙은 콘 0.5 m + 콘 3개 = 0.74 m).
     촘촘히 붙여 놓은 콘 줄(합이 기준을 넘음)을 벽으로 지우지 않게 조건 2개 추가 (11/13 유경: 벽은 끊김 없이 사방을 두른 판):
-      - 직선이 차 왼쪽에 있음. 시계 방향 주행이라 외곽벽은 항상 왼쪽(코너에서는 앞), 오른쪽은 맵 안쪽이라 벽이 없음
+      - 직선이 차 왼쪽에 있음. 시계 방향 주행이라 외곽벽은 항상 왼쪽(코너에서는 앞), 오른쪽은 맵 안쪽이라 벽이 없음.
+        cone_wall_side 'both'면 이 조건을 빼고 양쪽 다 봄 (연습장처럼 오른쪽에도 벽이 있는 곳에서 시험할 때)
       - 직선 너머(라이다 반대쪽)에 점이 없음. 벽 너머는 안 보이고, 벽 앞에 선 콘 줄은 그 뒤로 벽이 보임
     """
     lines, margin, pool = [], c['cone_wall_margin'], points
+    both = c.get('cone_wall_side', 'left') == 'both'
     for _ in range(5):   # 후보 5개까지: 옆 벽, 앞 벽 + 점이 많이 모인 다른 물체(가까운 붙은 콘 줄 등)
         if len(pool) < 3:
             break
@@ -69,7 +71,7 @@ def wall_lines(points, c):
             side = float(origin@normal)   # 라이다(원점)에서 직선까지 부호 있는 거리. 직선에서 가장 가까운 점 = normal·side
             beyond = int(np.sum((points@normal-side)*np.sign(side) > 2*margin))
             if (float(gaps[gaps <= c['cluster_gap']].sum()) >= c['cone_wall_min_length']
-                    and normal[1]*side > 0 and beyond <= c['cone_wall_beyond']):
+                    and (both or normal[1]*side > 0) and beyond <= c['cone_wall_beyond']):
                 lines.append((origin, direction))
         pool = pool[~near]
     return lines
@@ -103,7 +105,7 @@ def find_posts(scan, robot, c):
     points = np.asarray(scan['points'], dtype=float).reshape(-1, 2)
     found = split_clusters(points, c)
     wide = [cluster.mean(axis=0) for cluster, width in found if width > c['small_object_max_width']]
-    walls = wall_lines(points, c)
+    walls = [] if c.get('cone_wall_side', 'left') == 'off' else wall_lines(points, c)
     if walls:
         keep = np.ones(len(points), dtype=bool)
         for origin, direction in walls:
