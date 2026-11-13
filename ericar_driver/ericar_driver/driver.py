@@ -53,6 +53,12 @@ class Driver:
     def avoiding(self):
         return self.lane_change.active or self.cones.active
 
+    @property
+    def section_hold(self):
+        """구간 전환 보류 조건: 라바콘 통과 중. 콘 배치에 따라 오른쪽으로 크게 돌 수 있어 누적 회전을 코너로 세면 안 됨
+        문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
+        return self.cones.active or (self.cones.started and not self.cones.done)
+
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
         self.pid.reset()
@@ -125,9 +131,6 @@ class Driver:
             self.sign_counts.pop('right', None)
         # 빨강·노랑은 첫 검출부터 녹색 허가 차단. 광고판 등 동시 검출 시 보수적 대기
         # 충돌 해소 후 새 녹색 프레임을 confirm_frames만큼 다시 확인
-        if names & {'traffic_red', 'traffic_yellow'}:
-            names.discard('traffic_green')
-            self.sign_counts.pop('traffic_green', None)
         if stamp != self.last_detection_stamp:
             self.sign_counts = {name: self.sign_counts.get(name, 0) + 1 for name in names}
             self.last_detection_stamp = stamp
@@ -326,7 +329,7 @@ class Driver:
         # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
         # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
-        self.sections.update(turn_rate, velocity, dt)
+        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.update_stop_line(lane, velocity, now, dt)
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
@@ -415,7 +418,23 @@ class Driver:
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
                           fork_sign=self.fork_sign, fork_sign_stamp=self.fork_sign_stamp,
                           fork_sign_counts={n: self.sign_counts.get(n, 0) for n in ('left', 'right')},
-                          avoiding=self.avoiding, cone_active=self.cones.active,
+                          avoiding=self.avoiding, cone_active=self.cones.active, cone_red=self.cones.red,
+                          cone_red_ratio=float(lane.get('cone_red', 0.0)), cone_corridor=self.cones.corridor,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
-                          corner_hold=self.lane_driver.hold is not None)
+                          corner_hold=self.lane_driver.hold is not None,
+                          # 아래는 디버그 화면(tools/debug_view.py) 표시 전용. 판단에 쓰지 않음
+                          velocity=velocity, state_time=now-self.state_started if self.state_started else None,
+                          missions=sorted(self.sections.missions()), done=sorted(self.done),
+                          off=list(self.c['sections'].get('off', ())),
+                          sign_counts=dict(self.sign_counts),
+                          cooldowns={name: until-now for name, until in self.cooldowns.items() if until > now},
+                          slow_left=max(0.0, self.slow_until-now), signs_lost=self.signs_lost,
+                          stopped_for=None if self.stopped_since is None else now-self.stopped_since,
+                          zigzag_left=self.lane_driver.zigzag_left, lane_lost=now-self.lane_driver.last_seen,
+                          search_distance=self.lane_driver.search_distance,
+                          scan_valid=scan['valid_fraction'], wide_objects=scan.get('wide_objects'),
+                          narrow_objects=scan.get('narrow_objects'), blocked=bool(blocked),
+                          cones=self.cones.debug,
+                          lane_change=dict(self.lane_change.debug, active=self.lane_change.active,
+                                           waiting=self.lane_change.waiting, direction=self.lane_change.direction))
         return float(speed), clip(steering, -self.robot['max_steering'], self.robot['max_steering']), mode if self.state == 'lane' else self.state
