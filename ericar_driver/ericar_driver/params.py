@@ -189,6 +189,9 @@ ANSWER_CONFIG = {
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
         'overshoot': 0.08,   # 목표 횡이동보다 이만큼(m) 더 가면 바로 종료 (바깥 노란 선 넘음 방지)
+        # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
+        # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
+        'camera_fix_frames': 2, 'camera_fix_range': 0.5,
     },
 }
 

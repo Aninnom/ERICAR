@@ -130,7 +130,24 @@ class LaneChange:
                 abs(lane['error']) < c.get('camera_finish_error', .06) and
                 abs(lane['heading']) < c.get('camera_finish_heading', .12))
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0):
+    def camera_correct(self, lane):
+        """목적 차로가 카메라에 확인되면 추측 항법 위치·방향을 카메라 값으로 바로잡음 (소민 11/12)
+        추측 항법은 odom 속도·IMU 회전 오차만큼 한 번에 13~19 cm 더 감 (합성 시험: odom 속도 0.8배)
+        → 두 번 연속 변경(0→1→2)에서 오차가 쌓여 노란 바깥선 이탈 (11/12 실차)
+        조건: 선 색이 목적 차로를 camera_fix_frames번 연속 + 그 차로 중앙이 차 기준 반 차로 안 (걸쳐 있을 때 오인 방지)"""
+        c = self.c
+        if not (lane.get('valid') and self.seen_lane == self.index+self.direction and
+                self.seen_count >= c.get('camera_fix_frames', 2)):
+            return False
+        heading = lane['heading']
+        center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
+        if abs(center) > c['lane_width']*c.get('camera_fix_range', .5):
+            return False
+        self.offset, self.heading = self.target-center, heading
+        self.debug['camera_fix'] = round(center, 3)
+        return True
+
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0, avoid_only=False):
         self.waiting = False
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
@@ -138,6 +155,7 @@ class LaneChange:
         if self.active:
             self.offset -= velocity*math.sin(self.heading)*dt
             self.travel += abs(velocity)*dt
+            self.camera_correct(lane)
             error = self.target-self.offset
             done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
             done = done or self.camera_finished(lane)
@@ -153,6 +171,10 @@ class LaneChange:
         if not enabled or not lane['valid']:
             self.debug = dict(reason='disabled' if not enabled else 'lane_invalid')
             return None
+        # avoid_only (멈춤 방지가 차선 변경을 끈 동안, 소민 11/12): 갈림길 정렬·중앙 정렬은 안 하고 앞 장애물 회피만.
+        # 예전: 1.5 m 동안 회피 판단 자체를 끔 → 그 안에 다음 장애물이 있으면 차선 주행으로 직진해 충돌
+        if avoid_only:
+            requested = 0
         # 넓은 군집 분류가 빠져도 실제 주행 통로의 라이다 점으로 회피 판단 필요
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
         heading = lane['heading']
@@ -173,6 +195,10 @@ class LaneChange:
             result = self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
             self.debug['request_rejected'] = rejected
             return result
+        if direction == 0 and avoid_only:
+            # 갈 차로 없음: 또 대기하면 멈춤 방지가 반복 → 차선 주행에 맡김 (비상 정지 → 서행 비켜 가기)
+            self.debug['reason'] = 'off_no_lane'
+            return None
         if direction == 0:
             # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
             # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
