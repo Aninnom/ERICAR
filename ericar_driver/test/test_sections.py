@@ -28,6 +28,10 @@ WHITE = (225, 225, 225)
 # 가짜 코너 위치(s): 서행 표지판 뒤, 보행자 정지선 뒤, 3차선 장애물 뒤 2개 (라바콘 구간은 시나리오에 없음)
 CORNERS = [1.25, 3.5, 10.9, 11.15]
 DT = 0.05
+# 3차선 구간(안쪽 선 = 흰 점선): 2번 코너 뒤 ~ 3번 코너 앞. 그 밖은 선 4개 모두 노란색 (예전 장면)
+THREE_LANE = (4.5, 10.8)
+# 주행 시간(s): S2 방향 확정 전 속도 상한(fork_prepare_speed 0.18, PR #37)으로 주차 완료가 약 111 s → 기본 110 s로는 모자람
+DURATION = 130.0
 
 
 # ---------- 1. 구간 관리자 단독 ----------
@@ -115,7 +119,8 @@ def full(drop=(), **kw):
         index = driver.sections.index
         if not sections or sections[-1][0] != index:
             sections.append((index, round(sim['s'], 2)))
-    records = scenario.run(CONFIG, stop_paint=WHITE, drop=drop, corners=CORNERS, on_tick=on_tick, **kw)
+    records = scenario.run(CONFIG, stop_paint=WHITE, drop=drop, corners=CORNERS, on_tick=on_tick,
+                           three_lane=THREE_LANE, **dict(dict(duration=DURATION), **kw))
     states = [r[2] for r in records if r[0] == 'status']
     return states, sections, records
 
