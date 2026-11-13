@@ -150,6 +150,9 @@ class LaneChange:
             if (np.count_nonzero(inlier) < need or np.ptp(f[inlier]) < c.get('wall_min_length', .8) or
                     abs(slope) > c.get('wall_max_slope', .35)):
                 continue
+            # 벽은 바깥선보다 안쪽에 있을 수 없음: 맞춘 선이 바깥선 안쪽 wall_inside 넘게 들어와 있으면 장애물 차 줄
+            if side*(offset-edge) < -c.get('wall_inside', .08):
+                continue
             keep &= side*(left-(slope*forward+offset)) < -c.get('wall_band', .05)
             self.walls[name] = (round(float(slope), 3), round(float(offset), 3))
         return points[keep]

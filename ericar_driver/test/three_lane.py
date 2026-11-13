@@ -56,6 +56,8 @@ CASES = {
     # 반대: 가운데 막힘 → 왼쪽(2)으로 피함 → 오른쪽 표지판 → 2→1→0
     'left_then_right': dict(signs={'right': (6.6, 7.4)}, obstacles=[(5.0, 0.0)]),
     'no_imu': dict(signs={}, obstacles=[(5.0, 0.0), (6.9, 0.52)], imu=False),
+    # 벽 없음 + 왼쪽 차로에 바깥선 쪽으로 붙은 차 3대 줄: 줄을 벽으로 보고 지우면 막힌 왼쪽으로 변경 → 정지 (11/14)
+    'obstacle_row': dict(signs={}, obstacles=[(5.0, 0.0), (5.2, 0.65), (6.0, 0.65), (6.8, 0.65)]),
 }
 
 

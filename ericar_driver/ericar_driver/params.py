@@ -234,6 +234,8 @@ ANSWER_CONFIG = {
         # → 그 선에서 wall_band(m) 안쪽 ~ 바깥 점 버림. 벽 없는 곳에서는 직선이 안 잡혀 아무것도 안 버림
         'wall_filter': True, 'wall_search': 0.25, 'wall_min_length': 0.8, 'wall_min_points': 12,
         'wall_max_slope': 0.35, 'wall_band': 0.05,
+        # 11/14: 맞춘 선이 바깥선보다 이만큼(m) 넘게 안쪽이면 벽 아님 (바깥선 쪽으로 붙은 장애물 차 줄 오인 방지)
+        'wall_inside': 0.08,
         # 옆 차로 '차 옆·바로 뒤' 검사 범위: 차체 뒤끝(뒷축 뒤 7.2 cm) + 이만큼(m). 예전 차 길이(33 cm)
         'side_behind_margin': 0.05,
     },
