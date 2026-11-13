@@ -79,3 +79,15 @@ python3 ericar_driver/test/three_lane.py
 합성 시험(three_lane.py)에 실차 오차 흉내 추가: `odom_speed_scale`, `imu_scale`, `steer_scale`, `steer_lag`. 이탈 판정을 차체 중심 → 차체 가장자리(±0.11 m)로 강화.
 새 사례 `right_then_left`, `left_then_right` (두 번 연속 변경). 정상·odom 0.8배+조향 지연·IMU 0.85배 세 조건에서 확인.
 실차 확인: 녹화의 `lane_change_debug.camera_fix`(카메라 보정 값), `lane_change_debug.reason`이 `off_no_lane`인지.
+
+## 11/13 대회장 벽·멈춤 방지 보완 (소민)
+
+| 증상 | 원인 | 수정 |
+|---|---|---|
+| 벽이 노란 바깥선 위에 있으면 빈 차로를 막혔다고 봄 | 끝 차로 차체~벽 15 cm, 옆 차로 통로~벽 11.5 cm. 카메라 도로 방향이 3°만 틀려도 벽 점이 통로 안으로 들어옴 → 장애물 있는 쪽 선택 | `lane_change.drop_walls`: 바깥선 근처에서 앞뒤 0.8 m 넘게 이어진 직선을 라이다 점으로 직접 맞춰 벽으로 보고 제거 (카메라 방향 오차와 무관). 장애물 차(0.32 m)는 길이 조건에 안 걸림 |
+| 이미 지나친 물체(3차로 시작 가로 벽 등)를 옆 차로 막힘으로 봄 | 옆 차로 '차 옆·뒤' 검사를 뒷축 뒤 33 cm(차 길이)까지 봄 | 차체 뒤끝(7.2 cm) + 5 cm까지만 (`side_behind_margin`) |
+| 장애물 바로 앞에서 무한 정지 | `avoid_only`(11/12)가 멈춤 방지 포기 직후 같은 장애물 앞에서 차선 변경을 다시 시작 → 포기 → 재시작 반복 | 앞 장애물이 `stop_distance`(0.6 m) 안이면 재시도 안 함 (`off_too_close`) → 비상 정지 → 서행 비켜 가기 |
+| (feat/three-lane) 멈춤 방지 중 회피 꺼짐 | cherry-pick 때 driver.py의 `avoid_only` 연결이 빠짐 | driver.py에서 `avoid_only=self.lane_change_off > 0` 전달 |
+
+합성 시험: three_lane.py에 `walls=True` (노란 바깥선 위 벽) 추가. 벽 + 카메라 방향 오차 ±3°·±5°에서 벽 없을 때와 결과 같음 (16개 중 15개, 남은 1개는 벽 없이도 같은 실패).
+실차 확인: `lane_change_debug.walls`(찾은 벽 기울기·위치, 노란선 ±0.78 근처면 정상), 장애물 없을 때 `free`가 갈 수 있는 차로 모두 3.0인지.

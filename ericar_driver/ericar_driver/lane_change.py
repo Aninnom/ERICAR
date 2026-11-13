@@ -21,14 +21,17 @@ def free_distances(forward, left, center, robot, config):
     """라이다 점(도로 기준)으로 지금 차로(0)·왼쪽(+1)·오른쪽(-1) 차로가 앞으로 몇 m 비어 있는지.
 
     지금 차로 = 차체가 지나갈 폭(차 기준). 옆 차로 = 차로 중앙(center ± lane_width) 기준 차폭 통로.
-    차 옆이나 바로 뒤(차 길이 이내)에 점이 있으면 0 → 그쪽으로 못 감. 점이 없으면 라이다 범위(3 m).
+    차 옆이나 바로 뒤에 점이 있으면 0 → 그쪽으로 못 감. 점이 없으면 라이다 범위(3 m).
+    바로 뒤 = 차체 뒤끝(뒷축 뒤 length − front_bumper_x = 7.2 cm) + side_behind_margin (소민 11/13)
+    예전: 뒷축 뒤 차 길이(33 cm)까지 → 3차로 시작 지점의 가로 벽 등 이미 지나친 것까지 막힘으로 봄 (합성 시험)
     """
     c = config
     half = robot['width']/2+c['margin']
+    behind = robot['length']-robot.get('front_bumper_x', robot['length'])+c.get('side_behind_margin', .05)
     lanes = {0: 0.0, 1: center+c['lane_width'], -1: center-c['lane_width']}
     free = {}
     for direction, middle in lanes.items():
-        inside = (np.abs(left-middle) < half) & (forward > (0 if direction == 0 else -robot['length']))
+        inside = (np.abs(left-middle) < half) & (forward > (0 if direction == 0 else -behind))
         free[direction] = float(max(0.0, forward[inside].min())) if np.any(inside) else c['free_range']
     return free
 
@@ -51,6 +54,7 @@ class LaneChange:
         self.direction = 0
         self.waiting = False
         self.seen_lane, self.seen_count, self.seen_stamp = None, 0, None
+        self.walls = {}
         self.debug = {}
 
     def observe_lane(self, lane):
@@ -109,14 +113,57 @@ class LaneChange:
                 best, best_free = direction, free[direction]
         return best
 
+    def drop_walls(self, points, heading, center, lane_index, colors=None):
+        """대회장 벽(트랙 가장자리 = 노란 바깥선 위) 라이다 점 제거 (소민 11/13)
+
+        벽이 노란선 바로 위면 끝 차로 차체와 15 cm, 옆 차로 통로와 11.5 cm. 카메라 도로 방향(heading)이 3°만 틀려도
+        벽 점이 통로에 들어와 빈 차로를 막혔다고 봄 → 장애물 있는 쪽 선택 (합성 시험: 벽 + 방향 오차 ±3·5°)
+        방법: 바깥선 근처(±wall_search)에서 앞뒤로 wall_min_length 넘게 이어진 직선을 라이다 점으로 직접 맞춤 →
+        카메라 방향 오차와 상관없이 벽 기울기를 따라감. 그 선에서 wall_band 안쪽 ~ 바깥 점만 버림
+        장애물 차(길이 0.32 m)는 길이 조건에 안 걸림. 벽과 장애물 차 옆면은 15 cm 떨어져 있어 band(5 cm) 밖
+        center: 지금 차로(lane_index) 중앙이 차 기준 도로 방향 왼쪽 몇 m. colors: 그쪽 선이 노랑이면 그 선이 바깥선"""
+        c = self.c
+        self.walls = {}
+        need = c.get('wall_min_points', 12)
+        if not c.get('wall_filter', True) or len(points) < need:
+            return points
+        forward, left = to_road(points, heading)
+        width, last = c['lane_width'], c['lane_count']-1
+        keep = np.ones(len(points), dtype=bool)
+        for side, name in ((1, 'left'), (-1, 'right')):
+            beyond = last-lane_index if side > 0 else lane_index
+            if colors and colors.get(name) == 'yellow':
+                beyond = 0
+            edge = center+side*(max(0, beyond)*width+width/2)
+            search = c.get('wall_search', .25)
+            near = (forward > -.3) & (forward < c['free_range']) & (np.abs(left-edge) < search)
+            if np.count_nonzero(near) < need:
+                continue
+            f, l = forward[near], left[near]
+            slope, offset = np.polyfit(f, l, 1)
+            inlier = np.ones(len(f), dtype=bool)
+            for tolerance in (.08, .04, .03):        # 장애물 차 점을 빼고 다시 맞춤
+                inlier = np.abs(l-(slope*f+offset)) < tolerance
+                if np.count_nonzero(inlier) < need:
+                    break
+                slope, offset = np.polyfit(f[inlier], l[inlier], 1)
+            if (np.count_nonzero(inlier) < need or np.ptp(f[inlier]) < c.get('wall_min_length', .8) or
+                    abs(slope) > c.get('wall_max_slope', .35)):
+                continue
+            keep &= side*(left-(slope*forward+offset)) < -c.get('wall_band', .05)
+            self.walls[name] = (round(float(slope), 3), round(float(offset), 3))
+        return points[keep]
+
     def steer(self, points, dt):
         """한 차로 이동 중: 목표 횡이동(target)까지 pure pursuit, 막히면 가까운 안전 조향"""
         c = self.c
+        # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
+        points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction)
         error = self.target-self.offset
         x, y = to_body(c['lookahead'], error, self.heading)
         desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
-        self.debug.update(desired=desired, safe=safe, error=error)
+        self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
         self.debug['reason'] = 'changing' if safe else 'no_safe_steering'
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
         return (c['speed'] if safe else 0.0), steering
@@ -178,11 +225,13 @@ class LaneChange:
         # 넓은 군집 분류가 빠져도 실제 주행 통로의 라이다 점으로 회피 판단 필요
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
         heading = lane['heading']
+        camera_center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
+        points = self.drop_walls(points, heading, camera_center, self.index, lane.get('colors'))
         forward, left = to_road(points, heading)
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
-        center = 0.0 if requested else lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
+        center = 0.0 if requested else camera_center
         free = free_distances(forward, left, center, self.robot, self.c)
-        self.debug = dict(free=free, index=self.index)
+        self.debug = dict(free=free, index=self.index, walls=self.walls)
         # 차체가 진행할 통로 안의 전방 장애물만 확인한다.
         if free[0] >= self.c['trigger_distance'] and not requested:
             self.debug['reason'] = 'front_clear'
@@ -195,6 +244,11 @@ class LaneChange:
             result = self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
             self.debug['request_rejected'] = rejected
             return result
+        if avoid_only and free[0] <= self.c['stop_distance']:
+            # 멈춤 방지가 포기시킨 장애물 바로 앞(stop_distance 안): 다시 시도하면 포기 → 재시도 무한 반복 (11/13 합성 시험)
+            # → 차선 주행에 맡김 (비상 정지 → 서행 비켜 가기)
+            self.debug['reason'] = 'off_too_close'
+            return None
         if direction == 0 and avoid_only:
             # 갈 차로 없음: 또 대기하면 멈춤 방지가 반복 → 차선 주행에 맡김 (비상 정지 → 서행 비켜 가기)
             self.debug['reason'] = 'off_no_lane'

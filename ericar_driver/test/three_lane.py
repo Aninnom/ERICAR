@@ -98,16 +98,36 @@ def render(camera, s, y, psi, case):
     return image
 
 
+WALL_T = 0.02   # 벽 두께 (m)
+
+
+def walls():
+    """대회장 벽 (11/12 소민: 트랙 가장자리 = 노란 바깥선 위에 벽). (중심 s, 중심 y, 길이, 폭)
+    1차로 구간 ±0.26, 3차로 구간 ±0.78, 넓어지는 곳(ZONE_START)은 가로 벽"""
+    out = []
+    for side in (1, -1):
+        out.append((ZONE_START / 2, side * (0.26 + WALL_T / 2), ZONE_START, WALL_T))
+        out.append(((ZONE_START + ZONE_END + 3) / 2, side * (0.78 + WALL_T / 2), ZONE_END + 3 - ZONE_START, WALL_T))
+        out.append((ZONE_START, side * 0.52, WALL_T, 0.52))
+    return out
+
+
+def boxes(case):
+    """장애물 차 (s, y) + 벽 → (s, y, 길이, 폭)"""
+    out = [(os_, oy, CAR_L, CAR_W) for os_, oy in case['obstacles']]
+    return out + (walls() if case.get('walls') else [])
+
+
 def scan_ranges(s, y, psi, obstacles):
     n = 720
     angles = -math.pi + np.arange(n) * (2 * math.pi / n)
     ranges = np.full(n, 4.0)
     world = angles + psi
     dirs = np.column_stack((np.cos(world), np.sin(world)))
-    for os_, oy in obstacles:
+    for os_, oy, length, width in obstacles:
         # 축 정렬 상자와 광선 교차 (slab)
-        lo = np.array([os_ - CAR_L / 2 - s, oy - CAR_W / 2 - y])
-        hi = np.array([os_ + CAR_L / 2 - s, oy + CAR_W / 2 - y])
+        lo = np.array([os_ - length / 2 - s, oy - width / 2 - y])
+        hi = np.array([os_ + length / 2 - s, oy + width / 2 - y])
         with np.errstate(divide='ignore', invalid='ignore'):
             t1, t2 = lo / dirs, hi / dirs
         tmin = np.nanmax(np.minimum(t1, t2), axis=1)
@@ -120,11 +140,11 @@ def scan_ranges(s, y, psi, obstacles):
 def collides(s, y, psi, obstacles):
     # 시뮬 (s, y) = 라이다 위치. 차체: 라이다 앞 0.044 m(앞 범퍼 0.258 − 라이다 0.214) ~ 뒤 0.286 m
     corners = [(dx, dy) for dx in (-0.286, 0.044) for dy in (-CAR_W / 2, CAR_W / 2)]
-    for os_, oy in obstacles:
+    for os_, oy, length, width in obstacles:
         for dx, dy in corners:
             px = s + dx * math.cos(psi) - dy * math.sin(psi)
             py = y + dx * math.sin(psi) + dy * math.cos(psi)
-            if abs(px - os_) < CAR_L / 2 and abs(py - oy) < CAR_W / 2:
+            if abs(px - os_) < length / 2 and abs(py - oy) < width / 2:
                 return True
     return False
 
@@ -135,7 +155,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     out = dict(name=name, collision=False, max_abs_y=0.0, timeline=[], stuck=0.0, end_lane=None)
     sim = dict(s=case.get('start_s', ZONE_START + 0.3 if case.get('start_zone') else 0.0),
                y=case.get('start_y', 0.0), psi=0.0, v=0.0, steer=0.0)
-    obstacles = case['obstacles']
+    obstacles = boxes(case)
 
     def detections_at(s):
         def box(n):
