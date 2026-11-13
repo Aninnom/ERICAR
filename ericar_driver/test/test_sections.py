@@ -108,20 +108,21 @@ def full(drop=(), **kw):
 
 
 def has(states, name):
-    return any(s == name for s in states)
+    return any(s == name or s.startswith(name+':') for s in states)
 
 
 def test_missing_signs():
+    # 일반 코스는 주차 진입까지만 검증. FREE·흰 선 소실 완료는 test_parking_2에서 검증
     states, sections, _ = full()
     print('  전체 표지판:', states)
     print('  구간 전환 (번호, s):', sections)
     assert [i for i, _ in sections] == [0, 1, 2, 3, 4]
-    for name in ('pedestrian_hold', 'lane_change', 'traffic_hold', 'parking_sequence', 'parked'):
+    for name in ('pedestrian_hold', 'lane_change', 'traffic_hold', 'parking_scan'):
         assert has(states, name), f'{name} 없음: {states}'
-    for drop, later in ((('slow',), ('pedestrian_hold', 'traffic_hold', 'parked')),
-                        (('pedestrian',), ('lane_change', 'traffic_hold', 'parked')),
-                        (('left',), ('traffic_hold', 'parked')),
-                        (('traffic_red', 'traffic_green'), ('parked',))):
+    for drop, later in ((('slow',), ('pedestrian_hold', 'traffic_hold', 'parking_scan')),
+                        (('pedestrian',), ('lane_change', 'traffic_hold', 'parking_scan')),
+                        (('left',), ('traffic_hold', 'parking_scan')),
+                        (('traffic_red', 'traffic_green'), ('parking_scan',))):
         states, sections, _ = full(drop)
         print(f'  {drop} 누락:', states)
         assert [i for i, _ in sections] == [0, 1, 2, 3, 4]
@@ -137,7 +138,7 @@ def test_detector_loss():
     states, _, records = full(detector=True, detection_gap=(4.0, 9.0))
     print('  검출 끊김 4~9 m:', states)
     assert not has(states, 'waiting for fresh sensors / detector')
-    assert has(states, 'traffic_hold') and has(states, 'parked')
+    assert has(states, 'traffic_hold') and has(states, 'parking_scan')
     # 신호등 접근 중 검출이 끊겨 돌아오지 않음 (녹색을 볼 수 없음): 정지 후 stall.seconds 뒤 포기하고 주차까지 진행
     states, _, records = full(detector=True, detection_gap=(12.0, 16.0))
     print('  신호등 대기 중 검출 끊김:', states)
@@ -147,7 +148,7 @@ def test_detector_loss():
     waited = status[hold + 1][1] - status[hold][1]
     print(f'  신호등 정지 {waited:.1f} s 뒤 포기')
     assert waited < ANSWER_CONFIG['stall']['seconds'] + 1.0, waited
-    assert has(states, 'parked'), states
+    assert has(states, 'parking_scan'), states
     # 시작부터 검출이 한 번도 안 옴: startup_wait 뒤 차선 주행 시작
     states, _, records = full(detector=True, detection_gap=(-1.0, 99.0), duration=40.0)
     print('  검출 없음:', states)

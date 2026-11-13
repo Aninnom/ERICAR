@@ -2,6 +2,10 @@
 # 출처: hello-osy/2026-orda-mentoring src/orda_sim/orda_sim/answer.py (613c9b4)
 from pathlib import Path
 import sys
+import math
+import json
+import cv2
+from collections import deque
 import threading
 
 import rclpy
@@ -9,9 +13,9 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from ackermann_msgs.msg import AckermannDrive
-from sensor_msgs.msg import Image, Imu, LaserScan
+from sensor_msgs.msg import Image, Imu, LaserScan, CameraInfo
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
@@ -23,7 +27,7 @@ from .section import START_SECTION
 
 
 def load_detector(config, weights):
-    """YOLO 모델 로드. 클래스 이름이 YOLO_CLASSES와 다르면 종료"""
+    """YOLO 모델 로드. 일반 8종·주차 단독 parking 클래스 검증"""
     c = config['answer']
     weights = Path(weights).expanduser()
     if not weights.is_file():
@@ -33,8 +37,11 @@ def load_detector(config, weights):
     import torch
     threads = int(c['detector'].get('cpu_threads', config['environment'].get('cpu_threads', 2)))
     torch.set_num_threads(threads)
-    detector.add_callback('on_predict_start', lambda _: torch.set_num_threads(threads))
-    if set(detector.names.values()) != set(YOLO_CLASSES):
+    names=set(detector.names.values())
+    if c['parking'].get('test_wait_for_sign',False):
+        if 'parking' not in names:
+            raise SystemExit('주차 단독 시험 모델에 parking 클래스 필요')
+    elif names != set(YOLO_CLASSES):
         raise SystemExit(f'모델 클래스 {sorted(detector.names.values())}가 params.py의 YOLO_CLASSES 8종과 다름')
     return detector, threads
 
@@ -49,7 +56,9 @@ class DriverNode(Node):
         super().__init__('ericar_driver')
         self.config, self.c = config, config['answer']
         self.detector, self.threads = detector, threads
+        cv2.setNumThreads(1)
         self.bridge = CvBridge()
+        self.cancelled=False
         self.loop = ControlLoop(config)
         self.image = None
         self.image_stamp = -1e9
@@ -58,6 +67,9 @@ class DriverNode(Node):
         self.velocity = 0.0
         self.angular_velocity = 0.0
         self.odom_stamp = -1e9
+        self.pose = None
+        self.camera_info = None
+        self.pose_history = deque(maxlen=120)
         self.yaw_rate = 0.0
         self.imu_stamp = -1e9
         self.detector_failures = 0
@@ -72,15 +84,17 @@ class DriverNode(Node):
         self.debug = self.create_publisher(Image, topics.get('debug_image', '/answer/debug_image'), qos_profile_sensor_data)
         self.detection_output = self.create_publisher(String, topics.get('detections', '/answer/detections'), 10)
         self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
+        self.create_subscription(CameraInfo, topics.get('camera_info','/camera/color/camera_info'), self.on_camera_info, qos_profile_sensor_data)
         self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
         # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
         self.create_subscription(Imu, topics.get('imu', '/imu'), self.on_imu, qos_profile_sensor_data)
+        self.create_subscription(Bool, '/parking/cancel', self.on_parking_cancel, 10)
         self.timer = self.create_timer(1.0 / self.c['rate_hz'], self.control)
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
             self.worker.start()
-        self.get_logger().info('정답 코드 시작: YOLO + camera lane + lidar; absolute pose is unused.')
+        self.get_logger().info('PARKING_2: sign → slow FREE search → fixed right turn → white-line loss stop')
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
@@ -94,6 +108,10 @@ class DriverNode(Node):
         except Exception as error:
             self.get_logger().error(f'image conversion failed: {error}')
 
+    def on_camera_info(self,message):
+        self.camera_info=dict(width=message.width,height=message.height,k=tuple(message.k),
+                              d=tuple(message.d),model=message.distortion_model)
+
     def on_scan(self, message):
         self.scan = scan_sectors(message.ranges, message.angle_min, message.angle_increment,
                                  message.range_min, message.range_max, self.c['lidar'])
@@ -103,16 +121,43 @@ class DriverNode(Node):
         self.velocity = message.twist.twist.linear.x
         self.angular_velocity = message.twist.twist.angular.z
         self.odom_stamp = stamp_of(message)
+        self.pose=None
+        try:
+            if message.header.frame_id!='odom' or message.child_frame_id!='base_link':
+                return
+            p=message.pose.pose.position;q=message.pose.pose.orientation
+            norm=math.sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w)
+            if norm<1e-8 or not all(math.isfinite(v) for v in (p.x,p.y,p.z,norm)):
+                return
+            x,y,z,w=q.x/norm,q.y/norm,q.z/norm,q.w/norm
+            if 1-2*(x*x+y*y)<math.cos(math.radians(5)):
+                return
+            self.pose=(p.x,p.y,math.atan2(2*(w*z+x*y),1-2*(y*y+z*z)))
+            if self.pose_history and self.odom_stamp<=self.pose_history[-1][0]:
+                self.pose_history.clear()
+            self.pose_history.append((self.odom_stamp,self.pose))
+        except (AttributeError,ValueError):
+            # 기존 가짜 센서/불완전 odom은 일반 주행 가능, 주차 위치 제어는 대기
+            self.pose=None
+
+    def on_parking_cancel(self,message):
+        if message.data and (self.loop.driver.state.startswith('parking_') or self.loop.driver.state=='parked' or self.c['parking'].get('test_wait_for_sign',False)):
+            self.cancelled=True
+            self.loop.driver.parking.cancel()
+            self.loop.driver.state='parking_cancelled'
+            self.publish(0.,0.)
 
     def on_imu(self, message):
         self.yaw_rate = message.angular_velocity.z
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
     def detect(self):
-        import torch
         c = self.c
         last_stamp = None
         while not self.stop_event.is_set():
+            if self.loop.driver.state.startswith('parking_') or self.loop.driver.state=='parked':
+                self.stop_event.wait(.2)
+                continue
             with self.lock:
                 frame = None if self.image is None else self.image.copy()
                 stamp = self.image_stamp
@@ -122,7 +167,6 @@ class DriverNode(Node):
                     results = self.detector.predict(frame, conf=c['detector']['confidence'],
                                                     imgsz=c['detector']['image_size'],
                                                     device=c['detector']['device'], verbose=False)[0]
-                    torch.set_num_threads(self.threads)
                     objects = []
                     h, w = frame.shape[:2]
                     for box in results.boxes:
@@ -147,7 +191,7 @@ class DriverNode(Node):
             self.stop_event.wait(1.0 / c['detector']['rate_hz'])
 
     def publish(self, speed, steering):
-        # 최종 한계 적용: 주차 시간표 등 개별 제어기가 실차 한계를 넘는 경우 방지
+        # 최종 한계 적용: 개별 제어기의 실차 속도·조향 한계 초과 방지
         # 조향 영점 보정은 판단 결과(조향 0 = 직진)에 더한 뒤 한계 적용
         robot = self.config['robot']
         message = AckermannDrive()
@@ -163,9 +207,20 @@ class DriverNode(Node):
                               detector_ok=self.detector_failures < self.c['detector']['failure_limit'],
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
-                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp)
+                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
+                              pose=self.pose,pose_history=tuple(self.pose_history),camera_info=self.camera_info)
         out = self.loop.step(sensors)
-        self.publish(out.speed, out.steering)
+        elapsed=self.now()-sensors.now
+        fresh=0<=elapsed<self.c['parking']['command_deadline']
+        speed=out.speed if fresh and not self.cancelled else 0.
+        steering=out.steering if fresh and not self.cancelled else 0.
+        self.publish(speed,steering)
+        if out.telemetry is not None:
+            packet=json.loads(out.telemetry)
+            packet['runtime']=dict(mode='parking_2',compute_ms=elapsed*1000,
+                                   published_speed=speed,command_fresh=fresh)
+            packet['control']['published_speed']=speed
+            out.telemetry=json.dumps(packet)
         if out.lane_mask is not None:
             message = self.bridge.cv2_to_imgmsg(out.lane_mask, 'mono8')
             message.header.stamp.sec = int(out.lane_mask_stamp)
@@ -179,9 +234,9 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션]. --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    options = {'--yolo': 'true', '--start-stage': ''}
+    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false'}
     for flag in options:
         if flag in args:
             i = args.index(flag)
@@ -190,12 +245,13 @@ def parse_args(argv):
             options[flag] = args[i + 1]
             args = args[:i] + args[i + 2:]
     yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
-    return args, yolo, options['--start-stage']
+    parking_test=options['--parking-test'].lower() not in ('false','0','no','off')
+    return args, yolo, options['--start-stage'], parking_test
 
 
 def main(config_path=None):
     # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용, 첫 구간(S0)부터 시작
-    args, yolo, start_stage = parse_args(sys.argv)
+    args, yolo, start_stage, parking_test = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
@@ -204,6 +260,11 @@ def main(config_path=None):
         if start_stage not in START_SECTION:
             raise SystemExit(f'start_stage "{start_stage}"는 {list(START_SECTION)} 중 하나여야 합니다')
         c['missions']['start_stage'] = start_stage
+    c['parking']['test_wait_for_sign']=parking_test
+    c['parking']['test_drive_until_sign']=parking_test
+    if parking_test:
+        if not yolo:raise SystemExit('parking_test는 parking 표지판을 포함한 YOLO 모델 필요')
+        c['missions']['start_stage']='parking'
     if not yolo:
         # 차선 시험용: 표지판 미션 없이 주행. 센서 상태 확인에서도 YOLO 제외
         c['detector']['enabled'] = False
@@ -219,6 +280,7 @@ def main(config_path=None):
         pass
     finally:
         node.stop_event.set()
+        node.loop.driver.parking.close()
         if rclpy.ok():
             node.publish(0.0, 0.0)
         if hasattr(node, 'worker'):

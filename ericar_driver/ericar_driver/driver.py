@@ -22,7 +22,7 @@ class Driver:
         self.c, self.robot = config['answer'], config['robot']
         self.lane_driver = LaneDriving(self.c, self.robot)
         self.lane_change = LaneChange(self.c, self.robot)
-        self.parking = Parking(self.c)
+        self.parking = Parking(config)
         self.cones = ConeDriving(self.c, self.robot)
         self.pid = self.lane_driver.pid
         self.state, self.state_started = 'lane', 0.0
@@ -52,13 +52,12 @@ class Driver:
         self.pid.reset()
         if state != 'lane':
             self.lane_change.active = self.cones.active = False
-        if state == 'parking_align':
+        if state == 'parking_scan':
             self.parking.start(now)
 
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
-        if self.state == 'parking_sequence':
-            # 센서가 돌아올 때까지 시간표를 멈춘다 (영구 정지하면 주차 0점)
+        if self.state in ('parking_scan','parking_plan','parking_track','parking_verify'):
             self.parking.pause(now)
 
     def leave_mission(self, mission, now):
@@ -104,7 +103,7 @@ class Driver:
         if new_image and lane['stop_distance'] is not None:
             # A delayed image measures the stripe at exposure, not at this tick.
             candidate = lane['stop_distance'] - velocity * max(0.0, now-image_stamp)
-            tracking_stop = self.state.endswith('_approach') or self.state.endswith('_hold') or self.state == 'parking_align'
+            tracking_stop = self.state.endswith('_approach') or self.state.endswith('_hold')
             # Once the first stop stripe is selected, do not jump to a farther
             # crosswalk stripe when the first leaves the camera's field of view.
             same_line = self.line_distance is None or abs(candidate - self.line_distance) < m['line_match_tolerance']
@@ -112,7 +111,7 @@ class Driver:
                 self.line_distance = candidate
                 self.line_seen = image_stamp
         if (now - self.line_seen > m['stop_line_memory'] and
-                not self.state.endswith(('_hold', '_approach')) and self.state != 'parking_align'):
+                not self.state.endswith(('_hold', '_approach'))):
             self.line_distance = None
         if self.state == 'lane' and self.line_distance is not None and self.line_distance < -0.05:
             self.line_distance = None
@@ -120,6 +119,7 @@ class Driver:
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
         names = self.confirmed(detections, detection_stamp)
+        if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
         green_only = 'traffic_green' in names and not ({'traffic_red', 'traffic_yellow'} & names)
         if 'slow' in ready and self.allowed('slow'):
@@ -165,7 +165,7 @@ class Driver:
                 if fresh_line or not m.get('pedestrian_require_line', True):
                     self.transition('pedestrian_approach', now)
             elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking'):
-                self.transition('parking_align', now)
+                self.transition('parking_scan', now)
         return green_only
 
     def stop_missions(self, speed, velocity, green_only, now):
@@ -261,11 +261,22 @@ class Driver:
                 return s['creep_speed'], safe_steering, False
         return speed, steering, blocked
 
+    def main_lane_command(self,lane,now,dt,velocity,angular_velocity,allow_hold,avoiding=False):
+        """일반 주행과 주차 검색이 공유하는 기존 main 차선 제어"""
+        return self.lane_driver.update(lane,now,dt,now<self.slow_until,velocity,angular_velocity,
+                                       allow_hold=allow_hold,avoiding=avoiding)
+
     def update(self, lane, scan, detections, detection_stamp, velocity, now, angular_velocity=0.0,
-               yaw_rate=None, signs_ok=True):
+               yaw_rate=None, signs_ok=True, parking_input=None):
         """yaw_rate: 실측 회전 속도(IMU, rad/s). None이면 odom 값 × sections.odom_yaw_scale
         signs_ok: 표지판 검출이 최신인지 (False면 detections는 빈 목록으로 들어옴)"""
         if self.last_time is not None and now < self.last_time:
+            if self.state.startswith('parking_') or self.state=='parked':
+                speed,steering,self.state=self.parking.fail('CLOCK_RESET_DURING_PARKING')
+                self.last_time=now
+                self.debug=dict(parking=self.parking.debug,speed=0.,steering=0.)
+                return 0.,0.,'parking_failed: CLOCK_RESET_DURING_PARKING'
+            self.parking.close()
             self.__init__({'answer': self.c, 'robot': self.robot})
         dt = .05 if self.last_time is None else clip(now-self.last_time, .001, .2)
         self.last_time = now
@@ -276,13 +287,32 @@ class Driver:
         self.sections.update(turn_rate, velocity, dt)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.update_stop_line(lane, velocity, now, dt)
+        previous_state=self.state
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
+        if self.state=='lane' and self.c['parking'].get('test_wait_for_sign',False) and not self.c['parking'].get('test_drive_until_sign',False):
+            self.debug=dict(section=self.sections.index,stage=self.stage(),speed=0.,steering=0.)
+            return 0.,0.,'parking_test: WAITING_FOR_PARKING_SIGN'
+        if self.state.startswith('parking_') or self.state == 'parked':
+            search_command=None
+            if self.state=='parking_scan':
+                # 표지판 전후 동일 LaneDriving 인스턴스·선 놓침 탐색·조향 기억 유지
+                search_command=self.main_lane_command(lane,now,dt,velocity,angular_velocity,True)
+            if parking_input is None:
+                speed,steering,state=self.parking.fail('PARKING_INPUT_UNAVAILABLE')
+            else:
+                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,**parking_input)
+            self.state=state
+            if state=='parked':self.advance('parking')
+            self.debug=dict(parking=self.parking.debug,section=self.sections.index,stage=self.stage(),control_stamp=now,
+                            speed=speed,steering=steering,front=scan['front'],rear=scan['rear'])
+            # 주차는 실측 차체의 예상 궤적 검사 적용. 일반 섹터 최소 거리·stall creep·시간 초과 강행 제외
+            return speed,steering,state+': '+self.parking.reason
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
         in_fork = self.fork_pending or self.fork_remaining > 0
-        speed, steering = self.lane_driver.update(lane, now, dt, now < self.slow_until, velocity, angular_velocity,
-                                                  allow_hold=self.state == 'lane' and not self.avoiding and not in_fork,
-                                                  avoiding=self.avoiding)
+        speed, steering = self.main_lane_command(lane,now,dt,velocity,angular_velocity,
+                                                  self.state == 'lane' and not self.avoiding and not in_fork,
+                                                  self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         stuck_change = False
         if self.state == 'lane':
@@ -301,21 +331,11 @@ class Driver:
                 speed, steering = cone
                 mode = 'cones'
         speed = self.stop_missions(speed, velocity, green_only, now)
-        if self.state in ('parking_align', 'parking_sequence'):
-            speed, steering, self.state = self.parking.update(lane, self.line_distance, velocity, now, steering)
-            if self.state == 'parked':
-                self.advance('parking')
-        # 모든 담당의 제어 결과에 공통으로 적용하는 최종 정지 조건.
+        if self.c['parking'].get('test_drive_until_sign',False):
+            speed=min(speed,self.c['parking']['scan_speed'])
+        # 일반 주행의 섹터 비상 정지는 기존 기준 유지
         clearance = scan['front'] if speed >= 0 else scan['rear']
         blocked = scan['valid_fraction'] < .5 or clearance < self.c['lidar']['emergency_distance']
-        if blocked and self.state == 'parking_sequence':
-            # 주차 중: 영구 정지 대신 시간표를 멈추고 기다린다. 일정 시간 넘게 막혀 있으면
-            # (실차 후방 사각으로 rear가 항상 0인 경우 포함) 접촉 감점(-1)을 감수하고 진행한다.
-            self.parking.obstacle_wait += dt
-            if self.parking.obstacle_wait < self.c['parking'].get('obstacle_wait', 2.0):
-                self.parking.pause(now)
-            else:
-                blocked = False
         speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0

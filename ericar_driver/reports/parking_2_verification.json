@@ -1,0 +1,29 @@
+{
+  "branch": "parking_2",
+  "base": "main 4c59fb3",
+  "tests_passed": 18,
+  "build": "colcon package build passed",
+  "logic": [
+    "parking sign arms slow search",
+    "First LiDAR FREE immediately emits right-turn command",
+    "Gap is not reclassified after turn begins",
+    "Observed white straight line missing on a new frame emits zero speed"
+  ],
+  "removed": [
+    "parking A*",
+    "parking Pure Pursuit",
+    "virtual aisle boundary gate",
+    "next-segment visibility gate",
+    "pose synchronization gate"
+  ],
+  "retained": [
+    "finite-return gap classification",
+    "current obstacle swept-body stop",
+    "fresh sensor/compute checks",
+    "turn/search time and distance limits",
+    "line never acquired stop",
+    "cancel and no-motion stop"
+  ],
+  "interface": "main single /limo/ack_cmd publisher",
+  "hardware_verified": false
+}
