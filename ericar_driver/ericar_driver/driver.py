@@ -359,10 +359,12 @@ class Driver:
             if self.sections.allows('lane_change') and not requested:
                 requested = self.fork.center_request(self.lane_change.index, self.lane_change.active, lane)
             preferred = self.fork.direction if self.fork.running else 0
+            # 멈춤 방지가 차선 변경을 끈 동안(lane_change_off)도 앞 장애물 회피는 함 (avoid_only, 소민 11/12)
+            # 예전: 1.5 m 동안 회피 판단 자체를 꺼서 그 안의 다음 장애물에 직진 충돌
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.lane_change_off <= 0
-                                            and self.fork.allows_change(self.lane_change.active), requested, preferred)
+                                            and self.fork.allows_change(self.lane_change.active), requested, preferred,
+                                            avoid_only=self.lane_change_off > 0)
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt, self.sections.allows('cones') and self.fork_remaining <= 0)
             if change is not None:

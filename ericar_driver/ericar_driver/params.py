@@ -229,6 +229,15 @@ ANSWER_CONFIG = {
         # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
         # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
         'camera_fix_frames': 2, 'camera_fix_range': 0.5,
+        # 11/13 대회장 벽(노란 바깥선 위) 라이다 점 제거 (lane_change.drop_walls). 바깥선 ±wall_search(m) 안에서
+        # 앞뒤 wall_min_length(m) 넘게 이어진 직선(점 wall_min_points개 이상, 기울기 wall_max_slope 이하) = 벽
+        # → 그 선에서 wall_band(m) 안쪽 ~ 바깥 점 버림. 벽 없는 곳에서는 직선이 안 잡혀 아무것도 안 버림
+        'wall_filter': True, 'wall_search': 0.25, 'wall_min_length': 0.8, 'wall_min_points': 12,
+        'wall_max_slope': 0.35, 'wall_band': 0.05,
+        # 11/14: 맞춘 선이 바깥선보다 이만큼(m) 넘게 안쪽이면 벽 아님 (바깥선 쪽으로 붙은 장애물 차 줄 오인 방지)
+        'wall_inside': 0.08,
+        # 옆 차로 '차 옆·바로 뒤' 검사 범위: 차체 뒤끝(뒷축 뒤 7.2 cm) + 이만큼(m). 예전 차 길이(33 cm)
+        'side_behind_margin': 0.05,
     },
 }
 
