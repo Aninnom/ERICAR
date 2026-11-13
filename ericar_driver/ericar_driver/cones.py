@@ -66,10 +66,15 @@ def wall_lines(points, c):
             direction = np.linalg.svd(pool[near]-origin, full_matrices=False)[2][0]
             near = line_distance(pool, origin, direction) <= margin
         if near.sum() >= 3:
-            gaps = np.diff(np.sort((pool[near]-origin)@direction))
+            along = (pool[near]-origin)@direction
+            gaps = np.diff(np.sort(along))
             normal = np.array([-direction[1], direction[0]])
             side = float(origin@normal)   # 라이다(원점)에서 직선까지 부호 있는 거리. 직선에서 가장 가까운 점 = normal·side
-            beyond = int(np.sum((points@normal-side)*np.sign(side) > 2*margin))
+            # 너머 점은 직선이 실제로 뻗은 구간 안에서만 셈. 무한 직선으로 세면 벽 끝 너머로 비켜 보이는
+            # 물건(연습장 의자·관중석)까지 들어와 벽을 못 찾음 (11/13 사진)
+            depth = (points@normal-side)*np.sign(side)
+            span = (points-origin)@direction
+            beyond = int(np.sum((depth > 2*margin) & (span >= along.min()-margin) & (span <= along.max()+margin)))
             if (float(gaps[gaps <= c['cluster_gap']].sum()) >= c['cone_wall_min_length']
                     and (both or normal[1]*side > 0) and beyond <= c['cone_wall_beyond']):
                 lines.append((origin, direction))
