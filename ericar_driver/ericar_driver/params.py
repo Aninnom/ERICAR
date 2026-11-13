@@ -49,7 +49,9 @@ ANSWER_CONFIG = {
               'creep_speed': 0.08, 'creep_horizon': 0.3, 'creep_margin': 0.02},
 
     'detector': {
-        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
+        # device 0 = Jetson GPU. 11/14 실측: CPU 추론은 주행 노드 CPU 390 %·영상 지연 0.16 s, GPU는 65 %·0.02 s
+        # GPU 없는 PC에서 모델을 직접 돌릴 때만 'cpu'로 바꿈
+        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 0, 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
@@ -132,6 +134,19 @@ ANSWER_CONFIG = {
         'cone_gate_min': 0.35, 'cone_gate_max': 1.0,
         'cone_gate_width': 0.6,      # 콘 하나만 보일 때 쓰는 문 폭 기본값 (문을 보면 측정값으로 교체)
         'cone_group_max_width': 0.6, # 이 폭까지는 붙어 놓인 콘 덩어리로 보고 나눠서 사용. 넘으면 벽·큰 물체로 무시
+        # 외곽 가벽 (11/13 도면: 맵 가장자리, 높이 200 mm, 좌측 직선 차로 중앙에서 약 0.72 m. 라이다 z 0.07 m라 스캔에 잡힘)
+        # 콘 그림자·점 누락으로 끊긴 벽 조각이 붙은 콘으로 분류되어 벽·콘 사이로 통과 (11/13 합성 확인, 유경)
+        # 벽 = 한 직선 위 점들이 cluster_gap 이내로 이어진 길이의 합이 cone_wall_min_length(m) 이상 (cones.wall_lines).
+        # 그 직선에서 cone_wall_margin(m) 안의 점은 벽으로 보고 콘 후보에서 먼저 제외
+        # cone_wall_margin 0.07: 0.05는 거리 잡음 2 cm에서 벽 점 일부가 밖에 남아 기둥이 됨 (합성 2/57 실패 → 0)
+        # 주의: 벽에서 이 거리 안에 놓인 콘도 같이 빠짐 (콘 중심이 벽에서 약 0.12 m 이상이면 남음)
+        # cone_wall_min_length 1.0: 붙은 콘 0.5 m + 같은 줄 콘 3개(이어진 길이 합 약 0.74 m)를 벽으로 보지 않는 값
+        # cone_wall_beyond: 직선 너머 2·cone_wall_margin 밖에 점이 이 개수보다 많으면 벽이 아님 (벽 앞에 선 촘촘한 콘 줄).
+        # 벽은 끊김 없이 사방을 두른 판이라 그 너머는 안 보임 (11/13 유경). 잡음으로 튄 점 2개까지 허용.
+        # 세는 범위는 직선이 실제로 뻗은 구간 안으로 한정 (벽 끝 너머로 비켜 보이는 물건은 제외, 11/13 연습장 사진)
+        # cone_wall_side: 'left' = 차 왼쪽 직선만 벽 (대회 = 시계 방향이라 외곽벽은 왼쪽), 'both' = 양쪽, 'off' = 벽 제외 안 함.
+        # 연습장은 오른쪽에도 벽이 있어 'both'가 필요할 수 있음 → corn_test.py --wall-side로 바꿔 가며 확인 (11/13 유경)
+        'cone_wall_min_length': 1.0, 'cone_wall_margin': 0.07, 'cone_wall_beyond': 2, 'cone_wall_side': 'left',
         'cone_view_distance': 1.5,   # 라이다에서 이 거리 안의 콘만 사용
         # 진입 판단: 문 중점이 라이다에서 cone_enter_distance(아래) 안, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
         # cone_confirm_count 주기(20 Hz) 연속. 코너 도는 중(문이 비스듬함)에는 켜지 않음

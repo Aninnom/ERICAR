@@ -45,7 +45,7 @@ def generate_launch_description():
         DeclareLaunchArgument('debug', default_value='true', description='디버그 화면 (포트 8080)'),
         DeclareLaunchArgument('record', default_value='false', description='true면 rosbag 녹화'),
         DeclareLaunchArgument('bag', default_value=os.path.expanduser(time.strftime('~/bags/run_%m%d_%H%M'))),
-        DeclareLaunchArgument('exposure', default_value='300', description='카메라 수동 노출'),
+        DeclareLaunchArgument('exposure', default_value='600', description='카메라 수동 노출'),        #노출값 300 -> 600 수정
         include('limo_base', 'limo_base_ackerman.launch.py'),
         include('ydlidar_ros2_driver', 'ydlidar.launch.py'),
         include('orbbec_camera', 'astra_stereo_u3.launch.py',
