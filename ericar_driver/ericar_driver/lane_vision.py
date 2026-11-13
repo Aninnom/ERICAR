@@ -228,9 +228,11 @@ class LaneVision:
         residuals = [residuals[k] for k in source.values()]
 
         result = dict(valid=False, error=0.0, heading=0.0, abnormal=False,
-                      stop_distance=None, stop_candidates=[], center_px=w / 2,
+                      stop_distance=None, stop_candidates=[], center_px=w / 2, crosswalk_distance=None,
                       mask=bird, lane_mask=lane_mask, white_mask=white_bird, white_lane=white_lane, windows=windows,
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid,
+                      # 가장 먼 흰 점선까지 앞 거리(m). 없으면 None. 분기 입구(점선 끝) 판단용 (fork.py, 소민)
+                      dash_end=float(self.meters_at(np.flatnonzero(dashes.any(axis=1)).min())) if white_lane else None,
                       colors=line_colors,
                       # 서행 유도선(지그재그): 2 = 서로 다른 좌우 선이 모두 톱니 모양, 1 = 찾은 선 중 하나라도, 0 = 없음
                       # 좌우 창이 같은 선에 붙은 경우는 1 (11/10 skip_1110_lap1 142 s: 현수막 주름으로 한 선이 물결 → 2로 세면 오검출)
@@ -270,7 +272,7 @@ class LaneVision:
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
 
         # ---------- 정지선 ----------
-        self.find_stop_line(result, stop_lines, lane_px)
+        self.find_stop_line(result, stop_lines, lane_px, bird if white_bird is None else white_bird)
         return result
 
     @staticmethod
@@ -557,8 +559,25 @@ class LaneVision:
                     break
         return picked
 
-    def find_stop_line(self, result, horizontal, lane_px):
-        """차로 폭의 대부분을 가로지르는 가로 페인트 = 정지선. 차 앞축 기준 거리(m)."""
+    def crosswalk_beyond(self, white, top, x0, x1):
+        """가로선 바로 너머(먼 쪽)에 세로 흰 블록(횡단보도 줄무늬)이 3개 이상 나란히 있으면 참 (소민 11/12)
+        트랙: 흰 선(서행 시작) → ◇·천천히 → 흰 선(정지선) → 횡단보도 블록 2줄 → 흰 선.
+        신호등·보행자는 '횡단보도 바로 앞 선'에 서야 하므로 블록이 붙은 선만 횡단보도 선으로 구분"""
+        c = self.c
+        rows_per_m = (c['height_px'] - 1) / (c['far'] - c['near'])
+        start = int(top - c.get('crosswalk_gap', .01) * rows_per_m)
+        end = int(top - c.get('crosswalk_depth', .12) * rows_per_m)
+        if end < 0 or start <= end:
+            return False   # 블록 볼 공간이 화면 밖: 아직 판단 못 함
+        profile = np.mean(white[end:start, x0:x1] > 0, axis=0) > c.get('crosswalk_fill', .5)
+        edges = np.diff(np.concatenate(([0], profile.astype(np.int8), [0])))
+        widths = np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)
+        blocks = int(np.sum(widths >= c.get('crosswalk_block_width', .03) * self.scale))
+        return blocks >= c.get('crosswalk_blocks', 3)
+
+    def find_stop_line(self, result, horizontal, lane_px, white=None):
+        """차로 폭의 대부분을 가로지르는 가로 페인트 = 정지선. 차 앞축 기준 거리(m).
+        너머에 횡단보도 블록이 있는 가장 가까운 선 = crosswalk_distance"""
         c = self.c
         h, w = horizontal.shape
         center = result['center_px']
@@ -575,8 +594,12 @@ class LaneVision:
             complete = (self.valid_bird is None or self.valid_bird.shape != horizontal.shape or
                         bool(np.all(self.valid_bird[[before, after], x0:x1])))
             if distance > -0.04:
-                result['stop_candidates'].append(dict(distance=float(distance),
+                crosswalk = white is not None and self.crosswalk_beyond(white, int(group.min()), x0, x1)
+                result['stop_candidates'].append(dict(distance=float(distance), crosswalk=crosswalk,
                                                       thickness=float(thickness), complete=complete))
                 if complete and thickness <= c['stop_max_thickness'] and result['stop_distance'] is None:
                     result['stop_distance'] = float(distance)
+                if (crosswalk and complete and thickness <= c['stop_max_thickness'] and
+                        result['crosswalk_distance'] is None):
+                    result['crosswalk_distance'] = float(distance)
 

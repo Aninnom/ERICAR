@@ -40,16 +40,20 @@ def main(path, times, output='/tmp/frames.jpg'):
     wanted = sorted(float(x) for x in times.split(','))
     reader = rosbag2_py.SequentialReader()
     reader.open(rosbag2_py.StorageOptions(uri=path, storage_id='sqlite3'), rosbag2_py.ConverterOptions('cdr', 'cdr'))
-    reader.set_filter(rosbag2_py.StorageFilter(topics=['/camera/color/image_raw/compressed', '/answer/detections']))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=['/camera/color/image_raw/compressed', '/answer/detections', '/odom']))
     t0, image, panels = None, None, []
     while reader.has_next() and len(panels) < len(wanted):
         topic, data, t = reader.read_next()
         t *= 1e-9
-        t0 = t0 or t
+        # bag_timeline과 동일: 첫 odom 또는 detections 시각 기준. 카메라 선행 시작 제외
+        if t0 is None and topic in ('/odom', '/answer/detections'):
+            t0 = t
+        if topic == '/odom':
+            continue
         if topic.endswith('compressed'):
             image = cv2.imdecode(np.frombuffer(deserialize_message(data, CompressedImage).data, np.uint8), 1)
             continue
-        if image is None or t - t0 < wanted[len(panels)]:
+        if image is None or t0 is None or t - t0 < wanted[len(panels)]:
             continue
         message = json.loads(deserialize_message(data, String).data)
         lane, control = message.get('lane') or {}, message['control']

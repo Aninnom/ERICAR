@@ -162,7 +162,8 @@ def test_detector_loss():
     print('  신호등 대기 중 검출 끊김:', states)
     status = [r for r in records if r[0] == 'status']
     hold = next(i for i, r in enumerate(status) if r[2] == 'traffic_hold')
-    assert status[hold + 1][2] == 'lane', states
+    # 11/14: 합성 장면에는 횡단보도 선이 없어 큰 빨강 박스에서 예비 정지 → 녹색 뒤 traffic_approach로 풀림 (PR #42)
+    assert status[hold + 1][2] in ('lane', 'traffic_approach'), states
     waited = status[hold + 1][1] - status[hold][1]
     print(f'  신호등 정지 {waited:.1f} s 뒤 포기')
     assert waited < ANSWER_CONFIG['stall']['seconds'] + 1.0, waited
