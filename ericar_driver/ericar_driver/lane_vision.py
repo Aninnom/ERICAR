@@ -33,6 +33,11 @@ class LaneVision:
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
         self.corner_left_limit = None # 우회전 코너 중이면 m 값 (loop가 설정). 기억 없는 한 선 이름 판단 기준
+        # 3차선 끝 차로(또는 그쪽으로 차선 변경 중)면 노란 바깥선이 있는 쪽 'left'/'right' (loop가 설정), 아니면 None
+        # 바깥 차로에서 노란 선만 보일 때 위치로 이름을 붙이면 차가 노란 선에 붙은 순간 '오른쪽 선'으로 오판
+        # → 차로 중앙을 더 바깥으로 계산해 트랙 밖으로 나감 (11/11 run_1111_1241 17.8~22.7 s, n=r → 이탈) (소민)
+        self.outer_yellow = None
+        self.fork_direction = 0  # 끝 차로 정렬 후 선택 출구. +1=A(왼쪽), -1=B(오른쪽)
         self.double_left = False      # 마지막 코너 뒤 왼쪽에 옆 차로 선이 나란한 구간이면 True (loop가 설정). find_starts·label_sides
 
     # ---------- 2. 버드아이뷰 ----------
@@ -82,6 +87,11 @@ class LaneVision:
         c = self.c
         h, w = white.shape
         car = w / 2
+        # 바깥 차로: 노란 선이 차 쪽으로 반 차로까지 붙어도 바깥선으로 판단 (그 너머 흰색 = 트랙 밖)
+        if self.outer_yellow == 'left':
+            car += c['lane_width'] / 2 * self.scale
+        elif self.outer_yellow == 'right':
+            car -= c['lane_width'] / 2 * self.scale
         rows = np.arange(h)
         left_edge = np.full(h, -np.inf)    # 이 x 이하 = 차 왼쪽 노란 선 너머
         right_edge = np.full(h, np.inf)    # 이 x 이상 = 차 오른쪽 노란 선 너머
@@ -202,6 +212,12 @@ class LaneVision:
 
         # ---------- 5. 좌우 판단 ---------- source: 확정 이름 → 원래 탐색 쪽
         source = self.label_sides(fits, lane_px, picked_sets, anchors, line_colors)
+        if self.outer_yellow is not None and len(source) == 1 and not self.fork_direction:
+            kept = next(iter(source.values()))
+            if line_colors.get(kept) == 'yellow':
+                # 차선 변경 중에도 추적 중인 교통섬 경계를 바깥선 이름으로 덮어쓰기 금지
+                source = {self.remembered_side(anchors[kept]) or self.outer_yellow: kept}
+        source = self.fork_sources(source, fits, anchors, line_colors, lane_px)
         # 이름별 기억: 이번에 본 선은 갱신, 못 본 선은 memory_frames 프레임까지 유지
         self.memory = {s: (r, x, age + 1) for s, (r, x, age) in self.memory.items() if age < c['memory_frames']}
         self.memory.update({s: (*pixels[k], 0) for s, k in source.items()})
@@ -272,6 +288,42 @@ class LaneVision:
             return []
         groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
         return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
+
+    def remembered_side(self, anchor):
+        """기억한 선과 반 차로 이내인 가까운 끝의 이름. 없으면 None"""
+        row, x = anchor
+        distances = {side: float(np.min(np.hypot((x-mx)/self.scale, (row-mr)*self.row_m)))
+                     for side, (mr, mx, _) in self.memory.items() if len(mr)}
+        return min(distances, key=distances.get) if distances and min(distances.values()) < self.c['lane_width']/2 else None
+
+    def fork_sources(self, source, fits, anchors, colors, lane_px):
+        """출구 정렬 후 교통섬 경계 이름 보정. 선의 위치·선택 방향 휨으로 제한"""
+        direction = self.fork_direction
+        if not direction or not source:
+            return source
+        if len(source) == 2:
+            row = max(anchors[k][0] for k in source.values())
+            gap = abs(np.polyval(fits[source['left']], row)-np.polyval(fits[source['right']], row))
+            if gap <= 1.5*lane_px:
+                return source
+            # 서로 다른 출구 선을 평균내지 않고 선택 출구 쪽 경계만 유지
+            side = 'left' if direction > 0 else 'right'
+            return {side: source[side]}
+        kept = next(iter(source.values()))
+        if colors.get(kept) != 'yellow':
+            return source
+        row, x = anchors[kept]
+        # A/B 교통섬 경계의 꺾임 방향 반전만으로 추적 이름 변경 금지
+        # 근거: run_1112_0326 45.7초 오른쪽 경계 → 47.9초 왼쪽 이름·오른쪽 목표
+        remembered = self.remembered_side((row, x))
+        if remembered is not None:
+            return {remembered: kept}
+        lateral = (self.c['width_px']/2-x)/self.scale
+        heading = math.atan(float(np.polyval(np.polyder(fits[kept]), row))/self.scale/self.row_m)
+        # 차 중앙 부근에서 선택 출구로 꺾이는 선 = 교통섬 쪽 경계 후보
+        inner = direction*heading > .1 and direction*lateral < self.c['single_line_split']
+        side = ('right' if direction > 0 else 'left') if inner else ('left' if direction > 0 else 'right')
+        return {side: kept}
 
     def find_starts(self, lane_mask, lane_px, fork_bias, dashes=None):
         """아래쪽 띠의 흰 픽셀 개수(히스토그램)에서 좌/우 차선 시작 x를 고른다.

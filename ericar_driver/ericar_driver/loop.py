@@ -132,6 +132,8 @@ class ControlLoop:
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
                                                  if self.driver.lane_driver.in_corner(now) else None)
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
+                self.vision.outer_yellow = self.driver.outer_yellow()
+                self.vision.fork_direction = self.driver.fork_direction()
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산

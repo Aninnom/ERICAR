@@ -51,9 +51,11 @@ ANSWER_CONFIG = {
     'detector': {
         'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
+        # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
+        'confirm_frames_by_class': {'left': 3, 'right': 3},
         'minimum_area_by_class': {
             'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.025, 'traffic_yellow': 0.025,
-            'traffic_green': 0.025, 'left': 0.006, 'right': 0.006, 'slow': 0.004,
+            'traffic_green': 0.025, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
@@ -171,6 +173,7 @@ ANSWER_CONFIG = {
         'cone_enter_distance': 0.3,
     },
     'missions': {
+        'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
@@ -178,10 +181,13 @@ ANSWER_CONFIG = {
         'line_match_tolerance': 0.1,
         # 미션 순서는 구간 관리자가 결정 (위 sections, section.py SECTION_MISSIONS). 예전 sequence·enforce_order 제거
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
-        # 갈림길 표지판 인식 후 차선 변경 유지·라바콘 모드 금지 거리(m). 표지판 기둥을 라바콘으로 오인하지 않을 만큼만.
-        # 도면상 인식 지점 → 라바콘 시작선 약 5.1~6.1 m라 5 m면 라바콘 입구에서 아직 꺼져 있을 수 있음
+        # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
         'fork_distance': 3.0,
-        'fork_wait_for_obstacles': True, 'fork_clear_distance': 0.1, 'pedestrian_require_line': True,
+        # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
+        # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
+        # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)
+        'fork_dash_gap': 0.45, 'fork_entrance_confirm': 0.3,
+        'pedestrian_require_line': True,
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
     'parking': {
@@ -211,6 +217,13 @@ ANSWER_CONFIG = {
         'stop_distance': 0.6, 'approach_speed': 0.15,
         # 선 색으로 현재 차로 확인: 노랑/흰 → 2, 흰/흰 → 1, 흰/노랑 → 0. 새 카메라 프레임 이 수만큼 연속 같으면 index 보정
         'index_confirm_frames': 5,
+        # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
+        # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
+        'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
+        'overshoot': 0.08,   # 목표 횡이동보다 이만큼(m) 더 가면 바로 종료 (바깥 노란 선 넘음 방지)
+        # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
+        # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
+        'camera_fix_frames': 2, 'camera_fix_range': 0.5,
     },
 }
 
