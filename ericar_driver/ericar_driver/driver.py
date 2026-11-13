@@ -40,6 +40,8 @@ class Driver:
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
         self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
         self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
+        if self.c['missions'].get('start_stage') == 'parking':
+            self.done.add('traffic')  # 주차 지점 재출발: 신호등은 이미 지난 것으로 봄
         self.stall_time = 0.0         # 의도하지 않은 정지 누적 시간(s)
         self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
         self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
@@ -113,6 +115,15 @@ class Driver:
         """선택 출구 추종 상태에서만 영상 보정 허용"""
         return self.fork.vision_direction if not self.lane_change.active else 0
 
+    def parking_ready(self):
+        """주차 표지판을 받아도 되는 시점인지. 표지판 최소 면적이 작아(0.002) 신호등보다 먼저 확정될 수 있음
+        → 신호등을 끝냈거나(포기 포함) 꺼져 있을 때, 또는 신호등을 못 본 경우에 대비해 S4에서 일정 거리 간 뒤에만 허용"""
+        if self.c['parking'].get('test_wait_for_sign', False):
+            return True
+        if 'traffic' in self.done or not self.sections.allows('traffic'):
+            return True
+        return self.sections.distance >= self.c['parking'].get('after_traffic_distance', 4.0)
+
     def advance(self, mission):
         self.done.add(mission)
 
@@ -185,7 +196,7 @@ class Driver:
                               now - self.line_seen < m.get('trigger_line_freshness', .4))
                 if fresh_line or not m.get('pedestrian_require_line', True):
                     self.transition('pedestrian_approach', now)
-            elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking'):
+            elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking') and self.parking_ready():
                 self.transition('parking_scan', now)
         return green_only
 

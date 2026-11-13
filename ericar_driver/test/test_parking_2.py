@@ -243,3 +243,24 @@ def test_main_merge_preserves_new_fork_and_arrow_confirmation():
     d.state='parking_turn';d.parking.motion_since=1.
     d.sensor_failure(2.)
     assert d.parking.motion_since is None and d.parking.last_tick==2.
+
+
+def test_parking_sign_waits_until_traffic_is_done_or_passed():
+    # 주차 표지판(최소 면적 0.002)이 신호등보다 먼저 확정되어도 신호등을 건너뛰지 않음
+    c=config();c['answer']['missions']['start_stage']='traffic';d=Driver(c)
+    lane=dict(valid=True,error=0.,heading=0.,stop_distance=None,forward=.6,abnormal=False,solid={})
+    def run(d,start,ticks=4):
+        for i in range(ticks):
+            now=start+i*.1
+            data=dict(image=picture(),image_stamp=now,scan_stamp=now,pose=None,pose_stamp=now,history=[])
+            d.update(lane,laser(c,boxes=[]),[dict(name='parking',area=.01)],now,.12,now,parking_input=data)
+    run(d,1.)
+    assert d.state=='lane' and d.sections.index==4
+    d.done.add('traffic');run(d,2.)
+    assert d.state=='parking_scan'
+    # 신호등을 못 본 경우: S4에서 after_traffic_distance 뒤 수용
+    d=Driver(c);d.sections.distance=c['answer']['parking']['after_traffic_distance']+.1;run(d,1.)
+    assert d.state=='parking_scan'
+    # 주차 지점 재출발은 바로 수용
+    c['answer']['missions']['start_stage']='parking';d=Driver(c);run(d,1.)
+    assert d.state=='parking_scan'

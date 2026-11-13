@@ -70,7 +70,7 @@ class Parking:
         self.line_present=bool(lines)
         if lines:self.line_seen=True;self.loss_frames=0
         elif self.line_seen:self.loss_frames+=1
-        self.line_debug=dict(stamp=float(stamp),present=self.line_present,segments=lines,
+        self.line_debug=dict(stamp=float(stamp),present=self.line_present,segments=lines[:24],
                              seen_during_turn=self.line_seen,loss_frames=self.loss_frames)
         return True
 
