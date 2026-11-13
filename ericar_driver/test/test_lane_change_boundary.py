@@ -46,7 +46,35 @@ def test_avoid_only():
         '꺼진 동안 갈 곳 없을 때 대기 (멈춤 방지 반복)'
 
 
+def test_wall_filter():
+    """벽(노란 바깥선 위) 점은 버리고 장애물 차 점은 남김. 카메라 방향 5° 틀려도 (소민 11/13)"""
+    import math
+    import numpy as np
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 2                       # 왼쪽 끝 차로 중앙. 왼쪽 벽은 차 기준 0.26 m
+    err = math.radians(5)
+    wall = [(x, .26+.01) for x in np.arange(-.3, 3.0, .03)]
+    right_wall = [(x, -.26-.52*2-.01) for x in np.arange(-.3, 3.0, .03)]
+    obstacle = [(1.0, y) for y in np.arange(-.11, .11, .02)] + [(x, -.11) for x in np.arange(1.0, 1.32, .03)]
+    true = np.array(wall+right_wall+obstacle)
+    # 차가 도로에 대해 5° 틀어져 있는데 카메라는 0°로 봄: 차 기준 좌표로 돌림
+    c, s_ = math.cos(-err), math.sin(-err)
+    body = np.column_stack((true[:, 0]*c-true[:, 1]*s_, true[:, 0]*s_+true[:, 1]*c))
+    kept = change.drop_walls(body, 0.0, 0.0, 2, {'left': 'yellow', 'right': 'white'})
+    assert 'left' in change.walls, '벽 못 찾음'
+    n_obstacle = len(obstacle)
+    assert len(kept) >= n_obstacle, ('장애물 점 버림', len(kept), n_obstacle)
+    left_kept = sum(1 for p in kept if p[1] > .2)
+    assert left_kept == 0, ('벽 점 남음', left_kept)
+    # 벽 없을 때는 아무것도 안 버림
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    pts = np.array(obstacle + [(1.6, .52), (1.7, .52), (1.6, .45)])
+    assert len(change.drop_walls(pts, 0.0, 0.0, 1, {'left': 'white', 'right': 'white'})) == len(pts) and not change.walls
+
+
 if __name__ == '__main__':
     test_boundary()
     test_avoid_only()
+    test_wall_filter()
     print('노란 경계 횡단 차단 시험 통과')

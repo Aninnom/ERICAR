@@ -55,7 +55,7 @@ ANSWER_CONFIG = {
         'confirm_frames_by_class': {'left': 3, 'right': 3},
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
-            'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
+            'parking': 0.002, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
             'traffic_green': 0.003, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
@@ -197,16 +197,21 @@ ANSWER_CONFIG = {
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
     'parking': {
-        'require_camera_during_sequence': False, 'enabled': True, 'align_timeout': 24.0,
-        'align_speed': 0.08, 'line_distance': 0.15, 'distance_tolerance': 0.025,
-        'lateral_tolerance': 0.035, 'heading_tolerance': 0.09, 'stable_seconds': 0.6,
-        'obstacle_wait': 2.0,  # 시간표 중 장애물로 멈춰 기다리는 최대 누적 시간(s). 넘으면 접촉 감점 감수하고 진행
-        'sequence': [
-            {'seconds': 2.1, 'speed': 0.12, 'steering': 0},
-            {'seconds': 6.65, 'speed': -0.1, 'steering': -0.5},
-            {'seconds': 3.0, 'speed': -0.1, 'steering': 0},
-            {'seconds': 3.2, 'speed': 0, 'steering': 0},
-        ],
+        'enabled': True, 'test_wait_for_sign': False, 'test_drive_until_sign': False,
+        # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
+        'after_traffic_distance': 4.0,
+        'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
+        'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 8., 'turn_distance_limit': .85,
+        'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
+        'slot_depth': .59, 'view_near': .30,
+        'gap_view_far': 3., 'gap_view_right': 1.5, 'gap_cluster_distance': .12,
+        'gap_cluster_min_points': 3, 'gap_object_min_width': .08, 'gap_object_max_width': 1.,
+        'gap_edge_padding': .025, 'gap_front_padding': 0., 'gap_row_tolerance': .18,
+        'gap_extra_width': .04, 'gap_max_width': .85,
+        'occupancy_edge_margin': .015, 'occupancy_min_hits': 3, 'free_ray_fraction': .65,
+        'white_roi_top': .50, 'white_roi_side_margin': .02, 'white_hough_votes': 20,
+        'white_min_length_fraction': .12, 'white_min_vertical_fraction': .12,
+        'white_loss_frames': 1, 'white_acquire_timeout': 1.5,
     },
     'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
@@ -230,6 +235,15 @@ ANSWER_CONFIG = {
         # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
         # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
         'camera_fix_frames': 2, 'camera_fix_range': 0.5,
+        # 11/13 대회장 벽(노란 바깥선 위) 라이다 점 제거 (lane_change.drop_walls). 바깥선 ±wall_search(m) 안에서
+        # 앞뒤 wall_min_length(m) 넘게 이어진 직선(점 wall_min_points개 이상, 기울기 wall_max_slope 이하) = 벽
+        # → 그 선에서 wall_band(m) 안쪽 ~ 바깥 점 버림. 벽 없는 곳에서는 직선이 안 잡혀 아무것도 안 버림
+        'wall_filter': True, 'wall_search': 0.25, 'wall_min_length': 0.8, 'wall_min_points': 12,
+        'wall_max_slope': 0.35, 'wall_band': 0.05,
+        # 11/14: 맞춘 선이 바깥선보다 이만큼(m) 넘게 안쪽이면 벽 아님 (바깥선 쪽으로 붙은 장애물 차 줄 오인 방지)
+        'wall_inside': 0.08,
+        # 옆 차로 '차 옆·바로 뒤' 검사 범위: 차체 뒤끝(뒷축 뒤 7.2 cm) + 이만큼(m). 예전 차 길이(33 cm)
+        'side_behind_margin': 0.05,
     },
 }
 

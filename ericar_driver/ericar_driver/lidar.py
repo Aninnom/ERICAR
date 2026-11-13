@@ -85,6 +85,7 @@ def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, confi
     """Validate scan data and expose measured local obstacle clusters."""
     values = np.asarray(ranges, dtype=float)
     angles = angle_min + np.arange(len(values)) * angle_increment
+    measured=np.isfinite(values)&(values>=range_min)&(values>0)&(values<range_max)
     if config.get('zero_is_no_return', False):
         # 실차 YDLidar는 반사가 없는 방향을 inf가 아니라 0으로 보낸다(한 프레임의 50~60%).
         # 그대로 두면 valid_fraction<0.5, front=0이 되어 속도가 항상 0으로 묶이므로 inf와 같게 취급한다.
@@ -123,5 +124,7 @@ def scan_sectors(ranges, angle_min, angle_increment, range_min, range_max, confi
                 narrow_objects += 1
                 narrow_centers.append(center.tolist())
     return dict(front=front, rear=rear, points=points,
+                parking_points=np.column_stack((clean[measured]*np.cos(angles[measured]),clean[measured]*np.sin(angles[measured]))),
+                parking_rays=dict(angles=angles, distances=clean, valid=valid, measured=measured, increment=angle_increment),
                 narrow_objects=narrow_objects, narrow_centers=narrow_centers,
                 wide_objects=wide_objects, valid_fraction=float(np.mean(valid)))
