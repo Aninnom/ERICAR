@@ -55,10 +55,16 @@
   --limit 6.0      총 주행 거리 제한 (m)
   --timeout 90     총 시간 제한 (s)
   --log 경로        기록 CSV (기본 ~/bags/corn_test_<월일_시분초>.csv)
+벽 제외 옵션 (cones.wall_lines. params.py를 차에서 고치지 않고 값만 바꿔 확인용)
+  --wall-side left  벽으로 볼 쪽: left(기본, 대회는 시계 방향이라 외곽벽이 왼쪽) / both(연습장처럼 양쪽) / off(제외 안 함)
+  --wall-length 1.0 벽으로 보는 최소 이어진 길이 (m). 벽이 짧게 끊겨 보이면 낮춤
+  --wall-margin 0.07 벽 직선에서 이 거리(m) 안의 점을 제외
+  --wall-beyond 2   직선 너머에 허용하는 점 수. 벽 너머는 안 보인다는 가정이라, 넘으면 벽으로 안 봄
 정지: 정면 emergency_distance 안 물체(풀리면 다시 감), 라이다·오도메트리 끊김(풀리면 다시 감)
 기록 CSV: 제어 주기(20 Hz)마다 1줄. 작은 파일이라 와이파이로 복사 가능 (bag은 차에서 분석)
   t, 상태, 속도 명령, 조향 명령, 실제 속도, 회전 속도, 정면 거리, 콘 수, 문 수, 목표 x, 목표 y, 진행 방향, 문 폭,
-  안전 여부, 라바콘 모드 주행 거리, 콘 위치들(차체 좌표 "x:y x:y ...", 뒷바퀴 축 기준 m)
+  안전 여부, 라바콘 모드 주행 거리, 콘 위치들(차체 좌표 "x:y x:y ...", 뒷바퀴 축 기준 m),
+  벽으로 지운 직선마다 가장 가까운 점 ("x:y x:y ...", 차체 좌표. 비어 있으면 지운 벽 없음)
 """
 import argparse
 import math
@@ -70,13 +76,15 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
+import numpy as np  # noqa: E402
+
 from ericar_driver.common import clip  # noqa: E402
-from ericar_driver.cones import ConeDriving, find_posts, red_info  # noqa: E402
+from ericar_driver.cones import ConeDriving, find_posts, red_info, wall_lines  # noqa: E402
 from ericar_driver.lidar import scan_sectors  # noqa: E402
 from ericar_driver.loop import load_config  # noqa: E402
 
 COLUMNS = ('t,state,speed,steering,velocity,yaw_rate,front,posts,gates,target_x,target_y,heading,width,'
-           'safe,cone_travel,post_xy')
+           'safe,cone_travel,post_xy,wall_y')
 
 
 class ConeTest:
@@ -129,6 +137,23 @@ class ConeTest:
             return 0.0, steering, 'blocked'
         return speed, steering, state
 
+    def walls(self, scan):
+        """벽으로 판정된 직선마다 차에서 가장 가까운 점 [(x, y)] (차체 좌표, 왼쪽 +). 'off'면 빈 목록
+
+        직선 방향 부호는 임의라 그대로 쓰면 좌우가 뒤집힘 → 가장 가까운 점(법선·거리)으로 나타냄
+        """
+        c = self.c['lidar']
+        if c.get('cone_wall_side', 'left') == 'off':
+            return []
+        points = np.asarray(scan['points'], dtype=float).reshape(-1, 2)
+        near = []
+        for origin, direction in wall_lines(points, c):
+            normal = np.array([-direction[1], direction[0]])
+            point = normal*float(origin@normal)
+            near.append((float(point[0])+self.robot['lidar']['x'],
+                         float(point[1])+self.robot['lidar'].get('y', 0.0)))
+        return near
+
     def row(self, now, scan, velocity, yaw_rate, speed, steering, state):
         """기록 CSV 한 줄"""
         d = self.cones.debug
@@ -139,7 +164,9 @@ class ConeTest:
             '%.3f' % yaw_rate, '%.2f' % min(scan['front'], 9.99), str(len(posts)), str(d.get('gates', '')),
             number('target_x'), number('target_y'), '%.3f' % self.cones.heading, '%.2f' % self.cones.width,
             '' if 'safe' not in d else str(int(d['safe'])), '%.2f' % self.cones.travel,
-            ' '.join('%.2f:%.2f' % (x, y) for x, y in posts)])
+            ' '.join('%.2f:%.2f' % (x, y) for x, y in posts),
+            # 벽으로 지운 직선마다 가장 가까운 점 "x:y" (차체 좌표). 비어 있으면 지운 벽 없음
+            ' '.join('%.2f:%.2f' % (x, y) for x, y in self.walls(scan))])
 
 
 def main():
@@ -152,6 +179,12 @@ def main():
     parser.add_argument('--timeout', type=float, default=90.0, help='총 시간 제한 (s)')
     parser.add_argument('--log', default=time.strftime('~/bags/corn_test_%m%d_%H%M%S.csv'), help='기록 CSV 경로')
     parser.add_argument('--config', default=str(PACKAGE / 'config' / 'robot.yaml'), help='robot.yaml 경로')
+    # 벽 제외 (cones.wall_lines). params.py 기본값을 차에서 고치지 않고 이 자리에서 바꿔 가며 확인용
+    parser.add_argument('--wall-side', choices=('left', 'both', 'off'),
+                        help="벽으로 볼 쪽: left(기본, 대회), both(연습장처럼 양쪽에 벽), off(벽 제외 안 함)")
+    parser.add_argument('--wall-length', type=float, help='벽으로 보는 최소 이어진 길이 (m, 기본 1.0)')
+    parser.add_argument('--wall-margin', type=float, help='벽 직선에서 이 거리(m) 안의 점을 제외 (기본 0.07)')
+    parser.add_argument('--wall-beyond', type=int, help='직선 너머에 허용하는 점 수 (기본 2)')
     options = parser.parse_args()
 
     import rclpy
@@ -166,6 +199,10 @@ def main():
 
     config = load_config(options.config)
     c, robot, topics = config['answer'], config['robot'], config['topics']
+    for name, key in (('wall_side', 'cone_wall_side'), ('wall_length', 'cone_wall_min_length'),
+                      ('wall_margin', 'cone_wall_margin'), ('wall_beyond', 'cone_wall_beyond')):
+        if getattr(options, name) is not None:
+            c['lidar'][key] = getattr(options, name)
 
     class ConeTestNode(Node):
         def __init__(self):
@@ -260,8 +297,11 @@ def main():
                 self.status.publish(String(data='corn_test: '+text))
             elif now-self.printed >= 0.5 and fresh:
                 self.printed = now
-                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 정면 %.2f m 진행 방향 %+.1f° 붉은색 %.3f 좌 %.3f 우 %.3f%s%s' % (
+                walls = self.test.walls(self.scan)
+                self.get_logger().info('%s 속도 %.2f 조향 %+.1f° 콘 %s 문 %s 벽 %s 정면 %.2f m 진행 방향 %+.1f° 붉은색 %.3f 좌 %.3f 우 %.3f%s%s' % (
                     state, speed, math.degrees(steering), d.get('posts', '-'), d.get('gates', '-'),
+                    # 벽 개수와 각 벽에서 가장 가까운 점 x:y (왼쪽 +). 0이면 지운 벽 없음
+                    '%d(%s)' % (len(walls), ' '.join('%.2f:%+.2f' % (x, y) for x, y in walls)) if walls else '0',
                     min(self.scan['front'], 9.99), math.degrees(self.test.cones.heading),
                     self.red['cone_red'], self.red['cone_red_left'], self.red['cone_red_right'],
                     ' (콘 색)' if self.test.cones.red else '', ' (진입 색)' if self.test.cones.corridor else ''))
