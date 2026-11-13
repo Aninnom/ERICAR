@@ -6,7 +6,8 @@
   - young4240/scale_car obstacle_side.py: 앞쪽 가장 가까운 좌·우 콘의 가운데 → 조향
   - tjsdn3065/AutoRace-2024 rubber_cone.py (2024 우승): 좌·우 콘 가운데 점들을 pure pursuit, 콘이 줄면 해제 후 다시 대기
 방식: 매 주기 지금 라이다만으로 다시 계산. 기억하는 값은 진행 방향(heading)과 문 폭(width)뿐
-  1. 기둥: 라이다보다 앞에 있는 군집의 중심. 붙어 놓인 콘 덩어리는 small_object_max_width마다 나눔
+  1. 기둥: 라이다보다 앞에 있는 군집의 중심. 붙어 놓인 콘 덩어리는 small_object_max_width마다 나눔.
+     외곽 가벽 직선 위에 놓인 기둥(끊긴 벽 조각)은 제외 (11/13)
   2. 문: 기둥 쌍 중 간격 cone_gate_min~max이고 진행 방향을 마주 보는 것 (같은 쪽 콘 2개는 진행 방향과 나란해 제외)
   3. 가까운 문부터 문 중점을 이어 cone_lookahead 앞 지점의 각도로 조향 (pure pursuit)
   4. 문이 안 보이고 콘만 보이면 그 콘에서 기억한 문 폭의 절반만큼 안쪽으로 지나감
@@ -25,30 +26,95 @@ def unit(vector):
     return vector/max(float(np.hypot(vector[0], vector[1])), 1e-9)
 
 
-def find_posts(scan, robot, c):
-    """라이다 군집 → (기둥 N×2, 넓은 군집 중심 M×2). 차체 좌표
+WALL_ANGLES = np.deg2rad(np.arange(0, 180, 2))   # 벽 직선 후보의 법선 각도 (허프 변환, 2° 간격)
+WALL_NORMALS = np.column_stack((np.cos(WALL_ANGLES), np.sin(WALL_ANGLES)))
 
-    기둥 = 라바콘 후보. 폭 small_object_max_width 이하 군집은 중심 하나, 그보다 넓고 cone_group_max_width 이하면
-    붙어 놓인 콘으로 보고 small_object_max_width마다 나눔 (11/12 실차: 붙은 콘이 폭 0.16~0.5 m 한 덩어리).
-    라이다보다 뒤(지나친 콘)와 cone_view_distance 밖은 제외.
-    넓은 군집 중심은 진입 판단에서 통로를 막은 물체(차량 장애물) 확인용.
+
+def line_distance(points, origin, direction):
+    """점(N×2)에서 직선(origin을 지나고 direction 방향)까지 거리"""
+    offset = points-origin
+    return np.abs(offset[:, 0]*direction[1]-offset[:, 1]*direction[0])
+
+
+def wall_lines(points, c):
+    """라이다 점 전체에서 벽(길게 이어진 곧은 선) 찾기 → [(직선 위 한 점, 방향 단위벡터)]
+
+    허프 변환: 방향 2° 간격 × 거리 칸(2·cone_wall_margin)마다 점 수를 세어 가장 많이 모인 직선을 후보로 뽑고
+    그 근처 점으로 직선을 다시 맞춤. 직선 위 점들이 cluster_gap 이내로 이어진 길이의 합이 cone_wall_min_length 이상이면 벽.
+    군집 단위(폭 넘는 군집만 벽)로 보지 않는 이유: 콘 그림자·거리 잡음으로 벽이 짧은 조각으로만 보이는 주기가 있음.
+    콘은 하나당 이어진 길이 약 0.08 m라 한 줄로 놓여도 합이 기준에 못 미침 (붙은 콘 0.5 m + 콘 3개 = 0.74 m).
+    촘촘히 붙여 놓은 콘 줄(합이 기준을 넘음)을 벽으로 지우지 않게 조건 2개 추가 (11/13 유경: 벽은 끊김 없이 사방을 두른 판):
+      - 직선이 차 왼쪽에 있음. 시계 방향 주행이라 외곽벽은 항상 왼쪽(코너에서는 앞), 오른쪽은 맵 안쪽이라 벽이 없음
+      - 직선 너머(라이다 반대쪽)에 점이 없음. 벽 너머는 안 보이고, 벽 앞에 선 콘 줄은 그 뒤로 벽이 보임
     """
-    points = np.asarray(scan['points'], dtype=float).reshape(-1, 2)
-    posts, wide = [], []
+    lines, margin, pool = [], c['cone_wall_margin'], points
+    for _ in range(5):   # 후보 5개까지: 옆 벽, 앞 벽 + 점이 많이 모인 다른 물체(가까운 붙은 콘 줄 등)
+        if len(pool) < 3:
+            break
+        cell = np.floor(pool@WALL_NORMALS.T/(2*margin)).astype(int)
+        cell -= cell.min()
+        span = int(cell.max())+1
+        votes = np.bincount((cell+np.arange(len(WALL_NORMALS))*span).ravel())
+        angle, k = divmod(int(votes.argmax()), span)
+        near = cell[:, angle] == k
+        for _ in range(2):
+            if near.sum() < 3:
+                break
+            origin = pool[near].mean(axis=0)
+            direction = np.linalg.svd(pool[near]-origin, full_matrices=False)[2][0]
+            near = line_distance(pool, origin, direction) <= margin
+        if near.sum() >= 3:
+            gaps = np.diff(np.sort((pool[near]-origin)@direction))
+            normal = np.array([-direction[1], direction[0]])
+            side = float(origin@normal)   # 라이다(원점)에서 직선까지 부호 있는 거리. 직선에서 가장 가까운 점 = normal·side
+            beyond = int(np.sum((points@normal-side)*np.sign(side) > 2*margin))
+            if (float(gaps[gaps <= c['cluster_gap']].sum()) >= c['cone_wall_min_length']
+                    and normal[1]*side > 0 and beyond <= c['cone_wall_beyond']):
+                lines.append((origin, direction))
+        pool = pool[~near]
+    return lines
+
+
+def split_clusters(points, c):
+    """각도 순 점열을 이웃 점 간격 cluster_gap으로 나눔 → [(군집 점 K×2, 폭)]. 점 수·폭 하한 미만은 버림"""
+    found = []
     if len(points):
         breaks = np.flatnonzero(np.linalg.norm(np.diff(points, axis=0), axis=1) > c['cluster_gap'])+1
         for cluster in np.split(points, breaks):
             if len(cluster) < c['cluster_min_points']:
                 continue
             width = float(np.linalg.norm(cluster.max(axis=0)-cluster.min(axis=0)))
-            if width < c['small_object_min_width']:
-                continue
-            if width > c['small_object_max_width']:
-                wide.append(cluster.mean(axis=0))
-            if width > c['cone_group_max_width']:
-                continue
-            parts = max(1, math.ceil(width/c['small_object_max_width']))
-            posts += [part.mean(axis=0) for part in np.array_split(cluster, parts) if len(part)]
+            if width >= c['small_object_min_width']:
+                found.append((cluster, width))
+    return found
+
+
+def find_posts(scan, robot, c):
+    """라이다 군집 → (기둥 N×2, 넓은 군집 중심 M×2). 차체 좌표
+
+    기둥 = 라바콘 후보. 폭 small_object_max_width 이하 군집은 중심 하나, 그보다 넓고 cone_group_max_width 이하면
+    붙어 놓인 콘으로 보고 small_object_max_width마다 나눔 (11/12 실차: 붙은 콘이 폭 0.16~0.5 m 한 덩어리).
+    라이다보다 뒤(지나친 콘)와 cone_view_distance 밖은 제외.
+    벽 점 제외 (11/13): 외곽 가벽은 콘 그림자·점 누락으로 끊겨 폭 cone_group_max_width 이하 조각이 됨 → 붙은 콘으로
+    분류되어 벽·콘 사이를 문으로 봄 (합성 확인). 벽 직선(wall_lines)에서 cone_wall_margin 안의 점을 먼저 빼고
+    다시 군집을 나눔 → 벽 조각이 사라지고, 벽 가까이 놓여 벽 군집에 묻힌 콘은 따로 떨어짐. 벽이 없으면 예전과 동일.
+    넓은 군집 중심은 진입 판단에서 통로를 막은 물체(차량 장애물) 확인용 (벽 점을 빼기 전 군집 기준).
+    """
+    points = np.asarray(scan['points'], dtype=float).reshape(-1, 2)
+    found = split_clusters(points, c)
+    wide = [cluster.mean(axis=0) for cluster, width in found if width > c['small_object_max_width']]
+    walls = wall_lines(points, c)
+    if walls:
+        keep = np.ones(len(points), dtype=bool)
+        for origin, direction in walls:
+            keep &= line_distance(points, origin, direction) > c['cone_wall_margin']
+        found = split_clusters(points[keep], c)
+    posts = []
+    for cluster, width in found:
+        if width > c['cone_group_max_width']:
+            continue
+        parts = max(1, math.ceil(width/c['small_object_max_width']))
+        posts += [part.mean(axis=0) for part in np.array_split(cluster, parts) if len(part)]
     posts = np.asarray(posts, dtype=float).reshape(-1, 2)
     wide = np.asarray(wide, dtype=float).reshape(-1, 2)
     posts = posts[(posts[:, 0] > 0) & (np.hypot(posts[:, 0], posts[:, 1]) < c['cone_view_distance'])]

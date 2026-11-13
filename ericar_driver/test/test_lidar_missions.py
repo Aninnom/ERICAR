@@ -59,12 +59,22 @@ def cast(origin, angles, cones, boxes):
     return np.where(np.isfinite(best) & (best < 12.0), best, 0.0)
 
 
-def scan_at(car, cones, boxes, lidar_config):
-    n = 720
+def wall_box(y):
+    """외곽 가벽: 차로 중앙에서 왼쪽 y(m)에 진행 방향(월드 x)과 나란한 긴 상자 (두께 2 cm)"""
+    return (1.0, y + 0.01, 8.0, 0.01)
+
+
+def scan_at(car, cones, boxes, lidar_config, n=720, wall=None, drop=0.0, noise=0.0, rng=None):
+    """wall(상자)을 주면 벽에 맞은 광선은 drop 확률로 무반사, 전체 거리에 표준편차 noise(m) 잡음 (실차 누락·잡음 흉내)"""
     angles = -math.pi + np.arange(n) * (2*math.pi/n)
     x, y, psi = car
     origin = np.array([x + ROBOT['lidar']['x']*math.cos(psi), y + ROBOT['lidar']['x']*math.sin(psi)])
     ranges = cast(origin, angles + psi, cones, boxes)
+    if wall is not None:
+        seen = cast(origin, angles + psi, cones, list(boxes) + [wall])
+        ranges = np.where((seen != ranges) & (rng.random(n) < drop), 0.0, seen)
+    if noise > 0:
+        ranges = np.where(ranges > 0, ranges + rng.normal(0, noise, n), 0.0)
     ranges[np.abs(angles) > math.radians(110)] = 0.0   # 실차 유효 각도 약 ±110°
     return scan_sectors(ranges, angles[0], 2*math.pi/n, 0.06, 12.0, lidar_config)
 
@@ -180,19 +190,30 @@ def corner_start(first_x=0.0, angle=45.0, radius=0.9, straight=0.5):
     return first_x - straight - radius*math.sin(a), -radius*(1 - math.cos(a)), a
 
 
-def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_speed=0.3):
+def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_speed=0.3,
+              wall=None, drop=0.0, noise=0.0, red=False):
+    """wall: 외곽 가벽 위치(차로 중앙에서 왼쪽 m). 주면 라이다 간격 0.9°(실차), 벽 점 누락 drop·거리 잡음 noise 적용
+    red: 카메라 붉은 비율 흉내 (콘 구간 0.8 m 앞부터 0.25 = 진입 기준 이상, 1.6 m 앞부터 0.05 = 콘 색 보임)"""
     c = config()
     cones_driver = ConeDriving(c, ROBOT)
     car = Car(*start)
     cones = list(left) + list(right) + list(others)
-    obstacles = outline(cones, boxes)
-    end_x = max(x for x, _ in cones) + 1.5
+    wall = None if wall is None else wall_box(wall)
+    obstacles = outline(cones, list(boxes) + ([] if wall is None else [wall]))
+    first_x, last_x = min(x for x, _ in cones), max(x for x, _ in cones)
+    end_x = last_x + 1.5
+    rng = np.random.default_rng(0)
     result = dict(start_x=None, end_x=None, min_clear=np.inf, wrong_side=0, stalled=False, entries=0)
     scan, was_active = None, False
     for k in range(int(40/DT)):
         if k % 2 == 0:
-            scan = scan_at(car.pose, cones, list(boxes), c['lidar'])
-        command = cones_driver.update(lane_seen(car.pose, 0.0), scan, car.v, car.yaw_rate(), DT, True)
+            scan = scan_at(car.pose, cones, list(boxes), c['lidar'], n=720 if wall is None else 400,
+                           wall=wall, drop=drop, noise=noise, rng=rng)
+        lane = lane_seen(car.pose, 0.0)
+        if red:
+            camera_x = car.x + ROBOT['camera']['x']
+            lane['cone_red'] = 0.25 if first_x - 0.8 < camera_x < last_x else (0.05 if first_x - 1.6 < camera_x < last_x else 0.0)
+        command = cones_driver.update(lane, scan, car.v, car.yaw_rate(), DT, True)
         if cones_driver.active and result['start_x'] is None:
             result['start_x'] = car.x
         # 콘이 안 보이는 사이 차선 주행으로 돌아갔다 다시 켜질 수 있음 → 마지막으로 꺼진 위치를 종료로 봄
@@ -262,6 +283,29 @@ def test_cones_not_started_by_other_objects():
         r = run_cones([], [], others=case.get('others', ()), boxes=case.get('boxes', ()), lane_speed=0.2)
         print(f"라바콘 오진입 {name}: 시작 x {r['start_x']}")
         assert r['start_x'] is None, (name, r)
+
+
+def test_cones_outer_wall():
+    """외곽 가벽 (11/13 도면: 맵 가장자리, 높이 200 mm, 좌측 직선 차로 중앙에서 약 0.72 m → 차 왼쪽)
+
+    벽은 콘 그림자·점 누락으로 끊겨 보임. 그 조각을 콘으로 보면 벽·콘 사이를 문으로 잡아 왼쪽 콘 바깥으로 통과.
+    벽 점 제외(cones.wall_lines) 전: 벽 0.60 m에서 6/57, 벽 0.72 m·누락 40%에서 2/57 실패 (바깥 통과).
+    벽 0.60 m = 콘 길이 차로 중앙보다 벽 쪽으로 0.12 m 치우친 경우 (주최: 콘은 차선과 무관하게 배치)
+    """
+    layouts = ([(f'쌍 {k}', gate_layout(k)) for k in ('two', 'three', 'shift', 'stuck')] +
+               [(f'쌍 임의 {s}', gate_layout('random', s)) for s in range(12)] +
+               [(f'줄 {k}', cone_layout(k)) for k in ('pairs', 'zigzag', 'shift')])
+    starts = {'정면': (-1.6, 0.03, 0.04), '코너 30°': corner_start(angle=30), '코너 45°': corner_start(angle=45)}
+    for wall, drop, noise in ((0.72, 0.0, 0.0), (0.72, 0.4, 0.01), (0.60, 0.0, 0.0)):
+        failed = []
+        for name, (left, right) in layouts:
+            for start_name, start in starts.items():
+                r = run_cones(left, right, start=start, wall=wall, drop=drop, noise=noise, red=True)
+                if r['start_x'] is None or r['wrong_side'] or r['min_clear'] <= 0.0 or r['stalled']:
+                    failed.append((name, start_name, r['wrong_side'], round(r['min_clear'], 3)))
+        print(f"라바콘 + 벽 {wall:.2f} m, 벽 점 누락 {drop:.0%}, 잡음 {noise*100:.0f} cm: "
+              f"실패 {len(failed)}/{len(layouts)*len(starts)}")
+        assert not failed, (wall, drop, noise, failed)
 
 
 # ---------- 3차선 정적 장애물 ----------
@@ -354,6 +398,7 @@ if __name__ == '__main__':
     test_cones_pass()
     test_cone_gates()
     test_cones_not_started_by_other_objects()
+    test_cones_outer_wall()
     test_three_lane_left_right()
     test_three_lane_random()
     print('라이다 미션 시험 통과')
