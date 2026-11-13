@@ -46,15 +46,12 @@ def sensor_status(config, state, ages, available):
     """Require the inputs used by this state, keeping lidar/odometry mandatory.
 
     표지판 검출(YOLO)은 필수 아님: 끊기면 표지판 미션만 꺼지고 차선·라이다 주행 계속 (ControlLoop.step)"""
-    timed_parking = state in ('parking_sequence', 'parked')
-    required_camera = not timed_parking or config['parking'].get('require_camera_during_sequence', False)
+    parking_ended = state in ('parking_failed', 'parking_cancelled', 'parked')
+    required_camera = not parking_ended
     ready = (available['scan'] and 0 <= ages['scan'] < config['sensor_timeout'] and
              0 <= ages['odometry'] < config['odometry_timeout'])
     if required_camera:
         ready = ready and available['image'] and 0 <= ages['image'] < config['sensor_timeout']
-    else:
-        # The timed sequence must have been entered through camera alignment.
-        ready = ready and available['lane']
     return bool(ready), required_camera
 
 
@@ -74,6 +71,9 @@ class Sensors:
     odom_stamp: float
     yaw_rate: float = 0.0        # IMU 자이로 z (rad/s, + 왼쪽)
     imu_stamp: float = -1e9      # IMU 수신 시각. 오래되면 odom 회전으로 대체
+    pose: object = None          # 뒷축 base_link의 odom x,y,yaw
+    camera_info: object = None   # 주차 BEV의 K/D. 없으면 기존 camera hfov 모델 사용
+    pose_history: object = ()    # 이미지/스캔 시각 보간용 짧은 기록
 
 
 @dataclass
@@ -128,7 +128,7 @@ class ControlLoop:
             self.driver.sensor_failure(now)
             state = 'waiting for fresh sensors / detector'
         else:
-            if required_camera and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
+            if required_camera and self.driver.state!='parking_turn' and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
                                                  if self.driver.lane_driver.in_corner(now) else None)
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
@@ -146,12 +146,14 @@ class ControlLoop:
             speed, steering, state = self.driver.update(lane, s.scan, s.detections if signs_ok else [],
                                                          s.detection_stamp, s.velocity, now, s.angular_velocity,
                                                          yaw_rate=s.yaw_rate if imu_ok else None,
-                                                         signs_ok=signs_ok or not c['detector']['enabled'])
+                                                         signs_ok=signs_ok or not c['detector']['enabled'],
+                                                         parking_input=dict(image=s.image,image_stamp=s.image_stamp,
+                                                             scan_stamp=s.scan_stamp,pose=s.pose,pose_stamp=s.odom_stamp,history=s.pose_history,camera_info=s.camera_info))
             if was_avoiding and not self.driver.avoiding:
                 self.vision.memory = {}
                 self.vision.previous_center = None
                 self.lane_stamp = None
-            if self.driver.state != 'parking_sequence':
+            if self.driver.state not in ('parking_failed', 'parking_cancelled', 'parked'):
                 age = max(now-s.image_stamp, .001)
                 limit = c.get('max_image_travel', .04) / age
                 speed = clip(speed, -limit, limit)
