@@ -191,7 +191,7 @@ class DriverNode(Node):
         self.publish(speed,steering)
         if out.telemetry is not None:
             packet=json.loads(out.telemetry)
-            packet['runtime']=dict(mode='parking_2',compute_ms=elapsed*1000,
+            packet['runtime']=dict(mode='parking_auto1',compute_ms=elapsed*1000,
                                    published_speed=speed,command_fresh=fresh)
             packet['control']['published_speed']=speed
             out.telemetry=json.dumps(packet)

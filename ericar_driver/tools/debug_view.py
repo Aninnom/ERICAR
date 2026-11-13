@@ -375,10 +375,18 @@ def draw_parking(img, control, live=None):
                 colors.get(state, GREY), 0.4)
         if park.get('selected_gap'):
             polygon(park['selected_gap']['polygon'], YELLOW, 2)
+            approach=park.get('approach') or {}
+            if park.get('state')=='parking_approach' and approach:
+                target=lp(approach['remaining_m'],0.)
+                cv2.drawMarker(img,target,CYAN,cv2.MARKER_CROSS,12,2)
+                put(img,f"TURN IN {approach['remaining_m']:+.2f}m",target[0]+5,target[1]-8,CYAN,.45)
     except Exception:
         pass
     if not park:
         return f"PARK live (driver off) {','.join(states) or 'no gap'}"[:64]
+    if park.get('state')=='parking_approach':
+        approach=park.get('approach') or {}
+        return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
     return (f"PARK {park.get('state', '')} {','.join(states) or 'no gap'}  "
             f"search {park.get('search_distance_m', 0):.2f} turn {park.get('turn_distance_m', 0):.2f}m")[:64]
 
@@ -540,6 +548,9 @@ def status_panel(width, t):
     if park:
         white = park.get('white_line', {})
         line(f"WHITE present {white.get('present')} seen {white.get('seen_during_turn')} loss {white.get('loss_frames', 0)}", YELLOW)
+    if park.get('state')=='parking_approach':
+        approach=park.get('approach') or {}
+        line(f"TURN IN {approach.get('remaining_m',0):+.2f} m  lead {approach.get('turn_lead_m',0):.2f} m", CYAN)
     stall, limit = control.get('stall_time', 0.0), (ANSWER.get('stall') or {}).get('seconds', 8.0)
     line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
     reasons = stop_reasons(t)

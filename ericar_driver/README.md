@@ -1,3 +1,5 @@
+> **parking_auto1:** FREE 목표 저장 → 회전 시작점까지 접근 → 기존 우회전·흰 선 소실 정지. [실행·설정](../docs/parking_auto1.md).
+
 # ericar_driver
 
 실차 주행 노드. 멘토 ORDA `answer.py`(hello-osy/2026-orda-mentoring, 613c9b4)를 역할별 파일로 분리. 노드 하나 구조 유지.
