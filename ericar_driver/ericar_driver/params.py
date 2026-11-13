@@ -49,7 +49,9 @@ ANSWER_CONFIG = {
               'creep_speed': 0.08, 'creep_horizon': 0.3, 'creep_margin': 0.02},
 
     'detector': {
-        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'cpu', 'rate_hz': 5.0,
+        # device 0 = Jetson GPU. 11/14 실측: CPU 추론은 주행 노드 CPU 390 %·영상 지연 0.16 s, GPU는 65 %·0.02 s
+        # GPU 없는 PC에서 모델을 직접 돌릴 때만 'cpu'로 바꿈
+        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 0, 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
