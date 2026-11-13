@@ -51,6 +51,10 @@ CASES = {
     # 처음부터 왼쪽 차로에서 출발 (차로 번호 초기값 1과 다름) → 색으로 보정해 바깥으로 안 나가야 함
     'start_left': dict(signs={}, obstacles=[(5.3, 0.52)], start_y=0.52, start_zone=True),
     # IMU 없음(끊김): odom 회전(실측 1.07배)만으로 차선 변경 → 카메라 종료·지나침 방지로 바깥선 밖으로 안 나가야 함
+    # 11/12 실차: 가운데·왼쪽 막힘 → 오른쪽 끝(0)으로 피함 → 왼쪽 표지판 → 두 칸 연속 이동(0→1→2) 뒤 노란 바깥선 이탈
+    'right_then_left': dict(signs={'left': (6.6, 7.4)}, obstacles=[(5.0, 0.0), (5.6, 0.52)]),
+    # 반대: 가운데 막힘 → 왼쪽(2)으로 피함 → 오른쪽 표지판 → 2→1→0
+    'left_then_right': dict(signs={'right': (6.6, 7.4)}, obstacles=[(5.0, 0.0)]),
     'no_imu': dict(signs={}, obstacles=[(5.0, 0.0), (6.9, 0.52)], imu=False),
 }
 
@@ -154,11 +158,13 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                     header=stamp, ranges=ranges.tolist(), angle_min=amin, angle_increment=inc,
                     range_min=0.06, range_max=12.0))
             yaw_rate = sim['v'] / wheelbase * math.tan(sim['steer'])
-            twist = fake_ros.Msg(linear=fake_ros.Msg(x=sim['v']), angular=fake_ros.Msg(z=yaw_rate * odom_yaw_scale))
+            # odom_speed_scale: odom 속도 오차 (1보다 작으면 실제보다 덜 간 것으로 보고 → 추측 항법이 더 감), imu_scale: IMU 회전 오차
+            twist = fake_ros.Msg(linear=fake_ros.Msg(x=sim['v'] * case.get('odom_speed_scale', 1.0)),
+                                 angular=fake_ros.Msg(z=yaw_rate * odom_yaw_scale))
             node.subscriptions[config['topics']['odometry']](fake_ros.Msg(header=stamp, twist=fake_ros.Msg(twist=twist)))
             if case.get('imu', True):
                 node.subscriptions[config['topics'].get('imu', '/imu')](
-                    fake_ros.Msg(header=stamp, angular_velocity=fake_ros.Msg(z=yaw_rate)))
+                    fake_ros.Msg(header=stamp, angular_velocity=fake_ros.Msg(z=yaw_rate * case.get('imu_scale', 1.0))))
             if k % 4 == 0:
                 with node.lock:
                     node.detections = detections_at(sim['s'])
@@ -173,13 +179,16 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                     mode = message.data
             if command is not None:
                 sim['v'] += (command[0] - sim['v']) * 0.4
-                sim['steer'] = command[1]
+                # 실차 흉내: steer_scale배 과·저조향, steer_lag(0~1) 조향 지연 (기본 1, 0 = 즉시)
+                lag = case.get('steer_lag', 0.0)
+                sim['steer'] = lag*sim['steer'] + (1-lag)*command[1]*case.get('steer_scale', 1.0)
             sim['psi'] += sim['v'] / wheelbase * math.tan(sim['steer']) * DT
             sim['s'] += sim['v'] * math.cos(sim['psi']) * DT
             sim['y'] += sim['v'] * math.sin(sim['psi']) * DT
             d = node.driver.debug if hasattr(node, 'driver') else getattr(node.loop.driver, 'debug', {})
             if ZONE_START <= sim['s'] < ZONE_END:
                 out['max_abs_y'] = max(out['max_abs_y'], abs(sim['y']))
+                out['max_y_signed'] = max(out.get('max_y_signed', 0.0), sim['y'], key=abs)
             if collides(sim['s'], sim['y'], sim['psi'], obstacles):
                 out['collision'] = True
             if abs(sim['v']) < 0.01 and t > 2:
@@ -214,13 +223,13 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
 
 def judge(case_name, r):
     reached = r['final'][0] > ZONE_END
-    off = r['max_abs_y'] > 0.78
+    off = r['max_abs_y'] + CAR_W/2 > 0.78   # 차체 가장자리가 노란 바깥선을 넘으면 이탈 (예전: 차체 중심 기준)
     fork = CASES[case_name]['signs']
     want = 2 if 'left' in fork else 0 if 'right' in fork else None
     fork_ok = want is None or r['end_lane'] == want
     ok = reached and not off and not r['collision'] and fork_ok
     return ok, dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
-                    끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'])
+                    끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2))
 
 
 if __name__ == '__main__':
