@@ -291,6 +291,14 @@ class LaneVision:
         groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
         return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
 
+    def forget_lines(self):
+        """좌/우 선 기억 삭제 (11/14 유경)
+
+        라바콘처럼 차선을 제대로 못 보는 구간을 지나는 동안 한 선에 붙은 이름이 틀려 있으면, 그 뒤로도
+        기억 이어받기(single_name)가 계속 넘겨 고착됨 → 그 구간을 벗어날 때 한 번 비움
+        """
+        self.memory = {}
+
     def remembered_side(self, anchor):
         """기억한 선과 반 차로 이내인 가까운 끝의 이름. 없으면 None"""
         row, x = anchor

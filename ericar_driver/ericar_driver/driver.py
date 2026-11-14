@@ -99,6 +99,20 @@ class Driver:
         last = change.c['lane_count'] - 1
         return 'left' if lane == last else 'right' if lane == 0 else None
 
+    def cone_left_limit(self):
+        """라바콘 통과 중·직후 cone_lane_left_distance(m) 안이면 한 선 이름 판단 경계(m), 아니면 None (유경)
+
+        lane_vision.single_name이 corner_left_limit 자리에서 씀: 선의 가까운 끝이 화면 중앙에서 오른쪽으로
+        이 값 안이면 바깥(왼쪽) 선으로 봄. 라바콘 직후에는 차가 바깥 선 가까이·비스듬히 있어 위치만으로는
+        왼쪽 선을 오른쪽 선으로 오인함. 기억보다 먼저 적용되므로 틀린 이름이 이어지는 고착도 같이 끊김
+        """
+        cones = self.cones
+        if not cones.started:
+            return None
+        if not (cones.active or cones.since_exit <= self.c['lidar']['cone_lane_left_distance']):
+            return None
+        return self.c['lidar']['cone_lane_left_limit']
+
     def allowed(self, mission):
         """지금 구간의 미션이고 아직 끝내지 않았을 때만"""
         return self.sections.allows(mission) and mission not in self.done

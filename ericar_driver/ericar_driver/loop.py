@@ -100,6 +100,7 @@ class ControlLoop:
         self.last_state = ''
         self.started = None          # 첫 제어 주기 시각 (YOLO 첫 검출 대기 기준)
         self.detector_seen = False   # 최신 검출을 한 번이라도 받음
+        self.cone_hint = None        # 직전 주기의 라바콘 차선 힌트 (켜지는 순간 차선 기억 비우기용)
 
     def step(self, s):
         c, now = self.c, s.now
@@ -129,8 +130,13 @@ class ControlLoop:
             state = 'waiting for fresh sensors / detector'
         else:
             if required_camera and self.driver.state!='parking_turn' and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
+                # 한 선 이름 판단 경계: 우회전 코너 유지가 먼저, 없으면 라바콘 직후 힌트 (유경)
+                cone_hint = self.driver.cone_left_limit()
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
-                                                 if self.driver.lane_driver.in_corner(now) else None)
+                                                 if self.driver.lane_driver.in_corner(now) else cone_hint)
+                if cone_hint is not None and self.cone_hint is None:
+                    self.vision.forget_lines()   # 라바콘 구간에서 붙은 틀린 이름이 이어지지 않게 한 번만
+                self.cone_hint = cone_hint
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.vision.outer_yellow = self.driver.outer_yellow()
                 self.vision.fork_direction = self.driver.fork_direction()
