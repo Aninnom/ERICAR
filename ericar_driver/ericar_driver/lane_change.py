@@ -164,7 +164,7 @@ class LaneChange:
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
         points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction)
         error = self.target-self.offset
-        x, y = to_body(c['lookahead'], error, self.heading)
+        x, y = to_body(c.get('request_lookahead', c['lookahead']) if getattr(self, 'requested_move', False) else c['lookahead'], error, self.heading)
         desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
         self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
@@ -285,7 +285,7 @@ class LaneChange:
             self.waiting = True
             self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
-        self.active, self.direction = True, direction
+        self.active, self.direction = True, direction; self.requested_move = bool(requested)
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = heading, 0.0, 0.0
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)

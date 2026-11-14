@@ -301,7 +301,7 @@ ANSWER_CONFIG = {
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
-        'lookahead': 0.55, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
+        'lookahead': 0.40, 'request_lookahead': 0.40, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
         # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
         # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
         'finish_error': 0.05, 'finish_heading': 0.15,
