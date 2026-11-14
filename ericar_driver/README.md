@@ -1,4 +1,4 @@
-> **parking_auto1:** FREE 목표 저장 → 회전 시작점까지 접근 → 흰 경계선 PD 정렬·흰 선 소실 정지. [실행·설정](../docs/parking_auto1.md).
+> **parking_auto1:** 표지판 확인 후 일반속도+LiDAR 탐색 → 가까운 표지판 통과/목표 접근 시 서행 → 원호 유지 → PD 정렬·자세 확인 후 흰 선 소실 정지. [실행·설정](../docs/parking_auto1.md).
 
 # ericar_driver
 

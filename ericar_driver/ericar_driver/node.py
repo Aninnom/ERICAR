@@ -124,12 +124,16 @@ class DriverNode(Node):
         self.yaw_rate = message.angular_velocity.z
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
+    @staticmethod
+    def detector_paused(state):
+        return (state.startswith('parking_') and state!='parking_cruise') or state=='parked'
+
     def detect(self):
         import torch
         c = self.c
         last_stamp = None
         while not self.stop_event.is_set():
-            if self.loop.driver.state.startswith('parking_') or self.loop.driver.state=='parked':
+            if self.detector_paused(self.loop.driver.state):
                 self.stop_event.wait(.2)
                 continue
             with self.lock:

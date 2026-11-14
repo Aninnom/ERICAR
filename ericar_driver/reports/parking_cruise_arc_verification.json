@@ -1,0 +1,138 @@
+{
+  "branch": "parking_auto1",
+  "base_commit": "8101a7d",
+  "tests": "77 parking tests passed",
+  "build": "colcon ericar_driver passed",
+  "sign_speed_scenario": [
+    {
+      "time_s": 1.0,
+      "state": "parking_cruise",
+      "speed": 0.35,
+      "near_seen": false,
+      "misses": 0
+    },
+    {
+      "time_s": 1.2,
+      "state": "parking_cruise",
+      "speed": 0.35,
+      "near_seen": false,
+      "misses": 0
+    },
+    {
+      "time_s": 1.4,
+      "state": "parking_cruise",
+      "speed": 0.35,
+      "near_seen": true,
+      "misses": 0
+    },
+    {
+      "time_s": 1.6,
+      "state": "parking_cruise",
+      "speed": 0.35,
+      "near_seen": true,
+      "misses": 1
+    },
+    {
+      "time_s": 1.8,
+      "state": "parking_cruise",
+      "speed": 0.35,
+      "near_seen": true,
+      "misses": 2
+    },
+    {
+      "time_s": 2.0,
+      "state": "parking_scan",
+      "speed": 0.12,
+      "near_seen": true,
+      "misses": 3
+    }
+  ],
+  "arc_camera_bicycle_scenarios": [
+    {
+      "start_bias_m": -0.04,
+      "state": "parked",
+      "final_rotation_deg": 85.17826335520736,
+      "final_rear_axle_pose": [
+        0.6174648496094046,
+        -0.5927879885540835,
+        -1.486641146679198
+      ],
+      "minimum_painted_side_clearance_m": 0.0003128840949432332,
+      "elapsed_s": 8.0,
+      "minimum_arc_steering_magnitude_rad": 0.23
+    },
+    {
+      "start_bias_m": -0.02,
+      "state": "parked",
+      "final_rotation_deg": 85.30379495380863,
+      "final_rear_axle_pose": [
+        0.5948428427404358,
+        -0.5593183962289107,
+        -1.488832086390082
+      ],
+      "minimum_painted_side_clearance_m": 0.015787024709965125,
+      "elapsed_s": 7.550000000000001,
+      "minimum_arc_steering_magnitude_rad": 0.23000000000000004
+    },
+    {
+      "start_bias_m": 0.0,
+      "state": "parked",
+      "final_rotation_deg": 85.05801345285008,
+      "final_rear_axle_pose": [
+        0.5481943440249042,
+        -0.5020173267802511,
+        -1.4845423899578627
+      ],
+      "minimum_painted_side_clearance_m": 0.020501624373948868,
+      "elapsed_s": 6.800000000000001,
+      "minimum_arc_steering_magnitude_rad": 0.3181398240792213
+    },
+    {
+      "start_bias_m": 0.02,
+      "state": "parked",
+      "final_rotation_deg": 85.08709384160147,
+      "final_rear_axle_pose": [
+        0.5231457633833461,
+        -0.4561572804844999,
+        -1.4850499384893363
+      ],
+      "minimum_painted_side_clearance_m": 0.029305629499890018,
+      "elapsed_s": 6.25,
+      "minimum_arc_steering_magnitude_rad": 0.35
+    },
+    {
+      "start_bias_m": 0.04,
+      "state": "parked",
+      "final_rotation_deg": 85.09545699804859,
+      "final_rear_axle_pose": [
+        0.5328642974184121,
+        -0.44185028545946237,
+        -1.4851959031051987
+      ],
+      "minimum_painted_side_clearance_m": 0.047785806894895755,
+      "elapsed_s": 6.1000000000000005,
+      "minimum_arc_steering_magnitude_rad": 0.35
+    }
+  ],
+  "unchanged": [
+    "LiDAR clustering and FREE occupancy thresholds",
+    "main motor publisher",
+    "main lane controller algorithm"
+  ],
+  "changed": [
+    "Cruise with parallel LiDAR search",
+    "YOLO continues during parking_cruise",
+    "Qualified near-sign disappearance or target braking-distance slowdown",
+    "Measured low speed required at turn entry",
+    "Arc and align substates with rotation and entry checks",
+    "No early straight steering from transient visual alignment",
+    "White-loss completion requires enough rotation and rear entry"
+  ],
+  "hardware_verified": false,
+  "limitations": [
+    "Ideal camera calibration and bicycle model; not real parking success rate",
+    "Paint clearances are small in the earliest-start case; real calibration/tuning still required",
+    "Rotation uses IMU or corrected odometry and can drift",
+    "Whole-course golden regression not regenerated"
+  ]
+}

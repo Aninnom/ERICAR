@@ -22,6 +22,7 @@ def config():
     c=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/robot.yaml').read_text())
     c['answer']=copy.deepcopy(ANSWER_CONFIG);c['answer']['missions']['start_stage']='parking'
     c['answer']['lidar']['zero_is_no_return']=True
+    c['answer']['parking']['cruise_search_enabled']=False  # 기존 서행·회전 회귀 장면. 일반속도 탐색은 별도 시험
     return c
 
 
@@ -49,6 +50,12 @@ def picture(present=True):
     return frame
 
 
+def completed_turn_pose(p):
+    # 흰 선 소실 정지 단위 시험의 후반 자세: 90도 회전·차체 후단 입구 통과
+    p.turn_angle=math.pi/2;p.turn_phase='align';p.arc_released=True
+    p.selected['entrance']=[-.15,0.];p.selected['normal']=[1.,0.];p.selected['tangent']=[0.,1.]
+
+
 def step(p,data,now=1.,present=True,velocity=.12,image_stamp=None):
     return p.step(now,picture(present),now if image_stamp is None else image_stamp,data,now,
                   None,now,[],velocity,dict(valid=True),search_command=(.12,0.))
@@ -74,6 +81,7 @@ def test_search_rolls_even_when_lane_detector_is_invalid():
 def test_unknown_after_free_does_not_cancel_turn_and_white_loss_stops_once():
     c=config();p=Parking(c);p.start(0.);step(p,laser(c))
     assert step(p,laser(c,boxes=[]),1.1)[2]=='parking_turn'
+    completed_turn_pose(p)
     speed,steering,state=step(p,laser(c,boxes=[]),1.2,present=False)
     assert speed==0 and steering==0 and state=='parked'
     assert step(p,laser(c),1.3)[0]==0
@@ -102,7 +110,7 @@ def test_actual_obstacle_stops_without_erasing_latched_turn():
 
 def test_turn_timeout_cancel_and_invalid_steering():
     c=config();p=Parking(c);p.start(0.);step(p,laser(c))
-    assert step(p,laser(c),9.1)[0]==0 and p.reason=='TURN_TIMEOUT'
+    assert step(p,laser(c),1.+c['answer']['parking']['turn_timeout']+.1)[0]==0 and p.reason=='TURN_TIMEOUT'
     p=Parking(c);p.start(0.);p.cancel()
     assert step(p,laser(c))[2]=='parking_cancelled'
     c['answer']['parking']['turn_steering']=.2
@@ -125,6 +133,7 @@ def test_main_driver_sign_to_right_turn_to_white_loss():
         result=d.update(lane,laser(c),[dict(name='parking',area=.1)],now,.12,now,parking_input=data)
         if d.state=='parking_turn':break
     assert d.state=='parking_turn' and result[0]>0 and result[1]<0
+    completed_turn_pose(d.parking)
     now+=.1;data.update(image=picture(False),image_stamp=now,scan_stamp=now,pose_stamp=now)
     result=d.update(lane,laser(c),[],now,.12,now,parking_input=data)
     assert d.state=='parked' and result[:2]==(0.,0.)
@@ -150,6 +159,7 @@ def test_ros_main_publisher_receives_turn_and_stop_commands():
         commands=[m for topic,m in node.published if topic==c['topics']['drive']]
         assert commands[-1].speed>0 and commands[-1].steering_angle<0
         fake_ros.Clock.now_s=round(fake_ros.Clock.now_s+.1,6);now=fake_ros.Clock.now_s
+        completed_turn_pose(node.loop.driver.parking)
         node.image=picture(False);node.image_stamp=node.scan_stamp=node.odom_stamp=now
         node.control()
         assert node.loop.driver.state=='parked'

@@ -63,15 +63,17 @@ class Driver:
 
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
-        self.pid.reset()
+        if state!='parking_scan' or not self.c['parking']['cruise_search_enabled']:
+            self.pid.reset()
         if state != 'lane':
             self.lane_change.active = self.cones.active = False
         if state == 'parking_scan':
             self.parking.start(now)
+            self.state=self.parking.state
 
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
-        if self.state in ('parking_scan', 'parking_approach', 'parking_turn'):
+        if self.state in ('parking_cruise', 'parking_scan', 'parking_approach', 'parking_turn'):
             self.parking.pause(now)
 
     def leave_mission(self, mission, now):
@@ -363,13 +365,13 @@ class Driver:
             return 0.,0.,'parking_test: WAITING_FOR_PARKING_SIGN'
         if self.state.startswith('parking_') or self.state == 'parked':
             search_command=None
-            if self.state in ('parking_scan','parking_approach'):
+            if self.state in ('parking_cruise','parking_scan','parking_approach'):
                 # 표지판 전후 동일 LaneDriving 인스턴스·선 놓침 탐색·조향 기억 유지
                 search_command=self.main_lane_command(lane,now,dt,velocity,angular_velocity,True)
             if parking_input is None:
                 speed,steering,state=self.parking.fail('PARKING_INPUT_UNAVAILABLE')
             else:
-                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,angular_velocity=angular_velocity,**parking_input)
+                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,angular_velocity=angular_velocity,measured_turn_rate=turn_rate,detections=detections,detection_stamp=detection_stamp,**parking_input)
             self.state=state
             if state=='parked':self.advance('parking')
             self.debug=dict(parking=self.parking.debug,section=self.sections.index,stage=self.stage(),control_stamp=now,

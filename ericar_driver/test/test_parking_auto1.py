@@ -3,7 +3,7 @@ import math
 from unittest.mock import patch
 import numpy as np
 import pytest
-from test_parking_2 import config,laser,picture,Parking,Driver
+from test_parking_2 import config,laser,picture,Parking,Driver,completed_turn_pose
 
 
 BOXES=[(.15,.4,-.84,-.25),(.95,1.2,-.84,-.25)]
@@ -38,6 +38,7 @@ def test_different_obstacle_positions_reach_same_relative_turn_start(offset):
             assert command==(.12,0.,'parking_scan')
     assert seen_approach and turn_travel is not None
     assert abs(turn_travel-(.675+offset-lead))<=.032
+    completed_turn_pose(p)
     assert tick(p,laser(c,boxes=[]),t+.1,present=False)==(0.,0.,'parked')
 
 
@@ -130,6 +131,7 @@ def test_main_motor_publishes_approach_then_turn_then_stop():
             travel+=.012
         assert seen_approach and seen_turn
         now=round(now+.1,6);fake_ros.Clock.now_s=now
+        completed_turn_pose(node.loop.driver.parking)
         node.image=picture(False);node.image_stamp=node.scan_stamp=node.odom_stamp=now
         node.control()
         assert node.loop.driver.state=='parked'

@@ -6,12 +6,15 @@ from .lidar import body_points
 from .parking_gap import gap_candidates,classify_gap
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
+from .parking_sign import SignPassage,slow_distance
 
 
 class Parking:
     def __init__(self,config):
         self.c=config['answer']['parking'];self.robot=config['robot']
         self.pd=ParkingPD(self.robot,self.c)
+        self.sign=SignPassage(self.c,config['answer']['detector'])
+        self._reset_progress()
         if not -self.robot['max_steering']<=self.c['turn_steering']<0:raise ValueError('turn_steering must be a bounded right turn')
         if not math.isfinite(self._turn_lead()) or self._turn_lead()<=0:raise ValueError('positive turn lead required')
         if not 0<=self.c['approach_start_tolerance']<=self.c['approach_passed_tolerance']:raise ValueError('invalid approach tolerances')
@@ -21,9 +24,15 @@ class Parking:
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
 
+    def _reset_progress(self):
+        self.cruise_distance=0.;self.nearest_start=None;self.slow_started=0.;self.slow_reason=None
+        self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
+
     def start(self,now):
-        self.pd.reset()
-        self.state='parking_scan';self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
+        self.pd.reset();self.sign.reset();self._reset_progress()
+        self.state='parking_cruise' if self.c['cruise_search_enabled'] else 'parking_scan'
+        self.reason='MAIN_LANE_WITH_LIDAR_SEARCH' if self.state=='parking_cruise' else 'SLOW_SEARCH_UNTIL_FIRST_FREE'
+        self.slow_started=now
         self.started=self.last_tick=now;self.turn_started=None;self.selected=None
         self.last_scan=self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=self.turn_distance=0.;self.motion_since=None
@@ -40,7 +49,7 @@ class Parking:
         self.state='parking_cancelled';self.reason='EXTERNAL_CANCEL'
 
     def pause(self,now):
-        self.pd.pause()
+        self.pd.pause();self.align_frames=0
         self.last_tick=now;self.motion_since=None;self.reason='WAITING_FOR_FRESH_SENSORS'
 
     def _output(self,speed=0.,steering=0.):
@@ -48,7 +57,9 @@ class Parking:
         if self.state in ('parked','parking_failed','parking_cancelled'):
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None)
         self.debug=dict(mode='parking_auto1',state=self.state,reason=self.reason,gap=self.gap_debug,
-                        selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,white_line=self.line_debug,line_seen=self.line_seen,
+                        selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
+                        cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
+                        turn_phase=self.turn_phase,turn_angle_deg=math.degrees(self.turn_angle),arc_released=self.arc_released,white_line=self.line_debug,line_seen=self.line_seen,
                         search_distance_m=self.search_distance,turn_distance_m=self.turn_distance,
                         published_speed=float(speed),steering=float(steering))
         return float(speed),float(steering),self.state
@@ -78,7 +89,23 @@ class Parking:
         if stamp==self.last_image:return False
         self.last_image=stamp
         _,lines=parking_straight_lines(image,self.c)
-        if self.selected is not None:self.pd.update(lines,image.shape,self.selected,stamp)
+        if self.selected is not None:
+            self.pd.update(lines,image.shape,self.selected,stamp,phase=self.turn_phase)
+            feedback=self.pd.debug
+            entry_progress=-float(np.dot(self.selected['entrance'],self.selected['normal']))
+            qualified=(feedback.get('active') and self.turn_angle>=self.c['arc_min_angle'] and
+                       abs(feedback.get('heading_rad',99.))<=self.c['arc_align_heading'] and
+                       abs(feedback.get('lateral_m',99.))<=self.c['arc_align_lateral'] and
+                       entry_progress>=-self.c['arc_entry_tolerance'])
+            if self.turn_phase=='arc':
+                self.align_frames=self.align_frames+1 if qualified else 0
+                if self.align_frames>=self.c['arc_align_frames']:
+                    self.turn_phase='align';self.pd.pid.reset()
+            expected=math.atan2(self.selected['normal'][1],self.selected['normal'][0])
+            if (self.turn_phase=='align' and self.turn_angle>=self.c['arc_release_angle'] and
+                    abs(expected)<=self.c['arc_release_heading'] and feedback.get('active') and
+                    abs(feedback.get('heading_rad',99.))<=self.c['arc_release_heading']):
+                self.arc_released=True
         self.line_present=bool(lines)
         if lines:self.line_seen=True;self.loss_frames=0
         elif self.line_seen:self.loss_frames+=1
@@ -116,80 +143,117 @@ class Parking:
             self.selected=None;self.state='parking_scan'
             self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             return None
-        if remaining<=self.c['approach_start_tolerance']:
+        self.approach_debug['waiting_for_slow_speed']=remaining<=self.c['approach_start_tolerance'] and abs(velocity)>self.c['turn_entry_max_speed']
+        if remaining<=self.c['approach_start_tolerance'] and abs(velocity)<=self.c['turn_entry_max_speed']:
+            self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
             self.state='parking_turn';self.turn_started=now;self.turn_distance=0.
             self.line_seen=False;self.last_image=None;self.pd.reset();self.reason='ALIGNED_START_FIXED_RIGHT_TURN'
         return None
 
-    def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,camera_info=None,search_command=None,angular_velocity=0.):
+    def _finish_pose(self):
+        # 조기 선 소실은 완료가 아님. 뒷축 회전과 차체 후단의 입구 통과 확인
+        heading=math.atan2(self.selected['normal'][1],self.selected['normal'][0])
+        entry=-float(np.dot(self.selected['entrance'],self.selected['normal']))
+        rear=self.robot['length']-self.robot['front_bumper_x']
+        required=rear*abs(math.cos(heading))+self.robot['width']/2*abs(math.sin(heading))+self.c['body_margin']
+        return (self.turn_angle>=self.c['arc_release_angle'] and abs(heading)<=self.c['arc_release_heading'] and entry>=required)
+
+    def _slow(self,now,reason):
+        self.slow_started=now;self.slow_reason=reason
+        self.state='parking_approach' if self.selected is not None else 'parking_scan'
+        if self.selected is not None:self.approach_started=now;self.approach_distance=0.
+
+    def _find_gap(self,scan,scan_stamp,now,velocity,rate):
+        if scan_stamp==self.last_scan:return False
+        self.last_scan=scan_stamp;self.nearest_start=None
+        candidates,self.gap_debug=gap_candidates(scan,self.robot,self.c)
+        self.gap_debug['scan_stamp']=float(scan_stamp);free=[];evaluations=[];late_seen=False
+        for candidate in candidates:
+            status,evidence=classify_gap(candidate,scan,self.robot,self.c)
+            candidate=dict(candidate);self._move_target(candidate,now-scan_stamp,velocity,rate)
+            remaining=float(candidate['entrance'][0]-self._turn_lead())
+            late=remaining < -self.c['approach_passed_tolerance']
+            late_seen|=status=='FREE' and late
+            # UNKNOWN 후보도 진입점이 가까우면 감속 근거. FREE 판정 기준은 그대로 유지
+            if status!='OCCUPIED' and not late:
+                self.nearest_start=remaining if self.nearest_start is None else min(self.nearest_start,remaining)
+            evaluations.append(dict(state=status,evidence=evidence,entrance=candidate['entrance'],
+                                    turn_start_remaining_m=remaining,rejection='TURN_START_ALREADY_PASSED' if late and status=='FREE' else None))
+            if status=='FREE' and not late:free.append(candidate)
+        self.gap_debug['evaluations']=evaluations
+        if free:self.selected=min(free,key=lambda b:b['entrance'][0])
+        return late_seen
+
+    def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,
+             camera_info=None,search_command=None,angular_velocity=0.,detections=(),detection_stamp=-1e9,
+             measured_turn_rate=None):
         if self.state in ('parked','parking_failed','parking_cancelled'):return self._output()
         if now<self.last_tick:return self.fail('CLOCK_RESET')
         dt=min(max(now-self.last_tick,0.),.5);self.last_tick=now
-        if not math.isfinite(velocity) or not math.isfinite(angular_velocity) or scan is None or not 0<=now-scan_stamp<self.c['sensor_timeout']:
+        rate=angular_velocity if measured_turn_rate is None else measured_turn_rate
+        if not all(math.isfinite(v) for v in (velocity,angular_velocity,rate)) or scan is None or not 0<=now-scan_stamp<self.c['sensor_timeout']:
             self.pause(now);return self._output()
         if image is None or not 0<=now-image_stamp<self.c['sensor_timeout']:
             self.pause(now);return self._output()
-        rejected_late=False
+        self.sign.observe(detections,detection_stamp,now)
+        late=False
+        if self.state=='parking_cruise':
+            self.cruise_distance+=abs(velocity)*dt
+            if now-self.started>self.c['cruise_timeout']:return self.fail('CRUISE_SEARCH_TIMEOUT')
+            if self.cruise_distance>self.c['cruise_distance_limit']:return self.fail('CRUISE_SEARCH_DISTANCE_LIMIT')
+            if self.selected is not None:
+                self._move_target(self.selected,dt,velocity,rate)
+                self.nearest_start=self.selected['entrance'][0]-self._turn_lead()
+            else:late=self._find_gap(scan,scan_stamp,now,velocity,rate)
+            close=self.nearest_start is not None and self.nearest_start<=slow_distance(velocity,self.c)
+            if self.sign.passed or close:
+                self._slow(now,'TARGET_BRAKING_DISTANCE' if close else 'NEAR_SIGN_PASSED')
+                dt=0.  # cruise에서 이미 반영한 목표 이동·주행 거리를 중복 적분하지 않음
         if self.state=='parking_scan':
             self.search_distance+=abs(velocity)*dt
-            if now-self.started>self.c['search_timeout']:return self.fail('NO_FREE_GAP_BEFORE_TIMEOUT')
+            if now-self.slow_started>self.c['search_timeout']:return self.fail('NO_FREE_GAP_BEFORE_TIMEOUT')
             if self.search_distance>self.c['search_distance_limit']:return self.fail('SEARCH_DISTANCE_LIMIT')
-            if scan_stamp!=self.last_scan:
-                self.last_scan=scan_stamp
-                candidates,self.gap_debug=gap_candidates(scan,self.robot,self.c)
-                self.gap_debug['scan_stamp']=float(scan_stamp)
-                free=[];evaluations=[]
-                for candidate in candidates:
-                    state,evidence=classify_gap(candidate,scan,self.robot,self.c)
-                    candidate=dict(candidate)
-                    # 스캔 시각 이후 이동량의 짧은 등속 근사. 엄격한 동기화 기록 미사용
-                    self._move_target(candidate,now-scan_stamp,velocity,angular_velocity)
-                    remaining=float(candidate['entrance'][0]-self._turn_lead())
-                    late=state=='FREE' and remaining < -self.c['approach_passed_tolerance']
-                    rejected_late|=late
-                    evaluations.append(dict(state=state,evidence=evidence,entrance=candidate['entrance'],
-                                            turn_start_remaining_m=remaining,rejection='TURN_START_ALREADY_PASSED' if late else None))
-                    if state=='FREE' and not late:free.append(candidate)
-                self.gap_debug['evaluations']=evaluations
-                if free:
-                    self.selected=min(free,key=lambda b:b['entrance'][0])
-                    self.state='parking_approach';self.approach_started=now;self.approach_distance=0.
-                    dt=0.  # FREE를 잡기 전 이동량을 새 목표에 중복 차감하지 않음
+            late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
+            if self.selected is not None:
+                self.state='parking_approach';self.approach_started=now;self.approach_distance=0.;dt=0.
         if self.state=='parking_approach':
-            stopped=self._approach(now,dt,velocity,angular_velocity)
+            stopped=self._approach(now,dt,velocity,rate)
             if stopped is not None:return stopped
-            if self.state=='parking_turn':
-                self._white(image,image_stamp)
-                dt=0.  # 접근 중 이동량을 회전 거리로 중복 집계하지 않음
-        if self.state in ('parking_scan','parking_approach'):
+            if self.state=='parking_turn':self._white(image,image_stamp);dt=0.
+        if self.state=='parking_cruise':
+            speed=0. if search_command is None else max(0.,search_command[0])
+            cap=self.c['trial_cruise_max_speed'] if self.c.get('test_drive_until_sign') else self.c['cruise_max_speed']
+            speed=min(speed,cap);steering=0. if search_command is None else search_command[1]
+            self.reason='MAIN_LANE_WITH_LIDAR_SEARCH'
+        elif self.state in ('parking_scan','parking_approach'):
             steering=search_command[1] if lane and lane.get('valid') and search_command else 0.
             speed=self.c['scan_speed']
-            if self.state=='parking_approach':self.reason='APPROACHING_LATCHED_TURN_START'
-            elif rejected_late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
+            if self.state=='parking_approach':
+                self.reason='DECELERATING_BEFORE_TURN' if self.approach_debug.get('waiting_for_slow_speed') else 'APPROACHING_LATCHED_TURN_START'
+            elif late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             elif self.reason!='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP':self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
         else:
-            self._move_target(self.selected,dt,velocity,angular_velocity)
-            self.turn_distance+=abs(velocity)*dt
+            self._move_target(self.selected,dt,velocity,rate)
+            self.turn_distance+=abs(velocity)*dt;self.turn_angle=max(0.,self.turn_angle-rate*dt)
             if now-self.turn_started>self.c['turn_timeout']:return self.fail('TURN_TIMEOUT')
             if self.turn_distance>self.c['turn_distance_limit']:return self.fail('TURN_DISTANCE_LIMIT')
             new_image=self._white(image,image_stamp)
-            if new_image and self.line_seen and self.loss_frames>=self.c['white_loss_frames']:
-                self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
-                return self._output()
-            if not self.line_seen and now-self.turn_started>self.c['white_acquire_timeout']:
-                return self.fail('WHITE_LINE_NEVER_SEEN')
-            speed=self.c['turn_speed'];steering,ready=self.pd.command(now,dt)
+            if new_image and self.line_seen and self.loss_frames>=self.c['white_loss_frames'] and self._finish_pose():
+                self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP';return self._output()
+            if not self.line_seen and now-self.turn_started>self.c['white_acquire_timeout']:return self.fail('WHITE_LINE_NEVER_SEEN')
+            speed=self.c['turn_speed']
+            # 충분히 돌기 전 선이 사라진 경우: 제한된 우회전 유지, 선 소실만으로 조기 완료 금지
+            command_phase='arc' if not self.arc_released and self.loss_frames>=self.c['white_loss_frames'] else self.turn_phase
+            steering,ready=self.pd.command(now,dt,phase=command_phase,hold_turn=not self.arc_released)
             if not ready:
-                self.reason='WAITING_FOR_PARKING_LINE_FEEDBACK';self.motion_since=None
-                return self._output()
-            self.reason='PARKING_PD_BOUNDARY_ALIGNMENT' if self.pd.debug.get('active') else 'RIGHT_TURN_UNTIL_WHITE_LINE_DISAPPEARS'
+                self.reason='WAITING_FOR_PARKING_LINE_FEEDBACK';self.motion_since=None;return self._output()
+            self.reason='ARC_RIGHT_TURN_WITH_BOUNDED_PD' if command_phase=='arc' else 'PARKING_PD_BOUNDARY_ALIGNMENT'
         steering=clip(steering,-self.robot['max_steering'],self.robot['max_steering'])
-        if not self._clear(scan,steering,speed):
-            self.reason=self.clear_reason;self.motion_since=None
-            return self._output()
+        if not self._clear(scan,steering,max(speed,abs(velocity))):
+            self.reason=self.clear_reason;self.motion_since=None;return self._output()
         if self.state=='parking_turn' and self.pd.debug.get('steering_transition'):
-            self.reason='PARKING_PD_STEERING_TRANSITION';self.motion_since=None
-            return self._output(0.,steering)
+            self.reason='PARKING_PD_STEERING_TRANSITION';self.motion_since=None;return self._output(0.,steering)
+        if speed<=.001:self.motion_since=None;return self._output(0.,steering)
         if abs(velocity)>.005:self.motion_since=now
         elif self.motion_since is None:self.motion_since=now
         elif now-self.motion_since>self.c['motion_timeout']:return self.fail('NO_ODOMETRY_MOTION')
