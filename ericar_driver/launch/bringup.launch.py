@@ -20,7 +20,8 @@ from launch.substitutions import LaunchConfiguration
 
 # /imu: 실측 자이로. /odom 회전은 바퀴 드라이버가 보고 조향각으로 계산한 값(v·tan(조향)/축간거리)이라 실제 회전 확인용 (11/9)
 BAG_TOPICS = ['/camera/color/image_raw/compressed', '/answer/detections', '/answer/status',
-              '/odom', '/imu', '/limo/ack_cmd', '/limo_status', '/scan']
+              '/odom', '/imu', '/limo/ack_cmd', '/limo_status', '/scan',
+              '/camera/color/camera_info', '/parking/cancel']
 
 
 def include(package, launch_file, arguments=None):
@@ -44,7 +45,7 @@ def generate_launch_description():
         DeclareLaunchArgument('debug', default_value='true', description='디버그 화면 (포트 8080)'),
         DeclareLaunchArgument('record', default_value='false', description='true면 rosbag 녹화'),
         DeclareLaunchArgument('bag', default_value=os.path.expanduser(time.strftime('~/bags/run_%m%d_%H%M'))),
-        DeclareLaunchArgument('exposure', default_value='300', description='카메라 수동 노출'),
+        DeclareLaunchArgument('exposure', default_value='600', description='카메라 수동 노출'),        #노출값 300 -> 600 수정
         include('limo_base', 'limo_base_ackerman.launch.py'),
         include('ydlidar_ros2_driver', 'ydlidar.launch.py'),
         include('orbbec_camera', 'astra_stereo_u3.launch.py',

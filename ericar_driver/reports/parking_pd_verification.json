@@ -1,0 +1,93 @@
+{
+  "branch": "parking_auto1",
+  "merged_main": "96ec051",
+  "acceptance": "56 parking tests passed",
+  "build": "colcon ericar_driver passed; installed PD module and launch verified",
+  "simulation": "Ideal projected white lines and bicycle motion; straight alignment phase, 6 seconds at up to 0.12 m/s; not full parking success rate",
+  "parameters": {
+    "enabled": true,
+    "kp": 1.5,
+    "ki": 0.0,
+    "kd": 0.08,
+    "integral_limit": 0.1,
+    "derivative_alpha": 0.25,
+    "heading_weight": 0.35,
+    "reference_distance": 0.55,
+    "activate_heading": 0.7,
+    "full_heading": 0.2,
+    "slot_width": 0.5,
+    "width_tolerance": 0.12,
+    "center_association": 0.3,
+    "single_association": 0.12,
+    "direction_tolerance": 0.25,
+    "parallel_tolerance": 0.15,
+    "merge_distance": 0.035,
+    "minimum_ground_length": 0.1,
+    "ground_near": 0.3,
+    "ground_far": 2.0,
+    "maximum_extrapolation": 0.2,
+    "maximum_lateral": 1.0,
+    "feedback_timeout": 0.3,
+    "steering_rate": 0.8
+  },
+  "cases": [
+    {
+      "initial_lateral_m": 0.05,
+      "initial_heading_rad": 0.3,
+      "pd_final_lateral_m": 0.05136220050246033,
+      "pd_final_heading_rad": -0.06305827073627943,
+      "fixed_final_lateral_m": -0.18049345221365115,
+      "fixed_final_heading_rad": -1.01410258138953,
+      "max_body_lateral_extent_m": 0.23284930039137916,
+      "minimum_painted_side_clearance_m": 0.01715069960862084,
+      "steering_transition_pause_s": 0.0
+    },
+    {
+      "initial_lateral_m": -0.05,
+      "initial_heading_rad": -0.3,
+      "pd_final_lateral_m": -0.06345756710092954,
+      "pd_final_heading_rad": 0.07192721920966216,
+      "fixed_final_lateral_m": -0.5950352773082753,
+      "fixed_final_heading_rad": -1.614102581389525,
+      "max_body_lateral_extent_m": 0.23989841389944822,
+      "minimum_painted_side_clearance_m": 0.010101586100551785,
+      "steering_transition_pause_s": 0.4
+    },
+    {
+      "initial_lateral_m": 0.07,
+      "initial_heading_rad": 0.0,
+      "pd_final_lateral_m": 0.03201490847429837,
+      "pd_final_heading_rad": -0.04374272426789472,
+      "fixed_final_lateral_m": -0.3358929698329367,
+      "fixed_final_heading_rad": -1.3141025813895275,
+      "max_body_lateral_extent_m": 0.18448125045689956,
+      "minimum_painted_side_clearance_m": 0.06551874954310044,
+      "steering_transition_pause_s": 0.0
+    },
+    {
+      "initial_lateral_m": -0.07,
+      "initial_heading_rad": 0.0,
+      "pd_final_lateral_m": -0.03812155463777063,
+      "pd_final_heading_rad": 0.04770201534773545,
+      "fixed_final_lateral_m": -0.47589296983293666,
+      "fixed_final_heading_rad": -1.3141025813895275,
+      "max_body_lateral_extent_m": 0.18351587558201943,
+      "minimum_painted_side_clearance_m": 0.06648412441798057,
+      "steering_transition_pause_s": 0.35000000000000003
+    }
+  ],
+  "unchanged": [
+    "FREE occupancy and clustering",
+    "white-line extraction and disappearance stop",
+    "approach start calculation",
+    "actual obstacle and sensor freshness stops",
+    "main lane PID state"
+  ],
+  "hardware_verified": false,
+  "limitations": [
+    "Ground projection depends on actual camera calibration",
+    "One-frame white loss stop retained",
+    "Line feedback loss after engagement pauses motion",
+    "Smallest ideal boundary clearance is about 1 cm; physical tuning required"
+  ]
+}

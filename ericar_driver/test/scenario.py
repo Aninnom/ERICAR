@@ -32,6 +32,9 @@ STOP_LINES = [3.0, 7.0, 13.0, 18.0]  # 보행자, (갈림길 구간 통과용), 
 CORNER_LENGTH = 0.2  # 가짜 코너(IMU에만 넣는 우회전 90°) 길이 m
 OBSTACLE = (10.0, 10.3)  # 차로 중앙 정적 장애물 구간 s (차선 변경 경로 실행용)
 # 시험 기준 카메라 (멘토 시뮬 값). 실차 보정값과 무관하게 고정 → 보정해도 기준값 유지
+# 3차선 구간 흰 점선 (run의 three_lane 구간에서만). 길이·빈칸은 three_lane.py와 같음, 실제 값은 실측 필요
+DASH_ON, DASH_OFF = 0.2, 0.2
+WHITE = (235, 235, 235)
 REFERENCE_CAMERA = dict(hfov_deg=71.0, x=0.23, y=0.0, z=0.23, pitch=0.2)
 
 
@@ -44,8 +47,9 @@ def paint_bgr():
     return cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2BGR)[0, 0]
 
 
-def render(camera, s, y, psi, curve, paint, stop_paint=None):
-    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 색칠. stop_paint를 주면 정지선만 그 색"""
+def render(camera, s, y, psi, curve, paint, stop_paint=None, three_lane=None):
+    """카메라 영상 합성: 각 픽셀의 바닥 좌표 → 차선·정지선 색칠. stop_paint를 주면 정지선만 그 색
+    three_lane = (시작 s, 끝 s): 그 구간의 안쪽 선 2개를 흰 점선으로 (실제 3차선 구간. 바깥 선은 차선 색 그대로)"""
     v, u = np.indices((H, W), dtype=np.float64)
     focal = W / (2 * math.tan(math.radians(camera['hfov_deg']) / 2))
     p, z, cx = camera['pitch'], camera['z'], camera['x']
@@ -60,14 +64,21 @@ def render(camera, s, y, psi, curve, paint, stop_paint=None):
     ws = s + forward * math.cos(psi) - left * math.sin(psi)
     wl = y + forward * math.sin(psi) + left * math.cos(psi) - curve(ws)
     white = np.zeros((H, W), bool)
+    dashes = np.zeros((H, W), bool)
     for offset in LANE_LINES:
-        white |= np.abs(wl - offset) < LINE / 2
+        line = np.abs(wl - offset) < LINE / 2
+        if three_lane is not None and offset in LANE_LINES[1:-1]:
+            zone = (ws >= three_lane[0]) & (ws < three_lane[1])
+            dashes |= line & zone & (np.mod(ws - three_lane[0], DASH_ON + DASH_OFF) < DASH_ON)
+            line &= ~zone
+        white |= line
     stop = np.zeros((H, W), bool)
     for line in STOP_LINES:
         stop |= (ws >= line) & (ws < line + 0.03) & (np.abs(wl) < LANE_LINES[-1])
     visible = np.isfinite(forward) & (forward < 4.0)
     image = np.full((H, W, 3), 60, np.uint8)
     image[(white | stop) & visible] = paint
+    image[dashes & visible] = WHITE
     if stop_paint is not None:
         image[stop & visible] = stop_paint
     return image
@@ -108,7 +119,7 @@ def detections_at(s, t, phase, drop=()):
 
 
 def run(config_path, stop_paint=None, drop=(), corners=None, duration=DURATION, on_tick=None,
-        detector=False, detection_gap=None):
+        detector=False, detection_gap=None, three_lane=None):
     """기본 인자 = 예전 시나리오 그대로 (IMU 없음, 정지선 차선 색)
 
     stop_paint: 정지선 BGR 색 (흰색 정지선 시험)
@@ -116,6 +127,7 @@ def run(config_path, stop_paint=None, drop=(), corners=None, duration=DURATION, 
     corners: 가짜 코너 시작 s 목록. 그 지점부터 CORNER_LENGTH 동안 /imu에만 우회전 90°를 넣음
              (영상·차량은 직선 그대로 → 구간 관리자만 코너로 인식)
     on_tick(node, sim, t): 매 주기 호출 (구간 기록용)
+    three_lane: (시작 s, 끝 s) 구간의 안쪽 선을 흰 점선으로 (render 참고). 노란 선 쪽 차선 변경 금지(PR #37) 때문에 필요
     detector: True면 표지판 검출 사용으로 설정 (검출 끊김 시험). detection_gap = (시작 s, 끝 s) 동안 검출 갱신 중단
     """
     import yaml
@@ -136,7 +148,7 @@ def run(config_path, stop_paint=None, drop=(), corners=None, duration=DURATION, 
             t = k * DT
             fake_ros.Clock.now_s = 100.0 + t
             stamp = fake_ros.Header(100.0 + t)
-            image = render(camera, sim['s'], sim['y'], sim['psi'], curve, paint, stop_paint)
+            image = render(camera, sim['s'], sim['y'], sim['psi'], curve, paint, stop_paint, three_lane)
             node.subscriptions[config['topics']['image']](fake_ros.Msg(header=stamp, array=image))
             if k % 2 == 0:
                 n, amin, inc, ranges = scan_ranges(sim['s'], sim['y'])

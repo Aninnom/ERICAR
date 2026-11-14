@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from .common import clip
+from .cones import red_info
 from .driver import Driver
 from .lane_vision import LaneVision
 from .params import ANSWER_CONFIG
@@ -45,15 +46,12 @@ def sensor_status(config, state, ages, available):
     """Require the inputs used by this state, keeping lidar/odometry mandatory.
 
     표지판 검출(YOLO)은 필수 아님: 끊기면 표지판 미션만 꺼지고 차선·라이다 주행 계속 (ControlLoop.step)"""
-    timed_parking = state in ('parking_sequence', 'parked')
-    required_camera = not timed_parking or config['parking'].get('require_camera_during_sequence', False)
+    parking_ended = state in ('parking_failed', 'parking_cancelled', 'parked')
+    required_camera = not parking_ended
     ready = (available['scan'] and 0 <= ages['scan'] < config['sensor_timeout'] and
              0 <= ages['odometry'] < config['odometry_timeout'])
     if required_camera:
         ready = ready and available['image'] and 0 <= ages['image'] < config['sensor_timeout']
-    else:
-        # The timed sequence must have been entered through camera alignment.
-        ready = ready and available['lane']
     return bool(ready), required_camera
 
 
@@ -73,6 +71,9 @@ class Sensors:
     odom_stamp: float
     yaw_rate: float = 0.0        # IMU 자이로 z (rad/s, + 왼쪽)
     imu_stamp: float = -1e9      # IMU 수신 시각. 오래되면 odom 회전으로 대체
+    pose: object = None          # 뒷축 base_link의 odom x,y,yaw
+    camera_info: object = None   # 주차 BEV의 K/D. 없으면 기존 camera hfov 모델 사용
+    pose_history: object = ()    # 이미지/스캔 시각 보간용 짧은 기록
     tilt_rate: tuple = (0.0, 0.0)   # IMU 자이로 x·y (rad/s). 방지턱 감지용 (slow_zone)
 
 
@@ -129,12 +130,21 @@ class ControlLoop:
             self.driver.sensor_failure(now)
             state = 'waiting for fresh sensors / detector'
         else:
-            if required_camera and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
+            if required_camera and self.driver.state!='parking_turn' and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
-                                                 if self.driver.lane_driver.in_corner(now) else None)
+                                                 # 라바콘 통과 중·직후, 3번 코너 안(차선 변경 중 제외)도 같은 규칙 (11/14 lap5:
+                                                 # 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전, 3번 코너 유지 뒤 168 s도 같음)
+                                                 if (self.driver.lane_driver.in_corner(now) or self.driver.cones.active
+                                                     or self.driver.cone_exit_left > 0
+                                                     or (self.driver.corner3() and not self.driver.lane_change.active)) else None)
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
+                self.vision.outer_yellow = self.driver.outer_yellow()
+                self.vision.fork_direction = self.driver.fork_direction()
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
+                # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산
+                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') or self.driver.cone_early() else None,
+                                                c['lidar']))
                 self.lane_stamp = s.image_stamp
                 self.lane_bias = self.driver.fork_bias
             lane = self.lane_cache
@@ -143,12 +153,14 @@ class ControlLoop:
                                                          s.detection_stamp, s.velocity, now, s.angular_velocity,
                                                          yaw_rate=s.yaw_rate if imu_ok else None,
                                                          signs_ok=signs_ok or not c['detector']['enabled'],
+                                                         parking_input=dict(image=s.image,image_stamp=s.image_stamp,
+                                                             scan_stamp=s.scan_stamp,pose=s.pose,pose_stamp=s.odom_stamp,history=s.pose_history,camera_info=s.camera_info),
                                                          tilt_rate=s.tilt_rate if tilt_ok else None)
             if was_avoiding and not self.driver.avoiding:
                 self.vision.memory = {}
                 self.vision.previous_center = None
                 self.lane_stamp = None
-            if self.driver.state != 'parking_sequence':
+            if self.driver.state not in ('parking_failed', 'parking_cancelled', 'parked'):
                 age = max(now-s.image_stamp, .001)
                 limit = c.get('max_image_travel', .04) / age
                 speed = clip(speed, -limit, limit)

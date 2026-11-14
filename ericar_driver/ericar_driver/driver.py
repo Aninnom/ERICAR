@@ -3,6 +3,7 @@
 
 from .common import clip
 from .cones import ConeDriving
+from .fork import ForkMission
 from .lane_change import LaneChange
 from .lane_driving import LaneDriving
 from .lidar import body_points, clear_steering
@@ -23,22 +24,30 @@ class Driver:
         self.c, self.robot = config['answer'], config['robot']
         self.lane_driver = LaneDriving(self.c, self.robot)
         self.lane_change = LaneChange(self.c, self.robot)
-        self.parking = Parking(self.c)
+        self.parking = Parking(config)
         self.cones = ConeDriving(self.c, self.robot)
         self.pid = self.lane_driver.pid
         self.state, self.state_started = 'lane', 0.0
         self.last_time = self.last_lane_stamp = self.last_detection_stamp = None
         self.stopped_since = self.line_distance = None
         self.line_seen = -1e9
-        self.fork_remaining = self.fork_bias = self.fork_target = 0.0
         self.slow_zone = SlowZone(self.c['slow_zone'])   # 서행·방지턱 (slow_zone.py)
-        self.fork_pending, self.fork_clear_distance = False, 0.0
-        self.fork_request = 0
+        m = self.c['missions']
+        self.fork = ForkMission(self.c['lane_change']['lane_count'], m['fork_distance'], far=self.c['lane']['far'],
+                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3))
+        self.sync_fork()
         self.traffic_stop_completed = False
+        self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
+        self.traffic_box = None      # 지금 따라가는 신호등 박스 (bbox, 면적). 신호등 접근·정지 중에만 유지 (11/14)
+        self.traffic_seen = -1e9     # 신호등(색 무관, 작은 박스 포함)을 마지막으로 본 시각 (소민)
+        self.traffic_red_area = 0.0  # 이번 프레임 빨강·노랑 박스 최대 면적 비율
+        self.line_kind = None        # line_distance가 가리키는 선: 'crosswalk'(횡단보도 바로 앞) / 'plain'
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
         self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
         self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
+        if self.c['missions'].get('start_stage') == 'parking':
+            self.done.add('traffic')  # 주차 지점 재출발: 신호등은 이미 지난 것으로 봄
         self.stall_time = 0.0         # 의도하지 않은 정지 누적 시간(s)
         self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
         self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
@@ -49,18 +58,36 @@ class Driver:
     def avoiding(self):
         return self.lane_change.active or self.cones.active
 
+    @property
+    def section_hold(self):
+        """구간 전환 보류 조건: 라바콘 통과 중. 콘 배치에 따라 오른쪽으로 크게 돌 수 있어 누적 회전을 코너로 세면 안 됨
+        문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
+        return self.cones.active or (self.cones.started and not self.cones.done)
+
+    def cone_early(self):
+        """라바콘 구간 바로 앞 구간(S2)에서 3번 코너를 early_turn(°) 넘게 돌았는지. loop.py 붉은색 계산도 이 조건 사용"""
+        s = self.c['sections']
+        early = s.get('cone_early_turn')
+        return bool(s['enabled'] and early is not None and 'cones' not in s.get('off', ()) and
+                    self.sections.index == START_SECTION['cones']-1 and self.sections.turned >= early)
+
+    def corner3(self):
+        """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
+        s = self.c['sections']
+        return bool(s['enabled'] and self.sections.index == START_SECTION['lane_change'] and
+                    self.sections.turned >= s.get('lane_change_max_turn', 15.0))
+
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
         self.pid.reset()
         if state != 'lane':
             self.lane_change.active = self.cones.active = False
-        if state == 'parking_align':
+        if state == 'parking_scan':
             self.parking.start(now)
 
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
-        if self.state == 'parking_sequence':
-            # 센서가 돌아올 때까지 시간표를 멈춘다 (영구 정지하면 주차 0점)
+        if self.state in ('parking_scan', 'parking_approach', 'parking_turn'):
             self.parking.pause(now)
 
     def leave_mission(self, mission, now):
@@ -79,22 +106,99 @@ class Driver:
         """디버그 표시용: 지금 구간과 활성 미션"""
         return 'S%d %s' % (self.sections.index, '·'.join(sorted(self.sections.missions() - self.done)))
 
+    def outer_yellow(self):
+        # 3차선 바깥 차로(목적 차로 포함)면 노란 바깥선 쪽. lane_vision 한 선 이름 판단용 (소민)
+        change = self.lane_change
+        if not (self.sections.allows('lane_change') or self.fork_remaining > 0):
+            return None
+        lane = change.index + (change.direction if change.active else 0)
+        last = change.c['lane_count'] - 1
+        return 'left' if lane == last else 'right' if lane == 0 else None
+
     def allowed(self, mission):
         """지금 구간의 미션이고 아직 끝내지 않았을 때만"""
         return self.sections.allows(mission) and mission not in self.done
 
+    def sync_fork(self):
+        """기존 디버그 필드 호환. 판단의 원본은 ForkMission 한 곳"""
+        f = self.fork
+        self.fork_bias = 0.0
+        self.fork_remaining = f.remaining
+        self.fork_target = f.direction*self.c['missions']['fork_bias'] if f.running else 0.0
+        self.fork_goal = f.direction if f.running else 0
+        self.fork_request = f.request(self.lane_change.index, self.lane_change.active)
+        self.fork_pending = f.phase == 'locked'
+        self.fork_sign, self.fork_sign_stamp = f.sign, f.stamp
+
+    def fork_direction(self):
+        """선택 출구 추종 상태에서만 영상 보정 허용"""
+        return self.fork.vision_direction if not self.lane_change.active else 0
+
+    def parking_ready(self):
+        """주차 표지판을 받아도 되는 시점인지. 표지판 최소 면적이 작아(0.002) 신호등보다 먼저 확정될 수 있음
+        → 신호등을 끝냈거나(포기 포함) 꺼져 있을 때, 또는 신호등을 못 본 경우에 대비해 S4에서 일정 거리 간 뒤에만 허용"""
+        if self.c['parking'].get('test_wait_for_sign', False):
+            return True
+        if 'traffic' in self.done or not self.sections.allows('traffic'):
+            return True
+        return self.sections.distance >= self.c['parking'].get('after_traffic_distance', 4.0)
+
     def advance(self, mission):
         self.done.add(mission)
+
+    def traffic_filter(self, detections):
+        """신호등 박스 중 지금 보는 신호등 것만 남김 (11/14 integ_1114_lap3: 녹색 0.042 + 배경 빨간 상자 0.003 동시 검출 → 54초 대기)
+
+        접근·정지 중: 따라가던 박스와 겹치거나(IoU traffic_box_iou 이상) 면적이 그 traffic_main_ratio배 이상인 박스만 사용,
+        남은 것 중 가장 큰 박스를 새 기준으로 삼음. 겹치는 박스가 없는 프레임은 기준 유지
+        그 외(차선 주행): 가장 큰 신호등 박스의 traffic_main_ratio배보다 작은 신호등 박스는 버림 (먼 배경의 붉은 물체)
+        신호등이 아닌 표지판은 그대로 통과"""
+        m = self.c['missions']
+        names = MISSION_SIGNS['traffic']
+        lights = [d for d in detections if d['name'] in names and d.get('bbox')]
+        if not self.state.startswith('traffic'):
+            self.traffic_box = None
+        if not lights:
+            return detections
+        ratio = m.get('traffic_main_ratio', .5)
+        if self.traffic_box is None:
+            largest = max(d['area'] for d in lights)
+            keep = [d for d in lights if d['area'] >= ratio*largest]
+        else:
+            box, area = self.traffic_box
+            def overlap(b):
+                w = min(b[2], box[2])-max(b[0], box[0])
+                h = min(b[3], box[3])-max(b[1], box[1])
+                if w <= 0 or h <= 0:
+                    return 0.0
+                union = (b[2]-b[0])*(b[3]-b[1])+(box[2]-box[0])*(box[3]-box[1])-w*h
+                return w*h/union if union > 0 else 0.0
+            keep = [d for d in lights if overlap(d['bbox']) >= m.get('traffic_box_iou', .2) or d['area'] >= ratio*area]
+        if self.state.startswith('traffic') and keep:
+            main = max(keep, key=lambda d: d['area'])
+            self.traffic_box = (list(main['bbox']), main['area'])
+        kept = {id(d) for d in keep}
+        return [d for d in detections if d['name'] not in names or id(d) in kept]
 
     def confirmed(self, detections, stamp):
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
         names = {d['name'] for d in detections
                  if (not d.get('truncated', False) or d['name'] in truncated_allowed) and d['area'] >= self.c['detector'].get('minimum_area_by_class', {}).get(d['name'], self.c['detector']['minimum_area'])}
+        if {'left', 'right'} <= names:
+            # 연속 횟수가 다른 양쪽 화살표도 확정 보류. 새 단일 방향부터 재확인
+            names -= {'left', 'right'}
+            self.sign_counts.pop('left', None)
+            self.sign_counts.pop('right', None)
+        # 빨강·노랑은 첫 검출부터 녹색 허가 차단. 광고판 등 동시 검출 시 보수적 대기
+        # 충돌 해소 후 새 녹색 프레임을 confirm_frames만큼 다시 확인
         if stamp != self.last_detection_stamp:
             self.sign_counts = {name: self.sign_counts.get(name, 0) + 1 for name in names}
+            if {'traffic_red', 'traffic_yellow'} & names:
+                self.sign_counts['traffic_green'] = 0   # 빨강·노랑과 겹친 녹색은 버리고 새 프레임부터 다시 셈 (11/14)
             self.last_detection_stamp = stamp
         return {name for name in names
-                if self.sign_counts.get(name, 0) >= self.c['detector']['confirm_frames']}
+                if self.sign_counts.get(name, 0) >= self.c['detector'].get('confirm_frames_by_class', {}).get(
+                    name, self.c['detector']['confirm_frames'])}
 
     def update_stop_line(self, lane, velocity, now, dt):
         m = self.c['missions']
@@ -103,56 +207,57 @@ class Driver:
         image_stamp = lane.get('stamp', now)
         new_image = image_stamp != self.last_lane_stamp
         self.last_lane_stamp = image_stamp
-        if new_image and lane['stop_distance'] is not None:
+        cross = lane.get('crosswalk_distance')
+        if new_image and (cross is not None or lane['stop_distance'] is not None):
+            # 횡단보도 바로 앞 선이 보이면 그 선 우선. 한 번 잡으면 일반 흰 선(서행 시작선·횡단보도 뒤 선)으로 안 바꿈 (소민)
+            kind = 'crosswalk' if cross is not None else 'plain'
             # A delayed image measures the stripe at exposure, not at this tick.
-            candidate = lane['stop_distance'] - velocity * max(0.0, now-image_stamp)
-            tracking_stop = self.state.endswith('_approach') or self.state.endswith('_hold') or self.state == 'parking_align'
+            candidate = (lane['stop_distance'] if cross is None else cross) - velocity * max(0.0, now-image_stamp)
+            tracking_stop = self.state.endswith('_approach') or self.state.endswith('_hold')
             # Once the first stop stripe is selected, do not jump to a farther
             # crosswalk stripe when the first leaves the camera's field of view.
             same_line = self.line_distance is None or abs(candidate - self.line_distance) < m['line_match_tolerance']
-            if not tracking_stop or same_line:
+            # 차선 주행 중에도 가까운 선을 고른 뒤에는 더 먼 선(횡단보도 뒤쪽 선 등)으로 건너뛰지 않음.
+            # 가까운 선이 카메라 아래(앞 0.4 m 안)로 사라진 뒤 신호등을 확정하면 뒤쪽 선에 서거나
+            # 선을 잃고 그냥 지나가던 문제 (11/12 실차, 소민). 지난 선(-0.05 m)은 아래에서 지움
+            nearer = self.line_distance is None or candidate < self.line_distance + m['line_match_tolerance']
+            upgrade = kind == 'crosswalk' and self.line_kind != 'crosswalk'
+            keep_crosswalk = kind == 'plain' and self.line_kind == 'crosswalk' and self.line_distance is not None
+            if not keep_crosswalk and ((not tracking_stop and nearer) or same_line or upgrade):
                 self.line_distance = candidate
                 self.line_seen = image_stamp
+                self.line_kind = kind
         if (now - self.line_seen > m['stop_line_memory'] and
-                not self.state.endswith(('_hold', '_approach')) and self.state != 'parking_align'):
+                not self.state.endswith(('_hold', '_approach'))):
             self.line_distance = None
         if self.state == 'lane' and self.line_distance is not None and self.line_distance < -0.05:
             self.line_distance = None
+        if self.line_distance is None:
+            self.line_kind = None
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
+        detections = self.traffic_filter(detections)
         names = self.confirmed(detections, detection_stamp)
+        if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
+        # 신호등 감시: 확정 전·작은 박스라도 신호등이 보이면 시각 기록 (S4 감속용), 빨강·노랑 최대 면적
+        traffic = [d for d in detections if d['name'] in MISSION_SIGNS['traffic'] and
+                   d['area'] >= m.get('traffic_watch_area', .002)]
+        if traffic:
+            self.traffic_seen = now
+        self.traffic_red_area = max([d['area'] for d in traffic if d['name'] != 'traffic_green'] or [0.0])
         green_only = 'traffic_green' in names and not ({'traffic_red', 'traffic_yellow'} & names)
-        if 'slow' in ready and self.allowed('slow'):
+        # 정지 중에는 표지판 수용 안 함: 출발선에서 표지판이 보이면 출발 전부터 서행 상태가 됨 (11/14 lap3, 감속이 눈에 보여야 함)
+        if 'slow' in ready and self.allowed('slow') and abs(velocity) >= m.get('slow_min_speed', .05):
             # 감속·해제는 slow_zone이 판단 (예전: 표지판 뒤 14초 고정). 끝나면 update에서 advance
             self.slow_zone.sign = True
-        if ('left' in ready or 'right' in ready) and self.allowed('fork') and self.fork_remaining <= 0.0:
+        self.fork.step(self.lane_change.index, self.lane_change.active, velocity, dt,
+                       left_section=self.c['sections']['enabled'] and self.sections.index > START_SECTION['fork'])
+        if self.allowed('fork') and self.fork.lock(ready, detection_stamp):
             self.advance('fork')
-            self.fork_target = m['fork_bias'] if 'left' in ready else -m['fork_bias']
-            self.fork_pending = m.get('fork_wait_for_obstacles', True)
-            self.fork_clear_distance = 0.0
-            self.fork_bias = 0.0 if self.fork_pending else self.fork_target
-            self.fork_remaining = m.get('fork_distance', 1.6)
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
-        # Read the arrow early, but finish the parked-car corridor before
-        # changing sides. Require measured travel with no wide object ahead.
-        if self.fork_pending:
-            if self.lane_change.active or scan.get('wide_objects', 0) > 0:
-                self.fork_clear_distance = 0.0
-            else:
-                self.fork_clear_distance += max(0.0, velocity) * dt
-            if self.fork_clear_distance >= m.get('fork_clear_distance', .20):
-                # 표지판 방향으로 실제 한 차로 이동한 뒤 새 차선을 따른다.
-                direction = 1 if self.fork_target > 0 else -1
-                destination = self.c['lane_change']['lane_count']-1 if direction > 0 else 0
-                self.fork_request = direction if self.lane_change.index != destination else 0
-                self.fork_bias = 0.0
-                self.fork_pending = False
-        if self.fork_remaining <= 0.0:
-            self.fork_bias = 0.0
-            self.fork_target = 0.0
-            self.fork_pending = False
+        self.sync_fork()
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):
                 self.traffic_stop_completed = False
@@ -165,34 +270,49 @@ class Driver:
                               now - self.line_seen < m.get('trigger_line_freshness', .4))
                 if fresh_line or not m.get('pedestrian_require_line', True):
                     self.transition('pedestrian_approach', now)
-            elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking'):
-                self.transition('parking_align', now)
+            elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking') and self.parking_ready():
+                self.transition('parking_scan', now)
         return green_only
 
     def stop_missions(self, speed, velocity, green_only, now):
         m = self.c['missions']
         if self.state.endswith('_approach'):
+            # 신호등: 횡단보도 바로 앞 선에만 정지 (서행 시작 흰 선에 서지 않음). 선 못 찾으면 저속 접근·큰 빨강 예비 정지
+            traffic = self.state == 'traffic_approach'
+            line = self.line_distance
+            if traffic and m.get('traffic_crosswalk_only', True) and self.line_kind != 'crosswalk':
+                line = None
+            offset = m.get('traffic_stop_offset', m['stop_offset']) if traffic else m['stop_offset']
             crossing_on_green = (self.state == 'traffic_approach' and green_only and
                                  (not m.get('traffic_require_stop', True) or self.traffic_stop_completed))
+            red_now = self.state == 'traffic_approach' and self.traffic_red_area > 0.0
             if now - self.state_started > m['approach_timeout']:
+                if red_now:
+                    # 빨강·노랑이 보이는데 정지선을 못 찾음: 지나가지 않고 그 자리 정지 (신호 위반 방지, 소민)
+                    self.transition('traffic_hold', now)
+                    return 0.0
                 # 정지선에 도달하지 못함: 멈춰 있지 않고 차선 주행으로 복귀 (미션 단계는 유지)
                 self.leave_mission(self.state.replace('_approach', ''), now)
                 return speed
-            if self.line_distance is None:
+            if line is None and red_now and self.traffic_red_area >= m.get('traffic_stop_area', .04):
+                # 정지선 없이 신호등이 충분히 가까움(박스가 큼): 예비 정지
+                self.transition('traffic_hold', now)
+                return 0.0
+            if line is None:
                 # 정지선이 아직 안 보이면 멈추지 않고 저속으로 다가가며 찾는다.
                 # (멈춰 있으면 정지선이 계속 안 보여 결국 시간 초과 실패)
                 speed = min(speed, m['stop_approach_speed'])
             elif crossing_on_green:
                 # Seeing green far away is not mission completion. Keep watching
                 # red/yellow until the measured front axle crosses this stripe.
-                if self.line_distance < -m['stop_tolerance']:
+                if line < -m['stop_tolerance']:
                     for name in ['traffic_red', 'traffic_yellow', 'traffic_green']:
                         self.cooldowns[name] = now + m['sign_cooldown']
                     self.advance('traffic')
                     self.line_distance = None
                     self.transition('lane', now)
             else:
-                remaining = self.line_distance - m['stop_offset']
+                remaining = line - offset
                 speed = min(speed, m['stop_approach_speed'], max(0.0, remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
@@ -262,29 +382,68 @@ class Driver:
                 return s['creep_speed'], safe_steering, False
         return speed, steering, blocked
 
+    def main_lane_command(self,lane,now,dt,velocity,angular_velocity,allow_hold,avoiding=False):
+        """일반 주행과 주차 검색이 공유하는 기존 main 차선 제어"""
+        return self.lane_driver.update(lane,now,dt,False,velocity,angular_velocity,
+                                       allow_hold=allow_hold,avoiding=avoiding)
+
     def update(self, lane, scan, detections, detection_stamp, velocity, now, angular_velocity=0.0,
-               yaw_rate=None, signs_ok=True, tilt_rate=None):
+               yaw_rate=None, signs_ok=True, parking_input=None, tilt_rate=None):
         """yaw_rate: 실측 회전 속도(IMU, rad/s). None이면 odom 값 × sections.odom_yaw_scale
         signs_ok: 표지판 검출이 최신인지 (False면 detections는 빈 목록으로 들어옴)
         tilt_rate: IMU 자이로 (x, y) rad/s, 방지턱 감지용. IMU가 없으면 None"""
         if self.last_time is not None and now < self.last_time:
+            if self.state.startswith('parking_') or self.state=='parked':
+                speed,steering,self.state=self.parking.fail('CLOCK_RESET_DURING_PARKING')
+                self.last_time=now
+                self.debug=dict(parking=self.parking.debug,speed=0.,steering=0.)
+                return 0.,0.,'parking_failed: CLOCK_RESET_DURING_PARKING'
+            self.parking.close()
             self.__init__({'answer': self.c, 'robot': self.robot})
         dt = .05 if self.last_time is None else clip(now-self.last_time, .001, .2)
         self.last_time = now
-        self.fork_remaining = max(0, self.fork_remaining-max(0, velocity)*dt)
         # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
         # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
-        self.sections.update(turn_rate, velocity, dt)
+        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.update_stop_line(lane, velocity, now, dt)
+        previous_state=self.state
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
+        if self.state=='lane' and self.c['parking'].get('test_wait_for_sign',False) and not self.c['parking'].get('test_drive_until_sign',False):
+            self.debug=dict(section=self.sections.index,stage=self.stage(),speed=0.,steering=0.)
+            return 0.,0.,'parking_test: WAITING_FOR_PARKING_SIGN'
+        if self.state.startswith('parking_') or self.state == 'parked':
+            search_command=None
+            if self.state in ('parking_scan','parking_approach'):
+                # 표지판 전후 동일 LaneDriving 인스턴스·선 놓침 탐색·조향 기억 유지
+                search_command=self.main_lane_command(lane,now,dt,velocity,angular_velocity,True)
+            if parking_input is None:
+                speed,steering,state=self.parking.fail('PARKING_INPUT_UNAVAILABLE')
+            else:
+                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,angular_velocity=turn_rate,**parking_input)
+            self.state=state
+            if state=='parked':self.advance('parking')
+            self.debug=dict(parking=self.parking.debug,section=self.sections.index,stage=self.stage(),control_stamp=now,
+                            speed=speed,steering=steering,front=scan['front'],rear=scan['rear'],
+                            velocity=velocity,scan_valid=scan['valid_fraction'],
+                            missions=sorted(self.sections.missions()),done=sorted(self.done),
+                            off=list(self.c['sections'].get('off',())),sign_counts=dict(self.sign_counts))
+            # 주차는 실측 차체의 예상 궤적 검사 적용. 일반 섹터 최소 거리·stall creep·시간 초과 강행 제외
+            return speed,steering,state+': '+self.parking.reason
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
-        in_fork = self.fork_pending or self.fork_remaining > 0
-        speed, steering = self.lane_driver.update(lane, now, dt, False, velocity, angular_velocity,
-                                                  allow_hold=self.state == 'lane' and not self.avoiding and not in_fork,
-                                                  avoiding=self.avoiding)
+        in_fork = self.fork.running
+        # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
+        # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
+        # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함
+        s = self.c['sections']
+        left_of_axis = -self.sections.turned if s['enabled'] and self.sections.index == START_SECTION['fork'] else 0.0
+        self.lane_driver.hold_start_ok = left_of_axis <= s.get('hold_min_turned', 15.0)
+        self.lane_driver.hold_extra = max(0.0, left_of_axis)/s['odom_yaw_scale']
+        speed, steering = self.main_lane_command(lane,now,dt,velocity,angular_velocity,
+                                                  self.state == 'lane' and not self.avoiding and not in_fork,
+                                                  self.avoiding)
         mode = 'corner_hold' if self.lane_driver.hold is not None else self.state
         # 서행·방지턱: 차선 주행 결과에 속도 상한·턱 위 조향 고정 (차선 코드는 그대로)
         if self.state == 'lane' and not self.avoiding:
@@ -295,14 +454,33 @@ class Driver:
             if self.slow_zone.state == 'slow' and mode == 'lane':
                 mode = 'slow_zone'
         stuck_change = False
+        # 분기 입구(흰 점선 끝) 추적. 입구에서 목표 차로가 아니면 manual(정지), 입구 뒤 차선 변경 금지 (소민)
+        if self.sections.allows('fork') or self.fork.running:
+            self.fork.observe(lane, self.lane_change.index, self.lane_change.active, velocity, dt)
+            self.sync_fork()
         if self.state == 'lane':
+            # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
+            requested = self.fork_request
+            if self.sections.allows('lane_change') and not requested:
+                requested = self.fork.center_request(self.lane_change.index, self.lane_change.active, lane)
+            preferred = self.fork.direction if self.fork.running else 0
+            # 멈춤 방지가 차선 변경을 끈 동안(lane_change_off)도 앞 장애물 회피는 함 (avoid_only, 소민 11/12)
+            # 예전: 1.5 m 동안 회피 판단 자체를 꺼서 그 안의 다음 장애물에 직진 충돌
+            # 라바콘 조기 진입 (11/14 lap3): 콘이 3번 코너 안에서 시작하면 S3 전환(코너 65°) 전에 콘에 닿음
+            # → S2에서 오른쪽으로 early_turn(°) 넘게 돈 뒤에는 붉은색이 화면에 차면(corridor) 라바콘 먼저, 차선 변경은 끔
+            cone_early = self.cone_early()
+            cone_first = self.cones.active or (cone_early and self.cones.corridor)
+            # 코너에서는 새 차선 변경 안 함 (11/14 lap4 169~175 s: 3번 코너 유지 중 벽·콘을 앞 장애물로 보고 조향을 가로챔 → 왼쪽으로 차선 변경 → 콘 추돌)
+            # 코너 유지 중이거나 S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 뒤. 진행 중인 차선 변경은 그대로 끝냄
+            in_corner = self.lane_driver.hold is not None or self.corner3()
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
-                                            (self.sections.allows('lane_change') or self.fork_remaining > 0)
-                                            and self.lane_change_off <= 0, self.fork_request)
-            if self.fork_request and self.lane_change.active:
-                self.fork_request = 0
+                                            (self.sections.allows('lane_change') or self.fork.running)
+                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner,
+                                            requested, preferred, avoid_only=self.lane_change_off > 0)
             cone = None if change is not None else self.cones.update(
-                lane, scan, velocity, turn_rate, dt, self.sections.allows('cones') and self.fork_remaining <= 0)
+                lane, scan, velocity, turn_rate, dt,
+                (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,
+                red_only=cone_early and not self.sections.allows('cones'))
             if change is not None:
                 stuck_change = self.lane_change.active and change[0] == 0.0
                 speed, steering = change
@@ -310,27 +488,32 @@ class Driver:
             elif cone is not None:
                 speed, steering = cone
                 mode = 'cones'
+                self.cone_exit_left = self.c['lidar'].get('cone_exit_slow_distance', 0.0)
+            elif self.cone_exit_left > 0:
+                # 라바콘 직후: 콘 통과 방향이 틀어진 채 4번 코너에 들어감 → 코너 유지 뒤 0.37 ↔ 0.23 m/s로 출렁임 (lap4 214~216 s)
+                self.cone_exit_left -= abs(velocity)*dt
+                speed = min(speed, self.c['lidar'].get('cone_exit_slow_speed', 0.22))
         speed = self.stop_missions(speed, velocity, green_only, now)
-        if self.state in ('parking_align', 'parking_sequence'):
-            speed, steering, self.state = self.parking.update(lane, self.line_distance, velocity, now, steering)
-            if self.state == 'parked':
-                self.advance('parking')
-        # 모든 담당의 제어 결과에 공통으로 적용하는 최종 정지 조건.
+        if self.c['parking'].get('test_drive_until_sign',False):
+            speed=min(speed,self.c['parking']['scan_speed'])
+        # 일반 주행의 섹터 비상 정지는 기존 기준 유지
         clearance = scan['front'] if speed >= 0 else scan['rear']
         blocked = scan['valid_fraction'] < .5 or clearance < self.c['lidar']['emergency_distance']
-        if blocked and self.state == 'parking_sequence':
-            # 주차 중: 영구 정지 대신 시간표를 멈추고 기다린다. 일정 시간 넘게 막혀 있으면
-            # (실차 후방 사각으로 rear가 항상 0인 경우 포함) 접촉 감점(-1)을 감수하고 진행한다.
-            self.parking.obstacle_wait += dt
-            if self.parking.obstacle_wait < self.c['parking'].get('obstacle_wait', 2.0):
-                self.parking.pause(now)
-            else:
-                blocked = False
         speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0
+        if self.fork.phase == 'manual':
+            # 분기 입구인데 가운데·반대편 차로: 교통섬을 가로지르지 않고 정지 (멈춤 방지보다 우선)
+            speed, steering, mode = 0.0, 0.0, 'fork_manual: wrong lane at fork entrance'
         if self.state == 'parked':
             speed = 0.0
+        if (self.state == 'lane' and self.allowed('traffic') and
+                now - self.traffic_seen < self.c['missions'].get('traffic_watch_hold', 1.5)):
+            # S4에서 신호등이 보이기 시작하면 확정 전에 미리 감속 → 횡단보도 앞 정지선을 카메라에서 놓치기 전에 확정 (소민)
+            speed = min(speed, self.c['missions'].get('traffic_watch_speed', .18))
+        if self.state == 'lane' and (self.allowed('fork') or self.fork_remaining > 0):
+            # 표지판이 가까워질 때까지 기본 0.4 m/s로 접근하지 않도록 준비 속도 적용
+            speed = min(speed, self.c['missions'].get('fork_prepare_speed', .18))
         self.debug = dict(lane_valid=lane['valid'], lane_error=lane['error'],
                           pid=dict(self.pid.terms), pid_feedback_gain=self.c['pid']['feedback_gain'],
                           stage=self.stage(), section=self.sections.index,
@@ -341,10 +524,22 @@ class Driver:
                           stall_time=self.stall_time, lane_change_off=self.lane_change_off, signs_ok=signs_ok,
                           front=scan['front'], rear=scan['rear'],
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
+                          lane_change_debug=dict(self.lane_change.debug),
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
-                          fork_remaining=self.fork_remaining, fork_request=self.fork_request,
-                          avoiding=self.avoiding, cone_active=self.cones.active,
+                          fork_phase=self.fork.phase, fork_destination=self.fork.destination,
+                          fork_dash_left=self.fork.dash_left, fork_late=self.fork.late,
+                          traffic_watch=now - self.traffic_seen < self.c['missions'].get('traffic_watch_hold', 1.5),
+                          traffic_red_area=self.traffic_red_area, line_kind=self.line_kind,
+                          crosswalk_distance=lane.get('crosswalk_distance'),
+                          dash_end=lane.get('dash_end'),
+                          fork_follow_travel=self.fork.travel,
+                          lane_change_direction=self.lane_change.direction if self.lane_change.active else 0,
+                          fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
+                          fork_sign=self.fork_sign, fork_sign_stamp=self.fork_sign_stamp,
+                          fork_sign_counts={n: self.sign_counts.get(n, 0) for n in ('left', 'right')},
+                          avoiding=self.avoiding, cone_active=self.cones.active, cone_red=self.cones.red,
+                          cone_red_ratio=float(lane.get('cone_red', 0.0)), cone_corridor=self.cones.corridor,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,
                           corner_hold=self.lane_driver.hold is not None,
                           # 아래는 디버그 화면(tools/debug_view.py) 표시 전용. 판단에 쓰지 않음

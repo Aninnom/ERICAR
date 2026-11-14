@@ -4,7 +4,9 @@
 위 왼쪽   카메라: YOLO 상자(초록 = 확정, 노랑 = 확인 중, 회색 = 버림: 작음·잘림·오래됨), 차선 곡선, 목표점(빨강), 정지선(자홍)
 위 가운데 BEV: 차선 마스크, 흰색 노면 표시(자홍), 윈도우·곡선·목표점, 정지선 후보, 선 색·실선/점선, 지그재그
 위 오른쪽 라이다: 군집(빨강 = 넓은 물체, 주황 = 라바콘 후보), 비상 정지 범위, 명령 조향 경로(하늘색),
-                 3차선 차로별 빈 거리·선택, 라바콘 통로, 주차 칸
+                 3차선 차로별 빈 거리·선택, 라바콘 통로, 주차 빈칸 판정(FREE 초록·확인 부족 주황·점유 빨강·선택 칸 노랑)
+주차: 화면 구성은 다른 구간과 같음. 회전 중 제어기가 쓴 흰 직선을 카메라에 노랑으로 덧그림 (텔레메트리 값, 화면 쪽 재계산 없음)
+      주행 노드 없이 센서만 켰을 때만 화면에서 빈칸 판정을 직접 계산 (PARK live)
 아래 왼쪽   상태: 모드, 명령·실제 속도, 센서 나이, 차선, 정지선, 멈춤 방지, 속도 0인 이유
 아래 가운데 미션: 구간(S0~S4)·누적 회전, 미션 8개 상태(ACTIVE/ARMED/DONE/MISSED/OFF)와 세부 값
 아래 오른쪽 사건 기록: 상태 전환, 구간 전환, 표지판 확정, 센서 끊김, 막힘 (최신이 위)
@@ -150,6 +152,19 @@ def draw_camera(camera, telemetry):
     h = PANEL_H
     w = int(camera.shape[1] * h / camera.shape[0])
     img = cv2.resize(camera, (w, h), interpolation=cv2.INTER_AREA)
+    # 주차 회전 중: 제어기가 정지 판단에 쓴 흰 직선(텔레메트리 값, 화면에서 다시 계산하지 않음)
+    white = (((telemetry or {}).get('control', {}).get('parking') or {}).get('white_line') or {})
+    scale = h / camera.shape[0]
+    for x0, y0, x1, y1 in white.get('segments') or []:
+        cv2.line(img, (int(x0 * scale), int(y0 * scale)), (int(x1 * scale), int(y1 * scale)), YELLOW, 2)
+    feedback=(((telemetry or {}).get('control', {}).get('parking') or {}).get('feedback') or {})
+    if feedback:
+        color=CYAN if feedback.get('active') else GREY
+        for x0,y0,x1,y1 in feedback.get('pixel_segments') or []:
+            cv2.line(img,(int(x0*scale),int(y0*scale)),(int(x1*scale),int(y1*scale)),color,3)
+        target=feedback.get('reference_pixel')
+        if target:cv2.drawMarker(img,tuple(int(q*scale) for q in target),color,cv2.MARKER_CROSS,14,2)
+        put(img,f"PARK PD {feedback.get('reason','')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f}",6,36,color,.42)
     t = telemetry or {}
     control, lane, lc = t.get('control', {}), t.get('lane', {}), lane_config(t)
     if lc:
@@ -346,25 +361,61 @@ def draw_cones(img, control):
             f"{safe}")
 
 
-def draw_parking(img, control):
-    """지정 칸 주차(주차 브랜치의 control.parking): 가정한 칸 위치. 값이 없으면 그리지 않음"""
-    park = control.get('parking')
-    if not park or not park.get('pose'):
+def draw_parking(img, control, live=None):
+    """주차 빈칸 판정: 물체 군집(자홍)·빈틈 후보(FREE 초록, 확인 부족 주황, 점유 빨강)·선택 칸(노랑)
+    주행 노드가 켜져 있으면 텔레메트리(control.parking) 값만 그림. live는 주행 노드 없이 센서만 볼 때의 계산 결과"""
+    park = control.get('parking') or {}
+    gap = park.get('gap') or live or {}
+    if not park and not gap:
         return None
+    colors = {'FREE': GREEN, 'UNKNOWN': ORANGE, 'OCCUPIED': RED}
+    states = []
     try:
-        p = ANSWER['parking']['surveyed']
-        sign = 1 if p['turn_side'] == 'left' else -1
-        bx, by, byaw = park['pose']  # 칸 입구 중앙 기준 뒷축 자세
-        hw, depth = p['slot_width'] / 2, p['slot_depth']
-        corners = []
-        for qx, qy in ((-hw, 0), (hw, 0), (hw, sign * depth), (-hw, sign * depth)):
-            dx, dy = qx - bx, qy - by
-            cosine, sine = math.cos(-byaw), math.sin(-byaw)
-            corners.append(lp(cosine * dx - sine * dy, sine * dx + cosine * dy))
-        cv2.polylines(img, [np.array(corners, np.int32)], True, YELLOW, 2)
+        def polygon(points, color, thick):
+            cv2.polylines(img, [np.array([lp(x, y) for x, y in points], np.int32)], True, color, thick)
+        for box in gap.get('clusters', []):
+            polygon(box['points'], MAGENTA, 1)
+        for candidate, result in zip(gap.get('candidates', []), gap.get('evaluations', [])):
+            state, evidence = result.get('state'), result.get('evidence') or {}
+            states.append(state)
+            polygon(candidate['polygon'], colors.get(state, GREY), 2)
+            put(img, f"{state} {evidence.get('covered_samples', 0)}/12", *lp(*candidate['entrance']),
+                colors.get(state, GREY), 0.4)
+        if park.get('selected_gap'):
+            polygon(park['selected_gap']['polygon'], YELLOW, 2)
+            approach=park.get('approach') or {}
+            if park.get('state')=='parking_approach' and approach:
+                target=lp(approach['remaining_m'],0.)
+                cv2.drawMarker(img,target,CYAN,cv2.MARKER_CROSS,12,2)
+                put(img,f"TURN IN {approach['remaining_m']:+.2f}m",target[0]+5,target[1]-8,CYAN,.45)
     except Exception:
         pass
-    return f"PARK {park.get('reason', '')}  prog {park.get('progress')}"[:52]
+    if not park:
+        return f"PARK live (driver off) {','.join(states) or 'no gap'}"[:64]
+    if park.get('state')=='parking_approach':
+        approach=park.get('approach') or {}
+        return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
+    feedback=park.get('feedback') or {}
+    if feedback.get('active'):
+        return f"PARK PD {feedback.get('source')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f} steer {feedback.get('steering_rad',0):+.2f}"
+    return (f"PARK {park.get('state', '')} {','.join(states) or 'no gap'}  "
+            f"search {park.get('search_distance_m', 0):.2f} turn {park.get('turn_distance_m', 0):.2f}m")[:64]
+
+
+def live_gap(scan):
+    """주행 노드 없이 센서만 켠 화면용: 제어기와 같은 함수로 빈칸 판정 (주행 노드가 켜져 있으면 호출 안 함)"""
+    try:
+        from ericar_driver.lidar import scan_sectors
+        from ericar_driver.parking_gap import gap_candidates, classify_gap
+        config = ANSWER['parking']
+        data = scan_sectors(scan.ranges, scan.angle_min, scan.angle_increment,
+                            scan.range_min, scan.range_max, ANSWER['lidar'])
+        candidates, debug = gap_candidates(data, ROBOT, config)
+        debug['evaluations'] = [dict(zip(('state', 'evidence'), classify_gap(bay, data, ROBOT, config)))
+                                for bay in candidates]
+        return debug
+    except Exception:
+        return None
 
 
 def draw_lidar(scan, telemetry):
@@ -409,7 +460,7 @@ def draw_lidar(scan, telemetry):
             cv2.circle(img, lp(x, y), 7, ORANGE, 1)
     else:
         notes.append('no /scan')
-    for note in (draw_lane_change(img, control, lane), draw_cones(img, control), draw_parking(img, control)):
+    for note in (draw_lane_change(img, control, lane), draw_cones(img, control), draw_parking(img, control, live_gap(scan) if scan is not None and not telemetry else None)):
         if note:
             notes.append(note)
     cv2.rectangle(img, (0, 0), (LIDAR_W, 18), (0, 0, 0), -1)
@@ -504,8 +555,19 @@ def status_panel(width, t):
     if 0.3 < control.get('lane_lost', 0) < 1e6:
         flags.append(f"lane lost {control['lane_lost']:.1f}s search {control.get('search_distance', 0):.2f}m")
     line('flags  ' + ('  '.join(flags) or '-'), ORANGE if flags else GREY)
+    park = control.get('parking', {})
+    if park:
+        white = park.get('white_line', {})
+        line(f"WHITE present {white.get('present')} seen {white.get('seen_during_turn')} loss {white.get('loss_frames', 0)}", YELLOW)
+    if park.get('state')=='parking_approach':
+        approach=park.get('approach') or {}
+        line(f"TURN IN {approach.get('remaining_m',0):+.2f} m  lead {approach.get('turn_lead_m',0):.2f} m", CYAN)
     stall, limit = control.get('stall_time', 0.0), (ANSWER.get('stall') or {}).get('seconds', 8.0)
-    line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
+    feedback=park.get('feedback') or {}
+    if park.get('state')=='parking_turn' and feedback:
+        line(f"PD {feedback.get('reason','')} steer {feedback.get('steering_rad',0):+.2f}",CYAN if feedback.get('active') else ORANGE)
+    else:
+        line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
     reasons = stop_reasons(t)
     if reasons:
         put(panel, 'SPEED 0: ' + ' / '.join(reasons), 8, min(y + 4, INFO_H - 8), RED, 0.5)

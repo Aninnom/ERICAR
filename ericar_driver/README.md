@@ -1,3 +1,5 @@
+> **parking_auto1:** FREE 목표 저장 → 회전 시작점까지 접근 → 흰 경계선 PD 정렬·흰 선 소실 정지. [실행·설정](../docs/parking_auto1.md).
+
 # ericar_driver
 
 실차 주행 노드. 멘토 ORDA `answer.py`(hello-osy/2026-orda-mentoring, 613c9b4)를 역할별 파일로 분리. 노드 하나 구조 유지.
@@ -8,7 +10,7 @@
 |---|---|---|
 | `lane_vision.py` | 차선 인식 (BEV + sliding window, 좌우 판단, 중앙선 목표점) | 혁준, 소민 |
 | `lane_driving.py` | 목표점 pure pursuit (목표점 없을 때 PID) | 혁준, 소민 |
-| `parking.py` | T 주차 | 정윤 |
+| `parking.py` | FREE 1회·고정 우회전·흰 선 소실 정지 | 정윤 |
 | `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유) | 유경 |
 | `cones.py` | 라바콘 | 유경 |
 | `lane_change.py` | 3차선 정적 장애물 (라이다 감지 후 차선 변경) | 유경 |
@@ -34,6 +36,7 @@
 | `bag_timeline.py` | 녹화 주행 구간 시계열 (거리·방향·조향·오차·검출 선) | `python3 tools/bag_timeline.py ~/bags/<이름>` |
 | `bag_frames.py` | 녹화 지정 시각 카메라 + BEV 창·곡선·목표점 한 장 | `python3 tools/bag_frames.py ~/bags/<이름> 29.0,30.6` → `/tmp/frames.jpg` |
 | `replay_bag.py` | 녹화 영상을 지금 코드에 다시 넣어 결과 CSV (수정 전후 비교) | `python3 tools/replay_bag.py ~/bags/<이름> > after.csv` |
+| `corn_test.py` | 라바콘 단독 실차 시험 (차선·표지판·구간 없이 `cones.py`만, `sections.off`와 무관). 기록 `~/bags/corn_test_<시각>.csv` | 터미널 1 `ros2 launch ericar_driver bringup.launch.py driver:=false record:=true`, 터미널 2 `python3 tools/corn_test.py` (`--dry`: 명령 없이 인식만). 접속부터 기록 복사까지 칠 명령 전체는 파일 머리말 |
 
 ### 디버그 화면 용어
 
@@ -79,7 +82,7 @@ numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 
 - 시뮬 시계(`use_sim_time`) 고정 제거
 - 명령: `/drive`의 `AckermannDriveStamped` → `/limo/ack_cmd`의 `AckermannDrive`
 - 카메라 토픽 `/camera/color/image_raw`, 최대 조향 0.42 rad
-- 발행 직전 속도·조향 한계 적용 (주차 시간표 −0.5 rad 등 한계 초과 방지)
+- 발행 직전 속도·조향 한계 적용
 - 설정·모델 경로를 인자로 받음. 기본값 `config/robot.yaml`, `~/models/best.pt`
 
 그 외 로직은 원본과 동일 (분리 시 정의 17개 글자 단위 일치 확인).
@@ -126,7 +129,7 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 
 ### 구간 관리자 (미션 순서)
 
-미션은 표지판 순서가 아니라 **지금 구간**으로 켜짐 (`section.py`). 출발 뒤 누적 회전이 −65°·−155°·−245°·−335°를 넘을 때마다 구간 +1 (코너 4개가 모두 우회전 90°, 여유 25°). 회전은 `/imu` 자이로 (0.3초 넘게 안 오면 `/odom` 회전 × 0.93). 표지판 하나를 놓쳐도 다음 구간 미션은 그대로 동작.
+미션은 표지판 순서가 아니라 **지금 구간**으로 켜짐 (`section.py`). 출발 뒤 누적 회전이 −65°·−155°·−245°·−335°를 넘을 때마다 구간 +1 (코너 4개가 모두 우회전 90°, 여유 25°). 회전은 `/imu` 자이로 (0.3초 넘게 안 오면 `/odom` 회전 × 0.93). 표지판 하나를 놓쳐도 다음 구간 미션은 그대로 동작. 라바콘 통과 중에는 구간 전환 보류 (콘 배치가 우회전을 강제해도 S3 유지, 끝난 뒤 4번 코너에서 S4).
 
 | 구간 | 위치 | 활성 미션 |
 |---|---|---|
@@ -170,8 +173,8 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt star
 - 차선 변경 대기(옆 차로 막힘)·차선 변경 중 안전 조향 없음이 8초 넘으면 차선 변경을 1.5 m 동안 끄고 차선 주행
 - 전방 비상 정지가 8초 넘게 안 풀리면 라이다 점을 피하는 조향이 있을 때만 0.08 m/s로 비켜 감 (없으면 계속 정지)
 - 차선 놓침은 `lost_search`(0.15 m/s로 2 m 탐색 후 정지) 그대로
-- 주차 정렬 시간 초과: 현 위치에서 주차 시간표 시작 (부분 점수)
-- 주차 시간표 중 장애물·센서 끊김: 시간표를 멈추고 기다림. 장애물로 `parking.obstacle_wait`(2초) 넘게 막히면 진행
+- parking_2: FREE 1회에 고정 우회전 진입. 관측하던 흰 직선 소실 시 정지
+- parking_2: 실제 경로 장애물·센서 끊김이면 정지. 시간 경과로 장애물을 무시하고 진행하지 않음
 
 시험 (맥·차, 약 2분): 표지판 누락·검출 끊김·대기 탈출을 합성 시나리오로 확인
 

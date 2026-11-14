@@ -34,10 +34,19 @@ ANSWER_CONFIG = {
     # margin 25 → −65°·−155°·−245°·−335°에서 전환. 갈림길 꺾임 45°·차선 변경 흔들림은 못 미침
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
     # enabled False면 구간과 무관하게 모든 미션 허용 (단독 시험용)
-    # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 실차 확인 전이라 끔 (11/11 segA_1111_lap1: 트랙 옆에 세워 둔
-    # 라바콘·의자 다리를 통로로 보고 진입 → 4번 코너 이탈). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인
+    # hold_distance: 라바콘 통과 중에는 구간 전환 보류 (콘 배치가 우회전을 강제하면 S3 도중 −335°를 넘음, 11/13).
+    # 기준을 넘은 채 이 거리(m)를 가도 라바콘이 안 끝나면 전환 (안전장치)
+    # off: 구간과 무관하게 꺼 둘 미션. 라바콘(cones)은 11/11 segA_1111_lap1(트랙 옆 라바콘·의자 다리를 통로로 보고
+    # 진입 → 4번 코너 이탈)로 꺼 뒀다가 11/12 다시 켬 (유경): 단독 시험 corn_test_1112_193257 통과 (모드 3.1 m, 충돌 없음).
+    # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
-                 'off': ['cones']},
+                 'hold_distance': 3.0, 'off': [],
+                 # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
+                 'cone_early_turn': 20.0,
+                 # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
+                 'lane_change_max_turn': 15.0,
+                 # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
+                 'hold_min_turned': 15.0},
     # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
     # speed: 서행 속도. 상한 0.2와 차이를 분명히
     # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
@@ -58,13 +67,22 @@ ANSWER_CONFIG = {
               'creep_speed': 0.08, 'creep_horizon': 0.3, 'creep_margin': 0.02},
 
     'detector': {
-        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 'auto', 'rate_hz': 5.0,   # auto = GPU 있으면 GPU (node.load_detector)
+        # device 0 = Jetson GPU. 11/14 실측: CPU 추론은 주행 노드 CPU 390 %·영상 지연 0.16 s, GPU는 65 %·0.02 s
+        # GPU 없는 PC에서 모델을 직접 돌릴 때만 'cpu'로 바꿈
+        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 0, 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
+        # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
+        # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
+        'confirm_frames_by_class': {'left': 3, 'right': 3, 'traffic_red': 1, 'traffic_yellow': 1},
         'minimum_area_by_class': {
-            'parking': 0.02, 'pedestrian': 0.012, 'traffic_red': 0.025, 'traffic_yellow': 0.025,
-            'traffic_green': 0.025, 'left': 0.006, 'right': 0.006, 'slow': 0.004,
+            # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
+            'parking': 0.002, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
+            'traffic_green': 0.003, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
+        # 신호등 박스 안 켜진 램프 위치로 색 재확인 (traffic_lamp.py, 11/14). 밝기·채도 하한, 칸 화소 비율 하한, 둘째 칸 대비 배수
+        # lamp_min_area: 이보다 작은 박스는 판별 안 함 (11/14 lap5: 먼 배경의 빨간 상자 0.003을 녹색으로 판정)
+        'lamp_check': True, 'lamp_min_area': 0.005, 'lamp_value_min': 180, 'lamp_saturation_min': 60, 'lamp_min_fraction': 0.002, 'lamp_ratio': 3.0,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
         'shutdown_timeout': 5.0,
         # 시작 직후 첫 검출을 기다리는 최대 시간(s). 그 뒤로는 검출이 끊겨도(timeout 초과·예외) 표지판 미션만 끄고 주행 계속
@@ -131,57 +149,146 @@ ANSWER_CONFIG = {
         'small_object_min_width': 0.015, 'small_object_max_width': 0.12, 'small_object_range': 1.8,
         'planning_point_range': 3.0, 'cluster_min_points': 2, 'wide_object_half_width': 0.9,
         'small_object_half_width': 0.75,
-        # ---- 라바콘 (cones.py). 거리는 뒷바퀴 축 기준 m ----
-        # 진입 판단: 앞 cone_start_range 안에 콘 cone_start_min_cones개 이상, 좌·우에 각각 콘,
-        # 가장 가까운 좌·우 콘 간격 cone_gate_min~max. cone_confirm_count 주기(20 Hz) 연속이면 시작
-        # [실차] 간격 범위는 실제 라바콘 배치 보고 조정 (참고 코드 0.6~0.95, 차폭 0.22)
-        'cone_start_range': 1.5, 'cone_start_min_cones': 3, 'cone_confirm_count': 3,
+        # ---- 라바콘 (cones.py). 거리는 뒷바퀴 축 기준 m, 각도 rad ----
+        # 11/12: 콘 두 줄 가정 제거 → 좌·우 콘 쌍(문) 사이 각도로 조향. 쌍 개수·간격 모름
+        # 문 = 간격 cone_gate_min~max인 콘 2개. [실차] 실제 배치 보고 조정 (참고 코드 0.6~0.95, 차폭 0.225)
         'cone_gate_min': 0.35, 'cone_gate_max': 1.0,
-        'cone_gate_width': 0.6,      # 한쪽 줄만 보일 때 쓰는 좌·우 간격 기본값 (진입 시 측정값으로 교체)
-        'cone_gate_window': 0.5,     # 같은 줄에서 가장 가까운 콘부터 이 앞 거리 안의 콘 중 가장 안쪽을 통로 경계로
-        'cone_view_distance': 1.5,   # 통과 중 보는 콘 앞 거리
-        'cone_band_margin': 0.15,    # 통로(중앙 ± cone_gate_max/2) 밖 이 거리 넘는 물체는 무시 (표지판 기둥 등)
-        'cone_center_alpha': 0.5,    # 통로 중앙 갱신 비율 (1 = 이번 측정만)
-        'cone_lookahead': 0.6,       # 통로 중앙의 몇 m 앞 지점으로 조향할지
+        'cone_gate_width': 0.6,      # 콘 하나만 보일 때 쓰는 문 폭 기본값 (문을 보면 측정값으로 교체)
+        'cone_group_max_width': 0.6, # 이 폭까지는 붙어 놓인 콘 덩어리로 보고 나눠서 사용. 넘으면 벽·큰 물체로 무시
+        # 외곽 가벽 (11/13 도면: 맵 가장자리, 높이 200 mm, 좌측 직선 차로 중앙에서 약 0.72 m. 라이다 z 0.07 m라 스캔에 잡힘)
+        # 콘 그림자·점 누락으로 끊긴 벽 조각이 붙은 콘으로 분류되어 벽·콘 사이로 통과 (11/13 합성 확인, 유경)
+        # 벽 = 한 직선 위 점들이 cluster_gap 이내로 이어진 길이의 합이 cone_wall_min_length(m) 이상 (cones.wall_lines).
+        # 그 직선에서 cone_wall_margin(m) 안의 점은 벽으로 보고 콘 후보에서 먼저 제외
+        # cone_wall_margin 0.07: 0.05는 거리 잡음 2 cm에서 벽 점 일부가 밖에 남아 기둥이 됨 (합성 2/57 실패 → 0)
+        # 주의: 벽에서 이 거리 안에 놓인 콘도 같이 빠짐 (콘 중심이 벽에서 약 0.12 m 이상이면 남음)
+        # cone_wall_min_length 1.0: 붙은 콘 0.5 m + 같은 줄 콘 3개(이어진 길이 합 약 0.74 m)를 벽으로 보지 않는 값
+        # cone_wall_beyond: 직선 너머 2·cone_wall_margin 밖에 점이 이 개수보다 많으면 벽이 아님 (벽 앞에 선 촘촘한 콘 줄).
+        # 벽은 끊김 없이 사방을 두른 판이라 그 너머는 안 보임 (11/13 유경). 잡음으로 튄 점 2개까지 허용.
+        # 세는 범위는 직선이 실제로 뻗은 구간 안으로 한정 (벽 끝 너머로 비켜 보이는 물건은 제외, 11/13 연습장 사진)
+        # cone_wall_side: 'left' = 차 왼쪽 직선만 벽 (대회 = 시계 방향이라 외곽벽은 왼쪽), 'both' = 양쪽, 'off' = 벽 제외 안 함.
+        # 연습장은 오른쪽에도 벽이 있어 'both'가 필요할 수 있음 → corn_test.py --wall-side로 바꿔 가며 확인 (11/13 유경)
+        'cone_wall_min_length': 1.0, 'cone_wall_margin': 0.07, 'cone_wall_beyond': 2, 'cone_wall_side': 'left',
+        'cone_view_distance': 1.5,   # 라이다에서 이 거리 안의 콘만 사용
+        # 진입 판단: 문 중점이 라이다에서 cone_enter_distance(아래) 안, 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내,
+        # cone_confirm_count 주기(20 Hz) 연속. 코너 도는 중(문이 비스듬함)에는 켜지 않음
+        # cone_start_range: 통과 중 문 없이 콘 하나만 보일 때 그 콘을 쓰는 최대 거리 (11/12부터 진입에는 안 씀)
+        'cone_start_range': 1.2, 'cone_start_angle': 0.6, 'cone_confirm_count': 3,
+        # 문 안쪽 통로(차 ~ 문 뒤 cone_wide_depth, 기둥에서 cone_wide_margin 안쪽)에 넓은 군집이 있으면 진입 안 함
+        'cone_wide_depth': 0.6, 'cone_wide_margin': 0.08,
+        # 통과 중: 진행 방향에서 cone_gate_angle 이내를 마주 보는 문만 사용 (같은 쪽 콘 2개 = 90°라 제외),
+        # 문 중점 방위는 진행 방향에서 cone_gate_bearing 이내 (옆으로 크게 벗어난 물체 쌍 제외)
+        'cone_gate_angle': 0.95, 'cone_gate_bearing': 0.7,
+        'cone_path_gates': 4,        # 가까운 문부터 몇 개까지 이어서 볼지
+        'cone_gate_step': 0.15,      # 이어지는 문 사이 최소 앞 거리 (붙은 콘이 만드는 겹친 문 건너뜀)
+        'cone_lookahead': 0.5,       # 문 중점을 이은 경로에서 몇 m 앞 지점으로 조향할지
+        'cone_aim_alpha': 0.5,       # 진행 방향·문 폭 갱신 비율 (1 = 이번 측정만)
         'cone_check_distance': 0.35, 'cone_margin': 0.03,   # 충돌 검사 원호 길이, 차체-콘 최소 여유
         'avoidance_speed': 0.13,     # 라바콘 통과 속도
         'cone_creep_speed': 0.05,    # 안전한 원호가 없을 때 속도 (정지 = 미션 실패라 멈추지 않음)
-        # 라바콘 모드 종료: 마지막 라바콘을 라이다가 지난 뒤 이동 거리(m). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
+        # 콘이 안 보인 뒤 이 거리(m) 더 가면 차선 주행으로 복귀 (다음 문이 보이면 다시 켜짐). 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m
         'small_object_memory_distance': 0.3,
-        'cone_max_distance': 2.5,    # 안전장치: 진입 시 첫 콘까지 거리 + 이 값 넘게 주행하면 종료. 라바콘 구간 약 2.1 m + 여유
+        # 즉시 복귀 (11/14 유경): 지날 문 없음 + 지금 화면에 콘 색 없음 + 차선 유효 + 진행 방향 앞 이 거리(m) 안에 콘 없음
+        # → 위 기억 거리를 기다리지 않고 바로 차선 주행으로 넘김. 기억으로 끌면 틀어진 방향으로 직진해 차로를 벗어남
+        # 0.4: 마지막 콘을 지나치는 중에는 넘기지 않도록. 0이면 콘이 바로 앞에 있어도 넘김
+        'cone_exit_clear': 0.4,
+        # 라바콘 모드가 꺼진 뒤 이 거리(m) 동안 속도 상한 (11/14 lap4: 4번 코너에서 속도 출렁임)
+        'cone_exit_slow_distance': 2.0, 'cone_exit_slow_speed': 0.22,
+        'cone_max_distance': 2.5,    # 안전장치: 첫 진입 시 문까지 거리 + 이 값 넘게 주행하면 끝 (다시 안 켜짐). 라바콘 구간 약 2.1 m + 여유
+        # 카메라 붉은색 (11/12 유경): 주최 측 안내 = 콘은 빨강에 가까운 붉은색. 11/12 cone_lane_3 진입 못 하고 차선 복귀·충돌
+        # 붉은색이 보이면 진입·통과 조건 완화: 문 간격 최대 cone_red_gate_max, 좌우 cone_red_half_width, 거리 cone_red_start_range
+        # 통과 중 붉은색이 보이면 콘이 안 보여도 모드 유지 (cone_max_distance 안전장치는 그대로)
+        # 판정: 화면 아래 cone_red_rows 비율 영역을 1/4로 줄여 HSV, 색상 0~h_low 또는 h_high~180, 채도·밝기 하한, 화소 비율 cone_red_ratio 이상
+        # 11/12 실차 red_check (노출 300, 콘 약 1 m): 콘 H 0~9·170~179, S 약 190, V 약 130 → 색 범위 맞음.
+        # 노란 선(H 20~39, V 40 전후)·흰 선·검은 바닥은 판정 0. 카메라가 낮아 콘 몸통은 대부분 화면 가운데보다 위
+        # (아래 50%만 볼 때 0.040, 위쪽만 0.153) → 판정 영역 아래 75%로 넓힘. 먼 콘(약 2 m)은 아래 50%에 안 들어옴
+        'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
+        # 11/12 유경: 판정 영역 화면 전체로 (콘 바로 앞 위치는 사진 확인 못 함). 마지막으로 보인 뒤 cone_red_memory(m)까지 유지
+        'cone_red_rows': 1.0, 'cone_red_ratio': 0.03, 'cone_red_memory': 0.5,
+        # 11/13 실차 사진 18장(red_1113_000127, 코너 앞 → 콘 통로): 관중석 붉은 의자만 보여도 전체 0.010~0.015
+        # → 기준 0.002에서 0.03으로 올림 (콘 1개가 화면 끝에 보일 때 0.07).
+        # 진입은 화면 전체 붉은 비율 cone_red_enter_ratio 이상일 때만 (11/13 유경 결정). 같은 사진: 의자 0.01, 콘 1개 0.07,
+        # 코너 중 콘 줄 0.17~0.27, 통로 정면 0.30, 통로 안 0.39~0.45. 0.27(회전 중 한쪽 줄)은 진입함
+        'cone_red_enter_ratio': 0.2,
+        'cone_red_side_width': 0.2, 'cone_red_side_top': 0.4,   # 양쪽 끝 띠 비율: 확인용 출력만 (판단에 안 씀)
+        'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9,
+        # 진입 시점: 라바콘 모드로 바꾸는 라이다 앞 방향 거리(m). 붉은색이 보이면 콘 후보 하나, 아니면 문 중점 기준.
+        # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지.
+        # 같은 날 문 중점 직선거리 0.3 m는 안 켜짐 (차로 중앙과 문 중점이 옆으로 어긋남) → 붉은색 + 콘 앞 방향 거리로 변경
+        'cone_enter_distance': 0.3,
     },
     'missions': {
+        'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
         'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
-        'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
+        'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,
         # 미션 순서는 구간 관리자가 결정 (위 sections, section.py SECTION_MISSIONS). 예전 sequence·enforce_order 제거
+        # 신호등 감시 (소민 11/12, 실차 전): S4에서 화면 traffic_watch_area 이상 신호등이 보이면 traffic_watch_hold(s) 동안
+        # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
+        'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
+        # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.088,
+        # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
+        # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
+        'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
+        'slow_min_speed': 0.05,   # 이 속도(m/s) 이상으로 움직일 때만 서행 표지판 수용 (출발 전 소진 방지)
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
-        # 갈림길 표지판 인식 후 차선 변경 유지·라바콘 모드 금지 거리(m). 표지판 기둥을 라바콘으로 오인하지 않을 만큼만.
-        # 도면상 인식 지점 → 라바콘 시작선 약 5.1~6.1 m라 5 m면 라바콘 입구에서 아직 꺼져 있을 수 있음
+        # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
         'fork_distance': 3.0,
-        'fork_wait_for_obstacles': True, 'fork_clear_distance': 0.1, 'pedestrian_require_line': True,
+        # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
+        # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
+        # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)
+        'fork_dash_gap': 0.45, 'fork_entrance_confirm': 0.3,
+        'pedestrian_require_line': True,
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
     'parking': {
-        'require_camera_during_sequence': False, 'enabled': True, 'align_timeout': 24.0,
-        'align_speed': 0.08, 'line_distance': 0.15, 'distance_tolerance': 0.025,
-        'lateral_tolerance': 0.035, 'heading_tolerance': 0.09, 'stable_seconds': 0.6,
-        'obstacle_wait': 2.0,  # 시간표 중 장애물로 멈춰 기다리는 최대 누적 시간(s). 넘으면 접촉 감점 감수하고 진행
-        'sequence': [
-            {'seconds': 2.1, 'speed': 0.12, 'steering': 0},
-            {'seconds': 6.65, 'speed': -0.1, 'steering': -0.5},
-            {'seconds': 3.0, 'speed': -0.1, 'steering': 0},
-            {'seconds': 3.2, 'speed': 0, 'steering': 0},
-        ],
+        'enabled': True, 'test_wait_for_sign': False, 'test_drive_until_sign': False,
+        # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
+        'after_traffic_distance': 4.0,
+        'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
+        # 양수 offset: 더 일찍 회전. 음수: 더 늦게 회전. 시작 오차·초과 허용은 m
+        'approach_start_offset': 0., 'approach_start_tolerance': .02, 'approach_passed_tolerance': .06,
+        'approach_timeout': 15., 'approach_distance_limit': 1.2,
+        # 주차 전용 PD. 도색 칸 폭 사용, 장애물 사이 폭과 분리. I항 0으로 초기 적용
+        # 11/14: 끔. lap4에서 경계선 연결이 한 번도 안 됨(NO_ASSOCIATED_PARKING_BOUNDARY), 연결 끊기면 정지 대기 경로 있음 → 실차 확인 뒤 켬
+        'pd': {'enabled': False, 'kp': 1.5, 'ki': 0., 'kd': .08,
+               'integral_limit': .10, 'derivative_alpha': .25, 'heading_weight': .35,
+               'reference_distance': .55, 'activate_heading': .70, 'full_heading': .20,
+               'slot_width': .50, 'width_tolerance': .12, 'center_association': .30,
+               'single_association': .12, 'direction_tolerance': .25, 'parallel_tolerance': .15,
+               'merge_distance': .035, 'minimum_ground_length': .10,
+               'ground_near': .30, 'ground_far': 2., 'maximum_extrapolation': .20,
+               'maximum_lateral': 1., 'feedback_timeout': .30, 'steering_rate': .8},
+
+        # 11/14: 회전 90° = 반경 0.615 × π/2 = 0.97 m·8 s → 상한 0.85 m·8 s로는 79°에서 실패 종료 (lap4). 1.2 m·13 s로
+        'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 13., 'turn_distance_limit': 1.2,
+        # 실측 회전 반경(m, 조향 −0.35, lap4 IMU 69°·0.756 m). 회전 시작 시점(turn lead) 계산에 사용. None이면 축거/tan(조향)
+        'turn_radius': .615,
+        # 칸 방향이 정면 ±turn_done_heading(rad) 안이면 회전 끝·정지. 흰 선 소실 정지는 칸 방향이 white_stop_heading 안일 때만
+        'turn_done_heading': .05, 'white_stop_heading': .35,
+        'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
+        'slot_depth': .59, 'view_near': .30,
+        'gap_view_far': 3., 'gap_view_right': 1.5, 'gap_cluster_distance': .12,
+        'gap_cluster_min_points': 3, 'gap_object_min_width': .08, 'gap_object_max_width': 1.,
+        'gap_edge_padding': .025, 'gap_front_padding': 0., 'gap_row_tolerance': .18,
+        'gap_extra_width': .04, 'gap_max_width': .85,
+        'occupancy_edge_margin': .015, 'occupancy_min_hits': 3, 'free_ray_fraction': .65,
+        'white_roi_top': .50, 'white_roi_side_margin': .02, 'white_hough_votes': 20,
+        'white_min_length_fraction': .12, 'white_min_vertical_fraction': .12,
+        'white_loss_frames': 1, 'white_acquire_timeout': 1.5,
     },
     'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
         'lookahead': 0.55, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
-        'finish_error': 0.025, 'finish_heading': 0.035,
+        # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
+        # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
+        'finish_error': 0.05, 'finish_heading': 0.15,
+        # 좌·우 선택은 최근 choice_window(s) 동안 옆 차로 빈 거리의 최솟값으로 (11/14 lap3: 의자 다리 한 스캔 누락 → 1.42 → 3.0 m로 튀어 막힌 쪽 선택)
+        'choice_window': 0.5,
         'max_distance': 3.0,         # 한 차로 이동 최대 주행 거리(m). 넘으면 차선 주행으로 복귀
         # 좌·우 선택 (라이다): 옆 차로가 min_free_distance 이상, 지금 차로보다 free_gain 이상 더 비어 있어야 이동.
         # 둘 다 되면 더 멀리 비어 있는 쪽. 점이 없으면 free_range로 봄 (= lidar planning_point_range)
@@ -191,6 +298,22 @@ ANSWER_CONFIG = {
         'stop_distance': 0.6, 'approach_speed': 0.15,
         # 선 색으로 현재 차로 확인: 노랑/흰 → 2, 흰/흰 → 1, 흰/노랑 → 0. 새 카메라 프레임 이 수만큼 연속 같으면 index 보정
         'index_confirm_frames': 5,
+        # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
+        # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
+        'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
+        'overshoot': 0.08,   # 목표 횡이동보다 이만큼(m) 더 가면 바로 종료 (바깥 노란 선 넘음 방지)
+        # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
+        # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
+        'camera_fix_frames': 2, 'camera_fix_range': 0.5,
+        # 11/13 대회장 벽(노란 바깥선 위) 라이다 점 제거 (lane_change.drop_walls). 바깥선 ±wall_search(m) 안에서
+        # 앞뒤 wall_min_length(m) 넘게 이어진 직선(점 wall_min_points개 이상, 기울기 wall_max_slope 이하) = 벽
+        # → 그 선에서 wall_band(m) 안쪽 ~ 바깥 점 버림. 벽 없는 곳에서는 직선이 안 잡혀 아무것도 안 버림
+        'wall_filter': True, 'wall_search': 0.25, 'wall_min_length': 0.8, 'wall_min_points': 12,
+        'wall_max_slope': 0.35, 'wall_band': 0.05,
+        # 11/14: 맞춘 선이 바깥선보다 이만큼(m) 넘게 안쪽이면 벽 아님 (바깥선 쪽으로 붙은 장애물 차 줄 오인 방지)
+        'wall_inside': 0.08,
+        # 옆 차로 '차 옆·바로 뒤' 검사 범위: 차체 뒤끝(뒷축 뒤 7.2 cm) + 이만큼(m). 예전 차 길이(33 cm)
+        'side_behind_margin': 0.05,
     },
 }
 
