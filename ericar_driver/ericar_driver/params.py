@@ -236,6 +236,17 @@ ANSWER_CONFIG = {
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
+        # 최초 표지판은 탐색만 시작. 가까운 표지판 통과 또는 목표 감속 거리에서 서행 전환
+        'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
+        'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
+        'sign_gone_frames': 3, 'sign_gone_seconds': .35,
+        'cruise_reaction_time': .25, 'cruise_braking_acceleration': .30, 'cruise_slow_buffer': .10,
+        'turn_entry_max_speed': .16,
+        # 원호 유지 후 정렬로 전환. 선이 순간적으로 맞아 보여도 회전각·입구 진입 확인 필요
+        'arc_min_angle': 1.134, 'arc_align_heading': .35, 'arc_align_lateral': .18,
+        'arc_entry_tolerance': .05, 'arc_align_frames': 3,
+        'arc_release_angle': 1.484, 'arc_release_heading': .15,
+
         # 양수 offset: 더 일찍 회전. 음수: 더 늦게 회전. 시작 오차·초과 허용은 m
         'approach_start_offset': 0., 'approach_start_tolerance': .02, 'approach_passed_tolerance': .06,
         'approach_timeout': 15., 'approach_distance_limit': 1.2,
@@ -248,14 +259,15 @@ ANSWER_CONFIG = {
                'single_association': .12, 'direction_tolerance': .25, 'parallel_tolerance': .15,
                'merge_distance': .035, 'minimum_ground_length': .10,
                'ground_near': .30, 'ground_far': 2., 'maximum_extrapolation': .20,
-               'maximum_lateral': 1., 'feedback_timeout': .30, 'steering_rate': .8},
+               'maximum_lateral': 1., 'feedback_timeout': .30, 'steering_rate': .8,
+               'arc_kp': 2., 'arc_observe_heading': 1.15, 'arc_correction_limit': .12, 'arc_min_steering': .23, 'align_min_steering': .20},
 
         # 11/14: 회전 90° = 반경 0.615 × π/2 = 0.97 m·8 s → 상한 0.85 m·8 s로는 79°에서 실패 종료 (lap4). 1.2 m·13 s로
         'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 13., 'turn_distance_limit': 1.2,
         # 실측 회전 반경(m, 조향 −0.35, lap4 IMU 69°·0.756 m). 회전 시작 시점(turn lead) 계산에 사용. None이면 축거/tan(조향)
         'turn_radius': .615,
-        # 칸 방향이 정면 ±turn_done_heading(rad) 안이면 회전 끝·정지. 흰 선 소실 정지는 칸 방향이 white_stop_heading 안일 때만
-        'turn_done_heading': .05, 'white_stop_heading': .35,
+        # 방향 정면 정지는 보조 종료. 흰 선 소실 정지는 방향·입구 조건 없이 즉시 우선 적용
+        'turn_done_heading': .05,
         'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
         'slot_depth': .59, 'view_near': .30,
         'gap_view_far': 3., 'gap_view_right': 1.5, 'gap_cluster_distance': .12,

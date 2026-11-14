@@ -1,4 +1,5 @@
-> **parking_auto1:** FREE 목표 저장 → 회전 시작점까지 접근 → 흰 경계선 PD 정렬·흰 선 소실 정지. [실행·설정](../docs/parking_auto1.md).
+> **parking_auto2:** 최신 main 통합·일반속도 LiDAR 탐색 유지·기본 우회전 유지·흰 선 소실 첫 새 영상 즉시 정지. [업데이트·실행·검증](../docs/parking_auto2.md).
+
 
 # ericar_driver
 

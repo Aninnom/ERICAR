@@ -141,13 +141,14 @@ def test_camera_bicycle_closed_loop_improves_over_fixed_turn(y0,yaw0):
 
 def test_parking_step_applies_pd_then_retains_white_loss_stop_and_obstacle_check():
     c=config();p=Parking(c);p.start(0.)
-    image,target=scene(c);p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target
+    image,target=scene(c);p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target;p.turn_phase='align';p.arc_released=True;p.turn_angle=math.pi/2
     data=laser(c,boxes=[]);last=None
     for i in range(1,8):
         now=1.+i*.1
         command=p.step(now,image,now,data,now,None,now,[],.12,dict(valid=True))
         assert command[0]>.0 and command[2]=='parking_turn';last=command
-    assert abs(last[1])<.04 and p.debug['feedback']['active']
+    assert last[1]<=p.c['turn_steering'] and p.debug['feedback']['active']
+    assert abs(p.pd.target)<.04  # 보정기가 풀기를 요청해도 실제 주차 명령은 기본 원호 유지
     now+=.1;blocked=laser(c,[(.29,.32,-.03,.03)])
     assert p.step(now,image,now,blocked,now,None,now,[],0.,dict(valid=True))[0]==0
     assert p.reason=='OBSTACLE_IN_NEXT_BODY_PATH'
@@ -175,7 +176,7 @@ def test_main_ros_publisher_uses_pd_output_and_white_stop():
         spec=importlib.util.spec_from_file_location('ericar_driver._pd_node',path)
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         node=module.DriverNode(c);image,target=scene(c)
-        p=node.loop.driver.parking;p.start(0.);p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target
+        p=node.loop.driver.parking;p.start(0.);p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target;p.turn_phase='align';p.arc_released=True;p.turn_angle=math.pi/2
         node.loop.driver.state='parking_turn';node.scan=laser(c,boxes=[]);node.velocity=.12
         node.loop.lane_cache=dict(valid=True,error=0.,heading=0.,stop_distance=None,forward=.6,abnormal=False,solid={},lane_mask=np.zeros((8,8),np.uint8),stamp=1.)
         node.loop.lane_stamp=1.
@@ -184,7 +185,7 @@ def test_main_ros_publisher_uses_pd_output_and_white_stop():
             node.image=image;node.image_stamp=node.scan_stamp=node.odom_stamp=node.detection_stamp=now
             node.control()
         commands=[m for topic,m in node.published if topic==c['topics']['drive']]
-        assert commands[-1].speed>0 and abs(commands[-1].steering_angle)<.06
+        assert commands[-1].speed>0 and commands[-1].steering_angle<=p.c['turn_steering']+c['robot']['steering_offset']
         now=round(now+.1,6);fake_ros.Clock.now_s=now
         node.image=picture(False);node.image_stamp=node.scan_stamp=node.odom_stamp=node.detection_stamp=now
         node.control()
@@ -206,14 +207,14 @@ def test_pd_debug_view_renders_used_boundary_and_target():
     assert 'PARK PD' in module.draw_parking(np.zeros((360,400,3),np.uint8),{'parking':park})
 
 
-def test_opposite_correction_sets_steering_before_resuming_motion():
+def test_opposite_correction_cannot_unwind_active_parking_turn():
     c=config();p=Parking(c);p.start(0.);image,target=scene(c,y=-.07)
-    p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target;data=laser(c,boxes=[])
+    p.state='parking_turn';p.turn_started=p.last_tick=1.;p.selected=target;p.turn_phase='align';p.arc_released=True;p.turn_angle=math.pi/2;data=laser(c,boxes=[])
     outputs=[]
     for i in range(1,9):
         now=1.+i*.1
         command=p.step(now,image,now,data,now,None,now,[],0.,dict(valid=True))
         outputs.append(command)
-    assert outputs[0][0]==0 and outputs[0][1]<0
-    assert any(speed>0 and steering>0 for speed,steering,state in outputs)
+    assert p.pd.target>0
+    assert all(speed>0 and steering<=p.c['turn_steering'] for speed,steering,state in outputs)
     assert p.state=='parking_turn'
