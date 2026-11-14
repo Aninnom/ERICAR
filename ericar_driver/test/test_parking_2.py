@@ -26,6 +26,7 @@ def config():
     # 11/14 기본값(실측 반경·칸 방향 정면 정지·PD 끔)은 test_parking_turn_done.py
     p=c['answer']['parking'];p['turn_radius']=None;p['turn_done_heading']=None;p['white_stop_heading']=math.pi
     p['turn_timeout']=8.;p['turn_distance_limit']=.85;p['pd']['enabled']=True
+    c['answer']['parking']['cruise_search_enabled']=False  # 기존 서행·회전 회귀 장면. 일반속도 탐색은 별도 시험
     return c
 
 
@@ -106,7 +107,7 @@ def test_actual_obstacle_stops_without_erasing_latched_turn():
 
 def test_turn_timeout_cancel_and_invalid_steering():
     c=config();p=Parking(c);p.start(0.);step(p,laser(c))
-    assert step(p,laser(c),9.1)[0]==0 and p.reason=='TURN_TIMEOUT'
+    assert step(p,laser(c),1.+c['answer']['parking']['turn_timeout']+.1)[0]==0 and p.reason=='TURN_TIMEOUT'
     p=Parking(c);p.start(0.);p.cancel()
     assert step(p,laser(c))[2]=='parking_cancelled'
     c['answer']['parking']['turn_steering']=.2

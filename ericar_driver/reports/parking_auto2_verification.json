@@ -1,0 +1,44 @@
+{
+  "branch": "parking_auto2",
+  "base_main": "b1c0387",
+  "integrated_parking_auto1": "55d5b9f",
+  "tests": {
+    "parking": 96,
+    "traffic": 12,
+    "total": 108,
+    "result": "passed"
+  },
+  "build": "colcon ericar_driver passed",
+  "hardware_verified": false,
+  "fixes": [
+    "White-line loss on the first new frame emits zero speed with no rotation or entry gate",
+    "White loss precedes PD calculation, orientation fallback, time and distance checks",
+    "Terminal stop remains latched when white lines reappear",
+    "Active parking steering cannot unwind below the calibrated nominal right turn",
+    "Latest main measured 0.615m radius, PD-off default and orientation fallback preserved"
+  ],
+  "maintained": [
+    "Normal-lane-speed LiDAR search before slowdown",
+    "Debounced near-sign passage and target braking-distance slowdown",
+    "Main traffic filtering and cone/corner integration fixes",
+    "Real obstacle and sensor freshness stops",
+    "Main sole motor publisher"
+  ],
+  "immediate_stop_cases_radians": [
+    0.0,
+    0.4,
+    1.0,
+    1.4
+  ],
+  "default_calibration": {
+    "turn_radius_m": 0.615,
+    "turn_steering_rad": -0.35,
+    "pd_enabled": false
+  },
+  "limitations": [
+    "Same-cycle zero-speed command is not instantaneous physical braking",
+    "One-frame line detection loss may produce an early stop; stopping is prioritized over continuing through the bay",
+    "Synthetic tests do not verify full-body parking success or no painted-line contact in the real vehicle",
+    "Default measured turn radius is specific to the tested vehicle and steering setting"
+  ]
+}

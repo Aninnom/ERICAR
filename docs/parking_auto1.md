@@ -1,101 +1,109 @@
-# parking_auto1 — 회전 시작점 접근·주차 전용 PD
+# parking_auto1 — 일반속도 탐색·원호 유지·주차 PD
 
-최신 main `96ec051` 병합 후 주차 전용 PD 추가. 라바콘 변경·기본 노출 600 포함. FREE 발견 시점과 실제 회전 시작 시점 분리 유지.
+이전 PD 버전 `8101a7d`에서 발전한 실험 버전. 기존 main 차선 제어·LiDAR FREE 판정은 유지.
 
-흐름: 기존 main 주행 → parking 표지판 → 서행 탐색 → FREE 목표 저장 → 회전 시작점까지 접근 → 초기 우회전 → 흰 경계선 PD 정렬 → 회전 중 관측한 흰 직선 소실 시 정지.
+## 동작 순서
 
-## 추가 동작
+1. 신호등 완료 등 기존 주차 진입 조건 충족 후 parking 표지판 확인
+2. `parking_cruise`: 기존 main 차선 주행 명령 유지, 동시에 LiDAR 빈칸 탐색. 일반 코스 최대 0.4 m/s, 실제 속도는 기존 차선 제어·센서 최신성·장애물 검사로 제한
+3. 가까워진 표지판이 연속 새 YOLO 결과에서 사라지거나, LiDAR 후보가 감속 거리 안에 오면 0.12 m/s 서행으로 전환
+4. FREE 목표 저장, `parking_approach`에서 회전 시작점까지 접근. 속도가 0.16 m/s 이하가 된 뒤 회전 진입
+5. `parking_turn`의 `arc` 단계: 기본 −0.35 rad 원호 유지. 계획 칸 경계와 카메라 도색 경계의 차이만 작은 범위로 보정. 선이 순간적으로 맞아 보여도 직진으로 전환 금지
+6. 충분한 회전각·입구 접근·연속 경계 관측 확인 후 `align` 단계 진입. 약 85도까지 최소 우회전 유지, 그 뒤 PD로 점진 조향 풀기
+7. 관측하던 흰 선이 사라지고, 약 85도 회전·차체 후단 입구 통과가 확인되면 정지
 
-- `parking_approach`: 목표 입구 중앙·폴리곤을 차체 상대 좌표로 저장, 후속 FREE/UNKNOWN 판정에 의한 목표 교체 없음
-- 접근 거리: 입구 중앙의 전방 좌표 − 회전 선행 거리. 선행 거리 = `wheelbase / abs(tan(turn_steering)) + approach_start_offset` (현재 약 0.548 m)
-- `/odom`의 속도·각속도와 제어 주기 시간으로 상대 목표 이동 보정. 절대 odom 위치·TF·엄격한 센서 시각 동기화 관문 미사용
-- 스캔 시각부터 현재까지의 이동량도 최신 속도로 짧은 등속 근사 보정
-- 남은 거리 2 cm 이내에서 기존 −0.35 rad 우회전 시작. 이미 시작점을 6 cm 넘게 지난 FREE 후보는 건너뛰고 탐색 유지
-- 접근 15초/1.2 m 제한, 기존 장애물·센서 최신성·취소·무이동 정지 유지
-- 접근 중 흰 선 소실은 완료 조건에서 제외. 회전 시작 이후 관측한 선의 소실만 기존 정지 조건으로 사용
+## 서행 시점 분리
 
-## 주차 전용 PD 추가
+- 표지판 최초 확인 시 LiDAR 탐색 즉시 시작. main 차선 PID 상태 초기화 없이 같은 제어기 사용
+- 가까움 근거: 정규화 상자 면적 0.012 이상, 또는 오른쪽 화면 중심 0.90 이상이고 면적 0.006 이상. 화면 가장자리 잘린 표지판도 통과 관측용으로 사용 가능
+- 가까움 근거를 얻은 후 최소 3개 새 추론 결과·최소 0.35초 미검출에서 통과 확정. 같은 결과 반복 조회·오래된 검출·먼 표지판 일시 누락은 통과 근거에서 제외
+- `parking_cruise`에서는 YOLO 계속 실행. 서행 탐색·회전 단계에서는 기존대로 추론 휴식
+- FREE를 먼저 찾으면 목표 저장 후 계속 추적. UNKNOWN 후보도 회전 시작점이 가까우면 감속 근거로 사용하되 FREE로 승격하지 않음
+- 감속 기준 거리 = 현재 속도 × 반응시간 + (현재 속도² − 서행 속도²)/(2 × 감속도) + 여유 거리. 기본 반응 0.25초·감속도 0.30 m/s²·여유 0.10 m
+- 표지판이 계속 보여도 목표 감속 거리에 오면 서행 우선. 반대로 가까움 근거를 전혀 얻지 못하고 후보도 없으면 최대 30초/8 m 뒤 실패 정지
+- 일반 주행 속도 제한·센서 최신성·실제 차체 예상 궤적의 장애물 정지 유지. 감속 중에는 실제 현재 속도까지 고려한 궤적 검사
 
-- FREE/UNKNOWN 기준·LiDAR 군집·흰 선 추출 기준은 이전과 동일. 인식 실패 개선은 이번 범위에서 제외
-- 진입 초반 기존 −0.35 rad 우회전. 칸 방향과의 상대 각도가 약 40도 안쪽으로 들어오면 PD 개입 가능
-- 기존 main 카메라 장착 모델로 흰 선을 바닥 좌표로 변환. 뒷축 앞 0.55 m의 중앙 오차(m)와 선 방향 오차(rad) 사용
-- 서로 평행하고 도색 칸 폭 약 0.50 m인 경계 쌍 우선. 한 선만 보이면 저장한 칸 방향·폭을 이용한 좌우 식별. 네 경계 동시 관측 불필요
-- 장애물 사이 폭 대신 도색 폭 사용. 장애물을 벌려도 카메라가 본 도색 중앙으로 보정
-- `error = lateral_m + heading_weight * heading_rad`. 주차 전용 PID 인스턴스 사용, 기본 kp=1.5/ki=0/kd=0.08인 PD 동작. main 차선 PID 상태 공유 없음
-- 정렬될수록 고정 우회전에서 PD 출력으로 점진 전환. 중앙·방향 오차가 작으면 조향 0 근처로 복귀
-- 조향 변화율 0.8 rad/s 제한. 큰 반대 조향 전환 중 잠시 전진 유보 후 조향 방향이 바뀌면 재개
-- 한 번 PD를 사용한 후 유효 경계 관측이 0.30초 이상 없으면 정지 대기, 새 관측에서 재개. PD 개입 전 선을 못 찾으면 기존 고정 우회전 유지
-- 흰 직선 소실 정지·실제 장애물 정지·기존 시간/거리 제한 유지. 흰 선 소실은 차체 전체 진입 확인과 별개
+## 회전 시작점·원호·정렬
 
-PD 설정은 `params.py`의 `parking.pd`. `enabled=False`이면 이전 고정 우회전 방식으로 비교 시험 가능. 카메라 높이·피치·화각이 실제 장착과 맞아야 하며, 실차 gain·시작점 보정 검증 필요.
+회전 선행 거리 = `wheelbase / abs(tan(turn_steering)) + approach_start_offset` (기본 약 0.548 m).
 
-로그: `PARKING_PD_BOUNDARY_ALIGNMENT` 보정 중, `PARKING_PD_STEERING_TRANSITION` 반대 조향 전환 중, `WAITING_FOR_PARKING_LINE_FEEDBACK` 사용하던 경계 관측 대기.
+- 양수 시작 보정은 더 일찍, 음수 보정은 더 늦게 회전. 시작 허용 오차 2 cm, 6 cm 이상 지난 후보는 건너뜀
+- `/odom` 속도로 상대 목표 이동 보정. 회전 속도는 기존 main의 IMU 우선·미수신 시 보정된 odom 사용. 절대 pose·TF·엄격한 시각 동기화 관문 없음
+- 원호 보정은 카메라 관측 선과 저장한 목표 선의 차이에 비례. 남은 회전각을 기본 원호와 중복 보정하지 않음
+- 기본 원호 조향 −0.35 rad, 보정 최대 ±0.12 rad, 우회전 최소 크기 0.23 rad. 최대 조향은 실차 한계 ±0.42 rad
+- 정렬 전환: 누적 우회전 최소 약 65도, 관측 선 방향 오차 20도 이내·중앙 오차 18 cm 이내·뒷축이 입구 5 cm 근처까지 접근, 이 조건을 3개 새 영상에서 연속 확인
+- 정렬 단계에서도 약 85도 회전·선 방향 및 목표 칸 방향 오차 약 8.6도 이내까지 최소 0.20 rad 우회전 유지. 조건 충족 후에만 완전한 조향 풀기 허용
+- PD는 main 차선 PID와 분리. 기본 kp=1.5, ki=0, kd=0.08. 바닥 좌표에서 뒷축 앞 0.55 m 중앙 오차와 선 방향 오차 사용. 부분 한 선도 저장한 칸 방향·도색 폭 0.50 m로 좌우 식별
+- 흰 선 조기 소실만으로 완료 금지. 정렬 전 선이 사라지면 제한된 원호를 유지하고, 완료는 회전각·입구 통과 조건까지 확인. 정렬 후 사용하던 경계 관측이 불확실하면 기존 관측 대기 정지 적용
+- 최대 회전 12초/1.05 m. 기존 실제 장애물·센서·취소·무이동 정지 유지
 
-## 설정
+추정 자세·도색 소실은 완전한 주차 판정과 별개. 측정 오차·슬립·카메라 장착 변화가 있으면 실차 검증·보정 필요. 이상적인 합성 장면 통과로 실차 선 미침범·완주 보장 불가. 시작점을 4 cm 일찍 잡은 스트레스 장면은 최소 측면 여유 약 0.3 mm로 여유 부족, 실차 시작점 보정 필요. ±2 cm 장면의 최소 측면 여유는 약 1.5 cm 이상인 이상적 모델 결과.
 
-`ericar_driver/ericar_driver/params.py`의 parking 구역.
+## 설정·디버그
 
-| 값 | 기본 | 의미 |
+설정: `ericar_driver/ericar_driver/params.py`의 parking 구역.
+
+| 설정 | 기본 | 의미 |
 |---|---:|---|
-| approach_start_offset | 0 m | 양수: 더 일찍 회전, 음수: 더 늦게 회전 |
-| approach_start_tolerance | 0.02 m | 회전 시작 허용 오차 |
-| approach_passed_tolerance | 0.06 m | 이보다 많이 지난 후보는 건너뜀 |
-| approach_timeout | 15 s | 목표 저장 후 최대 접근 시간 |
-| approach_distance_limit | 1.2 m | 목표 저장 후 최대 접근 주행 거리 |
+| cruise_search_enabled | True | 표지판 최초 확인 후 일반속도 탐색 |
+| cruise_max_speed | 0.4 m/s | 일반 코스 탐색 상한 |
+| trial_cruise_max_speed | 0.2 m/s | 주차 단독 launch 탐색 상한 |
+| sign_near_area | 0.012 | 가까운 표지판 면적 근거 |
+| sign_gone_frames / seconds | 3 / 0.35 s | 새 추론 결과의 연속 미검출 |
+| approach_start_offset | 0 m | 회전 시작점 앞뒤 보정 |
+| turn_entry_max_speed | 0.16 m/s | 회전 진입 실제 속도 상한 |
+| arc_min_angle / release_angle | 약 65 / 85도 | 정렬 진입 / 완전 조향 풀기 최소 회전 |
+| arc_align_frames | 3 | 정렬 조건 연속 확인 영상 수 |
+| pd.arc_kp | 2.0 | 원호의 계획 경계 대비 보정 비례계수 |
+| pd.arc_correction_limit | 0.12 rad | 원호 중 보정 상한 |
 
-회전 선행 거리는 90도 원호의 근사값이며, 실측 회전 반경과 다를 수 있음. 차선 미침범·차체 전체 진입 보장 없음. 장애물의 좌우 이격 변화·슬립·LiDAR 가림·odom 오차는 실차 확인 필요. 특히 FREE가 너무 늦게 보이면 후보를 건너뛸 수 있음.
+화면: `PARK CRUISE LiDAR ON` 일반 주행 중 탐색, `TURN IN` 회전 시작점까지 남은 거리, `ARC` 원호 유지, `ALIGN` 정렬. 누적 회전각과 `released`로 조향 풀기 허용 여부 표시. 하늘색 선·십자는 제어기가 사용한 도색 경계·목표.
 
-## 디버그
+텔레메트리 `control.parking`: sign(가까움·통과·미검출 수), slow_reason(서행 전환 이유), cruise_distance_m, approach, turn_phase, turn_angle_deg, arc_released, feedback, white_line.
 
-기존 카메라·흰 선·LiDAR 화면 유지. PD에 사용한 선과 목표 십자는 하늘색, `PARK PD`에 선택 선 종류·중앙/방향 오차·조향 표시. `control.parking.feedback`에서 p/i/d 및 blend 확인. 저장한 목표 칸은 노랑, 접근 중 회전 시작점은 하늘색 십자와 `TURN IN`으로 표시. `control.parking.approach`에서 remaining_m, turn_lead_m, travel_m 확인.
+## 리모 업데이트·실행
 
-## 리모 다운로드·빌드
-
-주행·센서 노드 종료 후 실행.
+기존 센서·주행 종료 후:
 
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/wego_ws/install/setup.bash
-mkdir -p ~/parking_auto1_ws/src
-git clone --single-branch --branch parking_auto1 https://github.com/Aninnom/ERICAR.git ~/parking_auto1_ws/src/ERICAR
-cd ~/parking_auto1_ws
+cd ~/parking_main_ws/src/ERICAR
+git status --short
+# 로컬 변경 없을 때 실행
+git switch parking_auto1
+git pull --ff-only origin parking_auto1
+cd ~/parking_main_ws
 colcon build --packages-select ericar_driver
 source install/setup.bash
 ```
 
-첫 번째 SSH 창: 센서·디버그.
+전체 코스 (센서·주행·화면 함께 실행, 준비 후 실제 움직임 가능):
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/wego_ws/install/setup.bash
-source ~/parking_auto1_ws/install/setup.bash
-export ROS_LOCALHOST_ONLY=1
-export ROS_DOMAIN_ID=0
-ros2 launch ericar_driver bringup.launch.py driver:=false debug:=true record:=false exposure:=800
-```
-
-두 번째 SSH 창: 주차 단독 시험. 실행 직후 서행 가능, 조종기 정지 준비 필요. 모터 발행자 0 확인 후 실행.
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/wego_ws/install/setup.bash
-source ~/parking_auto1_ws/install/setup.bash
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=0
 export OMP_NUM_THREADS=2
 export OPENBLAS_NUM_THREADS=1
+ros2 launch ericar_driver bringup.launch.py driver:=true debug:=true record:=false exposure:=800
+```
+
+주차만 시험할 때는 첫 SSH 창에서 위 명령의 `driver:=false`로 센서만 실행. 두 번째 SSH 창에 같은 ROS 환경을 source한 뒤 실행:
+
+```bash
 ros2 topic info /limo/ack_cmd
+# 발행자 0일 때 실행. 조종기 물리 정지 준비 필요
 ros2 launch ericar_driver parking_auto1.launch.py model:=/home/wego/models/best.pt
 ```
 
-전체 코스는 동일 브랜치에서 bringup 기본 driver=true로 실행. 주차 전용 노드와 중복 실행 금지.
+주차 단독 시험은 표지판 전 서행, 표지판 확인 후 탐색 상한 0.2 m/s. 전체 코스의 탐색 상한 0.4 m/s와 구분. 두 주행 launch 동시 실행 금지. exposure:=800은 이전 실험값 지정이며 bringup 기본값은 600.
 
 ## 검증
 
 ```bash
-python3 -m pytest ericar_driver/test/test_parking_2.py ericar_driver/test/test_parking_auto1.py ericar_driver/test/test_parking_pd.py -q
+python3 -m pytest ericar_driver/test/test_parking_2.py ericar_driver/test/test_parking_auto1.py ericar_driver/test/test_parking_pd.py ericar_driver/test/test_parking_cruise_arc.py -q
 ```
 
-raycast 장면의 빈틈 전방 위치 4종, UNKNOWN→FREE 접근, FREE 목표 유지, 이미 지난 후보, 상대 회전·실측 속도, 지연 스캔 보정, 장애물·시간/거리·취소 정지, fake ROS main 모터 명령 연결 확인. 실차 성공률 검증은 별도 필요.
+표지판 일시 누락·새 추론 결과 구분·가까운 표지판 통과·UNKNOWN 후보 감속·FREE 저장·실제 속도 감속 확인·main 모터 발행(fake ROS)·원호 유지·정렬 전환·조기 완료 방지·합성 카메라/자전거 모델과 회전 차체의 선 교차 검사 포함.
 
-추가 검증: 카메라 정·역투영, 부분 경계, 장애물 간격과 도색 중앙 분리, PD 방향·조향 풀기·변화율 제한, 관측 만료·재개, main 모터 발행(fake ROS), 합성 카메라+자전거 운동학 폐루프. 폐루프 4장면은 직선 정렬 구간의 이상적 장면이며 전체 주차 성공률·실차 선 미침범 보장 아님. 결과 `ericar_driver/reports/parking_pd_verification.json`.
+결과: `ericar_driver/reports/parking_cruise_arc_verification.json`. 이전 버전 보고서는 해당 이전 코드의 기록으로 유지. 실차 성공률은 별도 확인 필요.

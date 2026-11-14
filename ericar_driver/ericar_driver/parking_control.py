@@ -65,7 +65,7 @@ def boundary_observation(lines,shape,target,robot,config):
             if abs(observed_width-width)>config['width_tolerance']:continue
             if abs(center-expected_center)>config['center_association']:continue
             options.append((abs(center-expected_center)+abs(observed_width-width),dict(
-                source='pair',lateral_m=center,heading_rad=heading,width_m=observed_width,
+                source='pair',lateral_m=center,predicted_lateral_m=expected_center,heading_rad=heading,width_m=observed_width,
                 pixel_segments=[a['pixel'],b['pixel']])))
     if options:return min(options,key=lambda p:p[0])[1],'BOUNDARY_PAIR'
     for fit in groups:
@@ -75,7 +75,7 @@ def boundary_observation(lines,shape,target,robot,config):
             mismatch=abs(center-expected_center)
             if mismatch<=config['single_association']:
                 options.append((mismatch,dict(source='single_left' if side>0 else 'single_right',
-                    lateral_m=center,heading_rad=fit['heading'],width_m=None,pixel_segments=[fit['pixel']])))
+                    lateral_m=center,predicted_lateral_m=expected_center,heading_rad=fit['heading'],width_m=None,pixel_segments=[fit['pixel']])))
     if options:return min(options,key=lambda p:p[0])[1],'SINGLE_BOUNDARY'
     return None,'NO_ASSOCIATED_PARKING_BOUNDARY'
 
@@ -95,10 +95,11 @@ class ParkingPD:
         self.pid.reset();self.last_stamp=None;self.valid_stamp=None
         self.debug=dict(self.debug,active=False,reason='WAITING_FOR_FRESH_FEEDBACK')
 
-    def update(self,lines,shape,target,stamp):
+    def update(self,lines,shape,target,stamp,phase='align'):
         if not self.c['enabled']:return
         expected_heading=math.atan2(target['normal'][1],target['normal'][0])
-        if abs(expected_heading)>self.c['activate_heading']:
+        observe_limit=self.c['arc_observe_heading'] if phase=='arc' else self.c['activate_heading']
+        if abs(expected_heading)>observe_limit:
             self.debug=dict(enabled=True,active=False,reason='INITIAL_FIXED_RIGHT_TURN',expected_heading_rad=expected_heading)
             return
         observation,reason=boundary_observation(lines,shape,target,self.robot,self.c)
@@ -119,15 +120,31 @@ class ParkingPD:
                         terms=dict(self.pid.terms),reference_pixel=image_point(
                             [self.c['reference_distance'],observation['lateral_m']],shape,self.robot['camera']))
 
-    def command(self,now,dt):
+    def command(self,now,dt,phase='align',hold_turn=False,preserve_arc=False):
         self.debug['age_s']=None if self.valid_stamp is None else max(0.,now-self.valid_stamp)
-        if not self.c['enabled']:return self.parking['turn_steering'],True
-        if self.engaged and (self.valid_stamp is None or now-self.valid_stamp>self.c['feedback_timeout']):
-            self.debug=dict(self.debug,active=False,reason='FEEDBACK_TIMEOUT')
-            return 0.,False
+        self.debug.update(phase=phase,hold_turn=hold_turn,preserve_arc=preserve_arc)
+        if not self.c['enabled']:
+            self.steering=self.parking['turn_steering']
+            self.debug.update(active=False,reason='CALIBRATED_FIXED_RIGHT_TURN',steering_rad=self.steering,
+                              command_target_steering_rad=self.steering,steering_transition=False)
+            return self.steering,True
+        fresh=self.valid_stamp is not None and 0<=now-self.valid_stamp<=self.c['feedback_timeout']
+        if phase=='arc':
+            # 원호가 이미 담당하는 남은 회전각을 중복 보정하지 않음. 계획 칸 선과 관측 선의 차이만 사용
+            arc_error=self.debug.get('lateral_m',0.)-self.debug.get('predicted_lateral_m',0.)
+            arc_error+=self.c['heading_weight']*(self.debug.get('heading_rad',0.)-self.debug.get('expected_heading_rad',0.))
+            correction=clip(self.c['arc_kp']*arc_error,-self.c['arc_correction_limit'],self.c['arc_correction_limit']) if fresh and self.debug.get('active') else 0.
+            self.debug.update(arc_error_m=arc_error,arc_correction_rad=correction)
+            target=clip(self.parking['turn_steering']+correction,-self.robot['max_steering'],-self.c['arc_min_steering'])
+        else:
+            if self.engaged and not fresh:
+                self.debug=dict(self.debug,active=False,reason='FEEDBACK_TIMEOUT');return 0.,False
+            target=min(self.target,-self.c['align_min_steering']) if hold_turn else self.target
         maximum=self.c['steering_rate']*max(0.,dt)
-        self.steering+=clip(self.target-self.steering,-maximum,maximum)
-        self.debug['steering_rad']=self.steering
-        # 반대 방향 보정으로 넘기는 동안 전진 유보. 조향 변화율 제한으로 생기는 반대쪽 이동 억제
-        self.debug['steering_transition']=self.engaged and self.steering*self.target<0 and abs(self.target)>.04 and abs(self.target-self.steering)>.15
+        if preserve_arc:target=min(target,self.parking['turn_steering'])
+        self.steering+=clip(target-self.steering,-maximum,maximum)
+        if preserve_arc:self.steering=min(self.steering,self.parking['turn_steering'])
+        self.debug.update(steering_rad=self.steering,command_target_steering_rad=target)
+        self.debug['steering_transition']=(not preserve_arc and phase=='align' and not hold_turn and self.engaged and self.steering*target<0
+                                          and abs(target)>.04 and abs(target-self.steering)>.15)
         return self.steering,True

@@ -164,7 +164,9 @@ def draw_camera(camera, telemetry):
             cv2.line(img,(int(x0*scale),int(y0*scale)),(int(x1*scale),int(y1*scale)),color,3)
         target=feedback.get('reference_pixel')
         if target:cv2.drawMarker(img,tuple(int(q*scale) for q in target),color,cv2.MARKER_CROSS,14,2)
-        put(img,f"PARK PD {feedback.get('reason','')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f}",6,36,color,.42)
+        park=(telemetry or {}).get('control', {}).get('parking') or {}
+        mode=park.get('turn_phase','align') if park.get('state')=='parking_turn' else park.get('state','parking').removeprefix('parking_')
+        put(img,f"PARK {mode.upper()} {park.get('turn_angle_deg',0):.0f}deg {feedback.get('reason','')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f}",6,36,color,.42)
     t = telemetry or {}
     control, lane, lc = t.get('control', {}), t.get('lane', {}), lane_config(t)
     if lc:
@@ -392,12 +394,15 @@ def draw_parking(img, control, live=None):
         pass
     if not park:
         return f"PARK live (driver off) {','.join(states) or 'no gap'}"[:64]
+    if park.get('state')=='parking_cruise':
+        sign=park.get('sign') or {}
+        return f"PARK CRUISE LiDAR ON near {sign.get('near_seen')} missing {sign.get('missing_results',0)}"
     if park.get('state')=='parking_approach':
         approach=park.get('approach') or {}
         return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
     feedback=park.get('feedback') or {}
     if feedback.get('active'):
-        return f"PARK PD {feedback.get('source')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f} steer {feedback.get('steering_rad',0):+.2f}"
+        return f"PARK PD {park.get('turn_phase','align').upper()} {park.get('turn_angle_deg',0):.0f}deg {feedback.get('source')} e {feedback.get('lateral_m',0):+.2f}m h {feedback.get('heading_rad',0):+.2f} steer {feedback.get('steering_rad',0):+.2f}"
     return (f"PARK {park.get('state', '')} {','.join(states) or 'no gap'}  "
             f"search {park.get('search_distance_m', 0):.2f} turn {park.get('turn_distance_m', 0):.2f}m")[:64]
 
@@ -565,7 +570,10 @@ def status_panel(width, t):
     stall, limit = control.get('stall_time', 0.0), (ANSWER.get('stall') or {}).get('seconds', 8.0)
     feedback=park.get('feedback') or {}
     if park.get('state')=='parking_turn' and feedback:
-        line(f"PD {feedback.get('reason','')} steer {feedback.get('steering_rad',0):+.2f}",CYAN if feedback.get('active') else ORANGE)
+        line(f"{park.get('turn_phase','?').upper()} {park.get('turn_angle_deg',0):.0f}deg released {park.get('arc_released')} steer {feedback.get('steering_rad',0):+.2f}",CYAN if feedback.get('active') else ORANGE)
+    elif park.get('state')=='parking_cruise':
+        sign=park.get('sign') or {}
+        line(f"CRUISE LiDAR ON near {sign.get('near_seen')} missing {sign.get('missing_results',0)}",CYAN)
     else:
         line(f'stall guard {stall:.1f} / {limit:.0f} s', RED if stall > 0 else GREY)
     reasons = stop_reasons(t)

@@ -91,7 +91,7 @@ class DriverNode(Node):
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
             self.worker.start()
-        self.get_logger().info('정답 코드 시작: YOLO + camera lane + lidar; absolute pose is unused.')
+        self.get_logger().info('parking_auto2: main lane + LiDAR search; calibrated right turn; immediate white-line-loss stop.')
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
@@ -128,12 +128,16 @@ class DriverNode(Node):
         self.tilt_rate = (getattr(message.angular_velocity, 'x', 0.0), getattr(message.angular_velocity, 'y', 0.0))
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
+    @staticmethod
+    def detector_paused(state):
+        return (state.startswith('parking_') and state!='parking_cruise') or state=='parked'
+
     def detect(self):
         import torch
         c = self.c
         last_stamp = None
         while not self.stop_event.is_set():
-            if self.loop.driver.state.startswith('parking_') or self.loop.driver.state=='parked':
+            if self.detector_paused(self.loop.driver.state):
                 self.stop_event.wait(.2)
                 continue
             with self.lock:
@@ -204,7 +208,7 @@ class DriverNode(Node):
         self.publish(speed,steering)
         if out.telemetry is not None:
             packet=json.loads(out.telemetry)
-            packet['runtime']=dict(mode='parking_auto1',compute_ms=elapsed*1000,
+            packet['runtime']=dict(mode='parking_auto2',compute_ms=elapsed*1000,
                                    published_speed=speed,command_fresh=fresh)
             packet['control']['published_speed']=speed
             out.telemetry=json.dumps(packet)
