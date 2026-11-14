@@ -18,6 +18,7 @@ from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
 from .common import clip
+from .traffic_lamp import NAMES as LAMP_NAMES, lamp_name
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
 from .params import YOLO_CLASSES
@@ -148,7 +149,15 @@ class DriverNode(Node):
                         x0, y0, x1, y1 = box.xyxy[0].cpu().tolist()
                         margin = c['detector'].get('edge_margin', .01)
                         truncated = x0 <= margin*w or x1 >= (1-margin)*w or y0 <= margin*h or y1 >= (1-margin)*h
-                        objects.append(dict(name=results.names[int(box.cls[0])],
+                        name = results.names[int(box.cls[0])]
+                        extra = {}
+                        if (name in LAMP_NAMES and c['detector'].get('lamp_check', True) and
+                                (x1-x0)*(y1-y0)/(w*h) >= c['detector'].get('lamp_min_area', .005)):
+                            # 같은 프레임에서 켜진 램프 위치로 색 재확인. 판정되면 YOLO 이름 대신 사용 (traffic_lamp.py)
+                            lamp = lamp_name(frame, (x0, y0, x1, y1), c['detector'])
+                            if lamp is not None and lamp != name:
+                                extra, name = dict(yolo_name=name), lamp
+                        objects.append(dict(name=name, **extra,
                                             bbox=[x0/w, y0/h, x1/w, y1/h], truncated=truncated,
                                             confidence=float(box.conf[0]),
                                             area=(x1 - x0) * (y1 - y0) / (w * h),

@@ -392,8 +392,9 @@ class ConeDriving:
         # 안전한 원호가 없어도 멈추지 않고 천천히 (정지 = 미션 실패). 정면 막힘은 driver의 비상 정지가 처리
         return (c['avoidance_speed'] if safe else c['cone_creep_speed']), steering
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled):
-        """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)"""
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
+        """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)
+        red_only: 붉은색이 화면에 찼을 때만(corridor) 새로 진입 (S2 조기 진입용, 라이다만으로는 안 켬)"""
         if not enabled or self.done:
             self.active, self.confirm = False, 0
             return None
@@ -422,7 +423,7 @@ class ConeDriving:
             # 모드가 끝나는 지점(max_travel)보다 먼 콘은 어차피 지나지 않음 → 구간 뒤 트랙 옆 물체로 끌려가지 않게 제외
             posts = posts[np.hypot(posts[:, 0], posts[:, 1]) < self.max_travel-self.travel]
         if not self.active:
-            start = self.start_gate(posts, wide)
+            start = self.start_gate(posts, wide) if self.corridor or not red_only else None
             self.confirm = self.confirm+1 if start else 0
             self.debug = dict(state='wait', confirm=self.confirm, posts=int(len(posts)), red=self.red)
             if self.confirm < c['cone_confirm_count']:

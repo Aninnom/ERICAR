@@ -36,6 +36,8 @@ class Driver:
                                 dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3))
         self.sync_fork()
         self.traffic_stop_completed = False
+        self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
+        self.traffic_box = None      # 지금 따라가는 신호등 박스 (bbox, 면적). 신호등 접근·정지 중에만 유지 (11/14)
         self.traffic_seen = -1e9     # 신호등(색 무관, 작은 박스 포함)을 마지막으로 본 시각 (소민)
         self.traffic_red_area = 0.0  # 이번 프레임 빨강·노랑 박스 최대 면적 비율
         self.line_kind = None        # line_distance가 가리키는 선: 'crosswalk'(횡단보도 바로 앞) / 'plain'
@@ -60,6 +62,19 @@ class Driver:
         """구간 전환 보류 조건: 라바콘 통과 중. 콘 배치에 따라 오른쪽으로 크게 돌 수 있어 누적 회전을 코너로 세면 안 됨
         문 사이에서 active가 잠깐 꺼짐 → 첫 진입(started)부터 끝(done)까지로 봄"""
         return self.cones.active or (self.cones.started and not self.cones.done)
+
+    def cone_early(self):
+        """라바콘 구간 바로 앞 구간(S2)에서 3번 코너를 early_turn(°) 넘게 돌았는지. loop.py 붉은색 계산도 이 조건 사용"""
+        s = self.c['sections']
+        early = s.get('cone_early_turn')
+        return bool(s['enabled'] and early is not None and 'cones' not in s.get('off', ()) and
+                    self.sections.index == START_SECTION['cones']-1 and self.sections.turned >= early)
+
+    def corner3(self):
+        """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
+        s = self.c['sections']
+        return bool(s['enabled'] and self.sections.index == START_SECTION['lane_change'] and
+                    self.sections.turned >= s.get('lane_change_max_turn', 15.0))
 
     def transition(self, state, now):
         self.state, self.state_started, self.stopped_since = state, now, None
@@ -130,6 +145,40 @@ class Driver:
     def advance(self, mission):
         self.done.add(mission)
 
+    def traffic_filter(self, detections):
+        """신호등 박스 중 지금 보는 신호등 것만 남김 (11/14 integ_1114_lap3: 녹색 0.042 + 배경 빨간 상자 0.003 동시 검출 → 54초 대기)
+
+        접근·정지 중: 따라가던 박스와 겹치거나(IoU traffic_box_iou 이상) 면적이 그 traffic_main_ratio배 이상인 박스만 사용,
+        남은 것 중 가장 큰 박스를 새 기준으로 삼음. 겹치는 박스가 없는 프레임은 기준 유지
+        그 외(차선 주행): 가장 큰 신호등 박스의 traffic_main_ratio배보다 작은 신호등 박스는 버림 (먼 배경의 붉은 물체)
+        신호등이 아닌 표지판은 그대로 통과"""
+        m = self.c['missions']
+        names = MISSION_SIGNS['traffic']
+        lights = [d for d in detections if d['name'] in names and d.get('bbox')]
+        if not self.state.startswith('traffic'):
+            self.traffic_box = None
+        if not lights:
+            return detections
+        ratio = m.get('traffic_main_ratio', .5)
+        if self.traffic_box is None:
+            largest = max(d['area'] for d in lights)
+            keep = [d for d in lights if d['area'] >= ratio*largest]
+        else:
+            box, area = self.traffic_box
+            def overlap(b):
+                w = min(b[2], box[2])-max(b[0], box[0])
+                h = min(b[3], box[3])-max(b[1], box[1])
+                if w <= 0 or h <= 0:
+                    return 0.0
+                union = (b[2]-b[0])*(b[3]-b[1])+(box[2]-box[0])*(box[3]-box[1])-w*h
+                return w*h/union if union > 0 else 0.0
+            keep = [d for d in lights if overlap(d['bbox']) >= m.get('traffic_box_iou', .2) or d['area'] >= ratio*area]
+        if self.state.startswith('traffic') and keep:
+            main = max(keep, key=lambda d: d['area'])
+            self.traffic_box = (list(main['bbox']), main['area'])
+        kept = {id(d) for d in keep}
+        return [d for d in detections if d['name'] not in names or id(d) in kept]
+
     def confirmed(self, detections, stamp):
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
         names = {d['name'] for d in detections
@@ -187,6 +236,7 @@ class Driver:
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
+        detections = self.traffic_filter(detections)
         names = self.confirmed(detections, detection_stamp)
         if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
@@ -197,7 +247,8 @@ class Driver:
             self.traffic_seen = now
         self.traffic_red_area = max([d['area'] for d in traffic if d['name'] != 'traffic_green'] or [0.0])
         green_only = 'traffic_green' in names and not ({'traffic_red', 'traffic_yellow'} & names)
-        if 'slow' in ready and self.allowed('slow'):
+        # 정지 중에는 서행 시작 안 함: 출발선에서 표지판이 보이면 출발 전에 slow_seconds가 다 지나 미션이 소진됨 (11/14 lap3)
+        if 'slow' in ready and self.allowed('slow') and abs(velocity) >= m.get('slow_min_speed', .05):
             self.advance('slow')
             self.slow_until = now + m['slow_seconds']
             self.cooldowns['slow'] = now + m['sign_cooldown']
@@ -369,7 +420,7 @@ class Driver:
             if parking_input is None:
                 speed,steering,state=self.parking.fail('PARKING_INPUT_UNAVAILABLE')
             else:
-                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,angular_velocity=angular_velocity,**parking_input)
+                speed,steering,state=self.parking.step(now=now,scan=scan,velocity=velocity,lane=lane,search_command=search_command,angular_velocity=turn_rate,**parking_input)
             self.state=state
             if state=='parked':self.advance('parking')
             self.debug=dict(parking=self.parking.debug,section=self.sections.index,stage=self.stage(),control_stamp=now,
@@ -382,6 +433,13 @@ class Driver:
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
         in_fork = self.fork.running
+        # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
+        # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
+        # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함
+        s = self.c['sections']
+        left_of_axis = -self.sections.turned if s['enabled'] and self.sections.index == START_SECTION['fork'] else 0.0
+        self.lane_driver.hold_start_ok = left_of_axis <= s.get('hold_min_turned', 15.0)
+        self.lane_driver.hold_extra = max(0.0, left_of_axis)/s['odom_yaw_scale']
         speed, steering = self.main_lane_command(lane,now,dt,velocity,angular_velocity,
                                                   self.state == 'lane' and not self.avoiding and not in_fork,
                                                   self.avoiding)
@@ -399,12 +457,21 @@ class Driver:
             preferred = self.fork.direction if self.fork.running else 0
             # 멈춤 방지가 차선 변경을 끈 동안(lane_change_off)도 앞 장애물 회피는 함 (avoid_only, 소민 11/12)
             # 예전: 1.5 m 동안 회피 판단 자체를 꺼서 그 안의 다음 장애물에 직진 충돌
+            # 라바콘 조기 진입 (11/14 lap3): 콘이 3번 코너 안에서 시작하면 S3 전환(코너 65°) 전에 콘에 닿음
+            # → S2에서 오른쪽으로 early_turn(°) 넘게 돈 뒤에는 붉은색이 화면에 차면(corridor) 라바콘 먼저, 차선 변경은 끔
+            cone_early = self.cone_early()
+            cone_first = self.cones.active or (cone_early and self.cones.corridor)
+            # 코너에서는 새 차선 변경 안 함 (11/14 lap4 169~175 s: 3번 코너 유지 중 벽·콘을 앞 장애물로 보고 조향을 가로챔 → 왼쪽으로 차선 변경 → 콘 추돌)
+            # 코너 유지 중이거나 S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 뒤. 진행 중인 차선 변경은 그대로 끝냄
+            in_corner = self.lane_driver.hold is not None or self.corner3()
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.fork.allows_change(self.lane_change.active), requested, preferred,
-                                            avoid_only=self.lane_change_off > 0)
+                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner,
+                                            requested, preferred, avoid_only=self.lane_change_off > 0)
             cone = None if change is not None else self.cones.update(
-                lane, scan, velocity, turn_rate, dt, self.sections.allows('cones') and self.fork_remaining <= 0)
+                lane, scan, velocity, turn_rate, dt,
+                (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,
+                red_only=cone_early and not self.sections.allows('cones'))
             if change is not None:
                 stuck_change = self.lane_change.active and change[0] == 0.0
                 speed, steering = change
@@ -412,6 +479,11 @@ class Driver:
             elif cone is not None:
                 speed, steering = cone
                 mode = 'cones'
+                self.cone_exit_left = self.c['lidar'].get('cone_exit_slow_distance', 0.0)
+            elif self.cone_exit_left > 0:
+                # 라바콘 직후: 콘 통과 방향이 틀어진 채 4번 코너에 들어감 → 코너 유지 뒤 0.37 ↔ 0.23 m/s로 출렁임 (lap4 214~216 s)
+                self.cone_exit_left -= abs(velocity)*dt
+                speed = min(speed, self.c['lidar'].get('cone_exit_slow_speed', 0.22))
         speed = self.stop_missions(speed, velocity, green_only, now)
         if self.c['parking'].get('test_drive_until_sign',False):
             speed=min(speed,self.c['parking']['scan_speed'])

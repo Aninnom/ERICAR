@@ -88,7 +88,8 @@ class Parking:
 
     def _turn_lead(self):
         # 뒷축의 90도 원호 전진량 R. 영점 보정은 직진 보정이므로 물리 조향각에 중복 합산 제외
-        radius=self.robot['wheelbase']/abs(math.tan(self.c['turn_steering']))
+        # turn_radius: 실측 회전 반경(m). 11/14 lap4 IMU·odom 실측 0.60~0.63 (계산값 0.548 → 입구를 0.07 m 지나쳐 칸 왼쪽 선 위)
+        radius=self.c.get('turn_radius') or self.robot['wheelbase']/abs(math.tan(self.c['turn_steering']))
         return radius+self.c['approach_start_offset']
 
     @staticmethod
@@ -170,10 +171,18 @@ class Parking:
         else:
             self._move_target(self.selected,dt,velocity,angular_velocity)
             self.turn_distance+=abs(velocity)*dt
+            # 칸 방향(저장한 normal)이 차 정면에 오면 회전 끝 = 주차 완료 (11/14). 예전: 흰 선이 안 보일 때까지 고정 조향 →
+            # 선이 계속 보이면 거리 상한(0.85 m = 약 79°)에서 실패로 끝남 (lap4), 한 프레임 놓치면 33°에서 끝남 (lap2)
+            slot_heading=math.atan2(self.selected['normal'][1],self.selected['normal'][0])
+            done=self.c.get('turn_done_heading')
+            if done is not None and slot_heading>=-done:
+                self.state='parked';self.reason='TURN_COMPLETE_STOP'
+                return self._output()
             if now-self.turn_started>self.c['turn_timeout']:return self.fail('TURN_TIMEOUT')
             if self.turn_distance>self.c['turn_distance_limit']:return self.fail('TURN_DISTANCE_LIMIT')
             new_image=self._white(image,image_stamp)
-            if new_image and self.line_seen and self.loss_frames>=self.c['white_loss_frames']:
+            if (new_image and self.line_seen and self.loss_frames>=self.c['white_loss_frames']
+                    and abs(slot_heading)<=self.c.get('white_stop_heading',math.pi)):
                 self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
                 return self._output()
             if not self.line_seen and now-self.turn_started>self.c['white_acquire_timeout']:
