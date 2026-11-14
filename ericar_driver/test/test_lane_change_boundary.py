@@ -78,3 +78,42 @@ if __name__ == '__main__':
     test_avoid_only()
     test_wall_filter()
     print('노란 경계 횡단 차단 시험 통과')
+
+
+def test_island_yellow():
+    """교통섬 노란 선(멀리서 시작하거나 비스듬함)은 바깥선으로 안 봄 (소민 11/14 run_1114_2330)"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    free = {0: 3., 1: 3., -1: 3.}
+    base = dict(valid=True, heading=0., colors={'left': 'white', 'right': 'yellow'}, solid={'left': False, 'right': True})
+    outer = dict(base, near_ends={'left': .6, 'right': .62}, line_headings={'left': 0., 'right': .02})
+    far = dict(base, near_ends={'left': .6, 'right': 1.3}, line_headings={'left': 0., 'right': 0.})
+    slant = dict(base, near_ends={'left': .6, 'right': .65}, line_headings={'left': 0., 'right': -.5})
+    assert change.trusted_colors(outer)['right'] == 'yellow'
+    assert change.trusted_colors(far)['right'] == 'island'
+    assert change.trusted_colors(slant)['right'] == 'island'
+    assert change.choose_direction(free, far, requested=-1) == -1, '교통섬 노란 선 때문에 표지판 이동 거절'
+    assert change.choose_direction(free, outer, requested=-1) == 0, '진짜 바깥선은 계속 거절'
+    # 가운데 차로에서 교통섬 노란 선만 보이면 차로 번호를 0으로 바꾸지 않음
+    for k in range(10):
+        change.observe_lane(dict(far, stamp=float(k)))
+    assert change.index == 1
+    for k in range(10, 20):
+        change.observe_lane(dict(outer, stamp=float(k)))
+    assert change.index == 0, '진짜 바깥선이면 번호 보정'
+
+
+def test_fork_keeps_edge_index():
+    """갈림길 표지판 확정 뒤에는 흰/흰(가운데) 판정으로 끝 차로 번호를 바꾸지 않음 (run_1114_2330 39.1 s)"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 2
+    change.fork_running = True
+    middle = dict(valid=True, heading=0., colors={'left': 'white', 'right': 'white'})
+    for k in range(10):
+        change.observe_lane(dict(middle, stamp=float(k)))
+    assert change.index == 2
+    change.fork_running = False
+    for k in range(10, 20):
+        change.observe_lane(dict(middle, stamp=float(k)))
+    assert change.index == 1
