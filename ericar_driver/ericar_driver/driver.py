@@ -139,6 +139,12 @@ class Driver:
         """기존 디버그 필드 호환. 판단의 원본은 ForkMission 한 곳"""
         f = self.fork
         self.fork_bias = 0.0
+        # 갈림길 목적 끝 차로에 들어간 뒤(follow·exit)에는 바깥 노란 선 하나만 따라감 (소민 11/15 실차: 차선 따라가다
+        # 교통섬 노란 선을 반대쪽 차선으로 잡아 교통섬 쪽으로 꺾어 들어감). fork_bias 부호 = 남길 쪽 (+ 왼쪽).
+        # 크기는 0.002 m라 기준 중앙 이동은 무시할 정도 (lane_vision.find_starts: 반대쪽 시작점만 뺌)
+        if (self.c['missions'].get('fork_outer_only', True) and f.phase in ('follow', 'exit') and f.direction
+                and not self.lane_change.active and self.lane_change.index == f.destination):
+            self.fork_bias = 0.002 if f.direction > 0 else -0.002
         self.fork_remaining = f.remaining
         self.fork_target = f.direction*self.c['missions']['fork_bias'] if f.running else 0.0
         self.fork_goal = f.direction if f.running else 0
