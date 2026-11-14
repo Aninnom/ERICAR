@@ -1,0 +1,124 @@
+{
+  "branch": "parking_auto1",
+  "base_main": "796209b",
+  "acceptance": "parking-only simulation: 33 passed",
+  "build": "colcon ericar_driver passed",
+  "cases": [
+    {
+      "obstacle_shift_m": -0.1,
+      "transitions": [
+        {
+          "state": "parking_approach",
+          "time_s": 1.0,
+          "travel_m": 0.0,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": 0.02652935054115957
+        },
+        {
+          "state": "parking_turn",
+          "time_s": 1.1,
+          "travel_m": 0.012,
+          "speed": 0.12,
+          "steering": -0.35,
+          "remaining_m": 0.014529350541159558
+        }
+      ],
+      "turn_start_target_forward_m": 0.5624317823579162,
+      "nominal_turn_lead_m": 0.5479024318167567
+    },
+    {
+      "obstacle_shift_m": 0.0,
+      "transitions": [
+        {
+          "state": "parking_approach",
+          "time_s": 1.0,
+          "travel_m": 0.0,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": 0.12659270256179767
+        },
+        {
+          "state": "parking_turn",
+          "time_s": 1.9,
+          "travel_m": 0.108,
+          "speed": 0.12,
+          "steering": -0.35,
+          "remaining_m": 0.01859270256179757
+        }
+      ],
+      "turn_start_target_forward_m": 0.5664951343785543,
+      "nominal_turn_lead_m": 0.5479024318167567
+    },
+    {
+      "obstacle_shift_m": 0.15,
+      "transitions": [
+        {
+          "state": "parking_scan",
+          "time_s": 1.0,
+          "travel_m": 0.0,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": null
+        },
+        {
+          "state": "parking_approach",
+          "time_s": 2.3,
+          "travel_m": 0.156,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": 0.1210846917574222
+        },
+        {
+          "state": "parking_turn",
+          "time_s": 3.2,
+          "travel_m": 0.264,
+          "speed": 0.12,
+          "steering": -0.35,
+          "remaining_m": 0.013084691757422107
+        }
+      ],
+      "turn_start_target_forward_m": 0.5609871235741788,
+      "nominal_turn_lead_m": 0.5479024318167567
+    },
+    {
+      "obstacle_shift_m": 0.3,
+      "transitions": [
+        {
+          "state": "parking_scan",
+          "time_s": 1.0,
+          "travel_m": 0.0,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": null
+        },
+        {
+          "state": "parking_approach",
+          "time_s": 3.5,
+          "travel_m": 0.3,
+          "speed": 0.12,
+          "steering": 0.0,
+          "remaining_m": 0.12659270256179767
+        },
+        {
+          "state": "parking_turn",
+          "time_s": 4.4,
+          "travel_m": 0.408,
+          "speed": 0.12,
+          "steering": -0.35,
+          "remaining_m": 0.01859270256179757
+        }
+      ],
+      "turn_start_target_forward_m": 0.5664951343785543,
+      "nominal_turn_lead_m": 0.5479024318167567
+    }
+  ],
+  "hardware_verified": false,
+  "limitations": [
+    "90 degree circular arc start approximation",
+    "No PID or final alignment added",
+    "White line loss does not verify complete body inside bay",
+    "Late FREE observation can skip candidate",
+    "Odometry velocities and scan age extrapolation may drift"
+  ]
+}

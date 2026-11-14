@@ -203,7 +203,8 @@ def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_s
     first_x, last_x = min(x for x, _ in cones), max(x for x, _ in cones)
     end_x = last_x + 1.5
     rng = np.random.default_rng(0)
-    result = dict(start_x=None, end_x=None, min_clear=np.inf, wrong_side=0, stalled=False, entries=0)
+    result = dict(start_x=None, end_x=None, min_clear=np.inf, wrong_side=0, stalled=False, entries=0,
+                  ahead_at_exit=0)
     scan, was_active = None, False
     for k in range(int(40/DT)):
         if k % 2 == 0:
@@ -219,6 +220,7 @@ def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_s
         # 콘이 안 보이는 사이 차선 주행으로 돌아갔다 다시 켜질 수 있음 → 마지막으로 꺼진 위치를 종료로 봄
         if was_active and not cones_driver.active:
             result['end_x'] = car.x
+            result['ahead_at_exit'] = cones_ahead(car.pose, cones)
         result['entries'] += cones_driver.active and not was_active
         was_active = cones_driver.active
         if command is None:
@@ -239,17 +241,51 @@ def run_cones(left, right, others=(), boxes=(), start=(-1.6, 0.03, 0.04), lane_s
     return result
 
 
+def cones_ahead(car, cones, reach=1.2, band=0.5):
+    """차 앞 범퍼보다 앞, reach(m) 안·좌우 band(m) 안에 남은 콘 수
+
+    범위는 cones.one_side가 쓰는 값(cone_start_range 1.2, cone_gate_max/2 0.5)과 같게 둠 → 0이면 더
+    지나갈 콘이 없다는 뜻. 기준점이 앞 범퍼인 이유: 라바콘은 마지막 콘이 라이다와 나란해질 때 넘기는데,
+    그때 콘은 이미 범퍼를 지나 차 옆에 있음 (라이다 기준으로 세면 0.001 m 차이로 걸림)
+    """
+    x, y, psi = car
+    nose = ROBOT['front_bumper_x']
+    origin = np.array([x + nose*math.cos(psi), y + nose*math.sin(psi)])
+    aim = np.array([math.cos(psi), math.sin(psi)])
+    left = np.array([-aim[1], aim[0]])
+    count = 0
+    for cx, cy in cones:
+        relative = np.array([cx, cy]) - origin
+        forward, lateral = float(relative@aim), float(relative@left)
+        if 0 < forward <= reach and abs(lateral) <= band:
+            count += 1
+    return count
+
+
+def assert_handover_after_cones(result, last, label):
+    """차선 주행으로 넘긴 순간 아직 지나갈 콘이 남아 있지는 않았는지 (통로 중간에 꺼졌는지)
+
+    11/14 즉시 복귀 전에는 "넘긴 위치가 마지막 콘보다 뒤(end_x > last)"로 쟀음. 지금은 지날 문도 콘도
+    없고 화면에 콘 색도 없으면 바로 넘기므로, 마지막 콘과 나란한 지점에서 넘어감 → 위치 대신 그때
+    앞에 남은 콘 수로 잼. 휘어진 배치(curve)는 통로가 x축과 어긋나 위치 비교가 맞지 않는 점도 해결
+    """
+    assert result['end_x'] is not None, (label, result)
+    assert result['ahead_at_exit'] == 0, (label, f"넘긴 시점에 앞 콘 {result['ahead_at_exit']}개", result)
+
+
 def test_cones_pass():
     layouts = ([('pairs', 0), ('zigzag', 0), ('shift', 0), ('curve', 20), ('curve', -15)] +
                [('random', s) for s in range(8)])
     for kind, seed in layouts:
-        r = run_cones(*cone_layout(kind, seed))
+        left, right = cone_layout(kind, seed)
+        last = max(x for x, _ in left + right)
+        r = run_cones(left, right)
         print(f"라바콘 {kind:6s} {seed}: 시작 x {r['start_x']!s:.5} 종료 x {r['end_x']!s:.5} "
               f"최소 여유 {r['min_clear']:.3f} m, 바깥 통과 {r['wrong_side']}, 종료 후 y {r['final_y']:+.3f}")
         # 11/12 진입 시점을 문 중점이 라이다 0.3 m 안으로 늦춤 → 엇갈림 배치(첫 문이 비스듬)는 차 앞부분이 첫 콘 옆일 때 진입
         # (shift 0.06, random 0 0.03). 바깥 통과·접촉 없음이 기준. 대회 배치는 좌·우 쌍(test_cone_gates)
         assert r['start_x'] is not None and r['start_x'] < 0.1, (kind, seed, r)
-        assert r['end_x'] is not None and r['end_x'] > 2.0, (kind, seed, r)
+        assert_handover_after_cones(r, last, (kind, seed))
         assert r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'], (kind, seed, r)
 
 
@@ -264,7 +300,8 @@ def test_cone_gates():
         for name, start in starts.items():
             r = run_cones(left, right, start=start)
             ok = (r['start_x'] is not None and r['start_x'] < -0.1 and r['end_x'] is not None
-                  and r['end_x'] > last and r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'])
+                  and r['ahead_at_exit'] == 0   # 넘긴 시점에 지나갈 콘이 남아 있지 않음
+                  and r['min_clear'] > 0.0 and r['wrong_side'] == 0 and not r['stalled'])
             print(f"라바콘 쌍 {kind:6s} {seed:2d} {name:7s}: 시작 x {r['start_x']!s:.5} 종료 x {r['end_x']!s:.5} "
                   f"진입 {r['entries']}회, 최소 여유 {r['min_clear']:.3f} m, 바깥 통과 {r['wrong_side']}"
                   f"{'' if ok else '  ← 실패'}")

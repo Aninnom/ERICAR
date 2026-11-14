@@ -24,6 +24,8 @@ class LaneDriving:
         self.far_heading = 0.0    # 마지막으로 본 선 먼 끝 방향(rad, + 왼쪽). 코너 유지 시작 판단
         self.last_curvature = 0.0 # 마지막으로 본 선 곡률(1/m). 코너 유지 조향 선택
         self.left_near_at = -1e9  # 가까운 선이 왼쪽으로 휜 마지막 시각 (비스듬한 진입 판단)
+        self.hold_start_ok = True   # driver가 매 주기 설정: 새 코너 유지 시작 허용 여부 (진행 중인 유지는 영향 없음)
+        self.hold_extra = 0.0       # driver가 설정: 시작 시 더할 회전각(°, odom). 차가 구간 직선 방향보다 왼쪽을 본 만큼
         self.hold_ended = -1e9    # 코너 유지 끝난 시각
         self.zigzag_frames = 0    # 지그재그로 판단된 연속 카메라 결과 수
         self.zigzag_left = 0.0    # 지그재그 서행을 유지할 남은 거리(m)
@@ -138,7 +140,7 @@ class LaneDriving:
         if self.hold is None:
             # 시작: 코너 감지 후 오른쪽 조향이 커짐, 또는 오른쪽으로 꺾던 중 선을 놓침
             turning = self.steering <= -h['start_steering'] or (not lane['valid'] and self.steering < -0.05)
-            if now >= self.armed_until or not turning:
+            if now >= self.armed_until or not turning or not self.hold_start_ok:
                 return False
             # 보이는 선 먼 끝이 오른쪽으로 start_far_angle(°) 넘게 꺾여 나갈 때만 시작 (선 놓친 프레임은 마지막 값)
             # 갈림길 끝 45° S자 꺾임: 앞 꺾임에서 준비된 뒤 먼 끝이 왼쪽으로 돌아오는데 고정 65° 회전 → 이탈
@@ -156,7 +158,7 @@ class LaneDriving:
             # (11/9 main_1109_lap3: 1·2번 코너 시작 곡률 5~9 → 0.38로 1번 통과, 3·4번 0.0~0.4 → 0.38이면 3번 안쪽 선 물음)
             sharp = self.last_curvature >= h['sharp_curvature']
             base = h['steering'] if sharp else h['gentle_steering']
-            self.hold = dict(yaw=0.0, distance=0.0, base=base, steering=base,
+            self.hold = dict(yaw=0.0, distance=0.0, base=base, steering=base, angle=h['angle']+self.hold_extra,
                              error0=lane['error'] if lane['valid'] else None)
         # 유지 중 보정: 보이는 선 오차가 시작 때보다 오른쪽(−)으로 커지면 더, 왼쪽(+)으로 가면 덜 꺾음. 선 놓치면 마지막 값
         # (11/10 main_1109_lap4: 3번 코너 0.31에도 오차 −0.17→+0.15 안쪽 선 물음, 마지막 코너 시작 곡률 튀어 0.31 선택 → 오차 −0.26→−0.37 늦게 돎)
@@ -169,7 +171,7 @@ class LaneDriving:
         self.hold['distance'] += abs(velocity) * dt
         turned = math.degrees(-self.hold['yaw'])     # 오른쪽 회전 = odom 각속도 음수
         # 두 선 보이면 일찍 끝내는 조건은 제거: 차로 2개 구간 코너 출구에서 옆 차로 선 쌍을 잡아 52°에 종료 → 이탈 (11/9 integ_1109_lap2 172 s)
-        if turned >= h['angle'] or self.hold['distance'] >= h['max_distance']:
+        if turned >= self.hold.get('angle', h['angle']) or self.hold['distance'] >= h['max_distance']:
             self.hold = None
             self.armed_until = -1e9   # 같은 코너에서 재시작 방지: 코너 출구 곡률로 다시 준비되지 않게 arm_seconds 동안 막음
             self.rearm_at = now + h['arm_seconds']

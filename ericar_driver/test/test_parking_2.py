@@ -22,11 +22,18 @@ def config():
     c=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/robot.yaml').read_text())
     c['answer']=copy.deepcopy(ANSWER_CONFIG);c['answer']['missions']['start_stage']='parking'
     c['answer']['lidar']['zero_is_no_return']=True
+    # 이 파일·test_parking_auto1·test_parking_pd는 11/14 이전 설정 기준 시험: 계산 회전 반경, 흰 선 소실 정지, 경계선 PD
+    # 11/14 기본값(실측 반경·칸 방향 정면 정지·PD 끔)은 test_parking_turn_done.py
+    p=c['answer']['parking'];p['turn_radius']=None;p['turn_done_heading']=None;p['white_stop_heading']=math.pi
+    p['turn_timeout']=8.;p['turn_distance_limit']=.85;p['pd']['enabled']=True
     return c
 
 
 def laser(c,boxes=None):
-    if boxes is None:boxes=[(.15,.4,-.84,-.25),(.95,1.2,-.84,-.25)]
+    if boxes is None:
+        # 회전 시작점에 정렬된 장면. 접근 거리가 남은 경우는 test_parking_auto1에서 별도 검증
+        shift=.675-c['robot']['wheelbase']/abs(math.tan(c['answer']['parking']['turn_steering']))
+        boxes=[(.15-shift,.4-shift,-.84,-.25),(.95-shift,1.2-shift,-.84,-.25)]
     boxes=list(boxes)+[(-4.1,-4.,-4.,4.),(4.,4.1,-4.,4.),(-4.,4.,4.,4.1),(-4.,4.,-4.1,-4.)]
     angles=np.linspace(-math.radians(110),math.radians(110),881)
     directions=np.column_stack((np.cos(angles),np.sin(angles)));origin=np.array([c['robot']['lidar']['x'],0.])
@@ -51,7 +58,7 @@ def step(p,data,now=1.,present=True,velocity=.12,image_stamp=None):
                   None,now,[],velocity,dict(valid=True),search_command=(.12,0.))
 
 
-def test_first_real_free_scan_immediately_commands_right_turn_without_pose():
+def test_first_free_already_aligned_commands_right_turn_without_pose():
     c=config();p=Parking(c);p.start(0.)
     data=laser(c);b=gap_candidates(data,c['robot'],p.c)[0][0]
     assert classify_gap(b,data,c['robot'],p.c)[0]=='FREE'

@@ -261,7 +261,7 @@ def test_cone_hold():
         driver = Driver({'answer': c, 'robot': robot})
         cones = driver.cones
         # 라바콘 담당 코드 대신 가짜: 켜져 있는 동안 고정 명령, 구간이 허용하지 않으면 꺼짐 (실제 update와 같은 규칙)
-        def fake(lane, scan, velocity, yaw_rate, dt, enabled):
+        def fake(lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
             if not enabled or cones.done:
                 cones.active = False
                 return None

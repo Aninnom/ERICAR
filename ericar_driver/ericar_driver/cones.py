@@ -11,7 +11,8 @@
   2. 문: 기둥 쌍 중 간격 cone_gate_min~max이고 진행 방향을 마주 보는 것 (같은 쪽 콘 2개는 진행 방향과 나란해 제외)
   3. 가까운 문부터 문 중점을 이어 cone_lookahead 앞 지점의 각도로 조향 (pure pursuit)
   4. 문이 안 보이고 콘만 보이면 그 콘에서 기억한 문 폭의 절반만큼 안쪽으로 지나감
-  5. 콘이 안 보이면 small_object_memory_distance 더 간 뒤 차선 주행으로 돌려주고, 다음 문이 보이면 다시 켜짐
+  5. 지날 문이 없고 화면에 콘 색도 없고 차선이 보이면 바로 차선 주행으로 돌려줌 (11/14).
+     그 조건이 아니면 예전대로 small_object_memory_distance 더 간 뒤 복귀. 다음 문이 보이면 다시 켜짐
   6. 카메라 붉은색(red_ratio) 보조 (11/12): 붉은색이 보이면 진입·문 간격 조건 완화, 통과 중에는 모드 유지
 
 좌표: 차체 기준(원점 = 뒷바퀴 축), 앞 x+, 왼쪽 y+ (REP-103). 각도 + = 왼쪽.
@@ -253,6 +254,8 @@ class ConeDriving:
         self.remaining = self.travel = self.max_travel = 0.0
         self.confirm = 0
         self.red = False     # 카메라 붉은색(콘 색)이 최근에 보였는지. lane['cone_red'] (loop.py가 넣음)
+        self.red_now = False    # 지금 화면에 콘 색이 보이는지 (기억 아님). 즉시 복귀 판단용
+        self.lane_ok = False    # 차선 인식이 유효한지 (lane['valid']). 즉시 복귀 판단용
         self.red_since = float('inf')   # 붉은색이 마지막으로 보인 뒤 주행 거리(m)
         self.corridor = False           # 화면 전체 붉은 비율이 진입 기준(cone_red_enter_ratio) 이상을 최근에 넘었는지
         self.corridor_since = float('inf')
@@ -331,6 +334,18 @@ class ConeDriving:
         side = 1.0 if lateral[k] >= 0 else -1.0
         return posts[k]-side*self.width/2*left
 
+    def blocked(self, posts, aim):
+        """진행 방향 앞 cone_exit_clear 안·좌우 문 폭 절반 안에 콘이 있으면 참 (즉시 복귀 보류)
+
+        마지막 콘이 차 바로 앞·옆에 남은 채 차선 주행으로 넘기면 차선 조향이 그 콘 쪽으로 돌 수 있음
+        """
+        if not len(posts):
+            return False
+        left = np.array([-aim[1], aim[0]])
+        forward, lateral = posts@aim, posts@left
+        return bool(np.any((forward > 0) & (forward <= self.c['cone_exit_clear']) &
+                           (np.abs(lateral) <= self.gate_max()/2)))
+
     # ---------- 3. 문 사이 통과 ----------
     def drive(self, posts, scan, velocity, dt):
         c = self.c
@@ -342,6 +357,15 @@ class ConeDriving:
             self.width += c['cone_aim_alpha']*(float(gates[2][chosen[0]])-self.width)
         else:
             target = self.one_side(posts, aim)
+        # 즉시 복귀 (11/14): 지날 문도(chosen) 지나갈 콘도(target) 없고, 지금 화면에 콘 색이 없고, 차선이 보이고,
+        # 진행 방향 앞 cone_exit_clear 안에 콘도 없으면 여유 거리 없이 바로 차선 주행으로 넘김.
+        # 왜: 아래 remaining(0.3 m) + 붉은색 기억(cone_red_memory 0.5 m) 동안은 기억한 진행 방향으로 직진하므로,
+        # 콘 배치가 차를 틀어 놓았으면 그만큼 차로 밖으로 나감 (실차: 복귀 위치가 주행마다 달라짐).
+        # 통과 도중에는 화면에 콘 색이 남아 red_now가 참이므로 11/12 cone_lane_3(중간 복귀·충돌) 보호는 유지됨
+        if target is None and not chosen and not self.red_now and self.lane_ok and not self.blocked(posts, aim):
+            self.active = False
+            self.debug.update(state='wait', confirm=0, exit='lane')
+            return None
         # 종료: 앞에 지나갈 콘이 없어진 뒤 small_object_memory_distance 더 가면 차선 주행으로 돌려줌 (다음 문이 보이면 다시 켜짐)
         # 그동안은 진행 방향 유지. 도면상 라바콘 끝 선 → 코너 시작 약 0.3 m라 오래 끌지 않음
         # 카메라에 붉은색이 보이는 동안은 라이다에 콘이 안 잡혀도 유지 (11/12 cone_lane_3: 중간에 차선 복귀·충돌)
@@ -368,8 +392,9 @@ class ConeDriving:
         # 안전한 원호가 없어도 멈추지 않고 천천히 (정지 = 미션 실패). 정면 막힘은 driver의 비상 정지가 처리
         return (c['avoidance_speed'] if safe else c['cone_creep_speed']), steering
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled):
-        """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)"""
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
+        """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)
+        red_only: 붉은색이 화면에 찼을 때만(corridor) 새로 진입 (S2 조기 진입용, 라이다만으로는 안 켬)"""
         if not enabled or self.done:
             self.active, self.confirm = False, 0
             return None
@@ -380,6 +405,8 @@ class ConeDriving:
         step = abs(velocity)*dt
         seen = float(lane.get('cone_red', 0.0)) >= c['cone_red_ratio']
         both = float(lane.get('cone_red', 0.0)) >= c['cone_red_enter_ratio']
+        # 복귀 판단용 (drive에서 사용). red_now는 기억이 아니라 지금 화면, lane_ok는 차선이 보이는지
+        self.red_now, self.lane_ok = seen, bool(lane.get('valid'))
         self.red_since = 0.0 if seen else self.red_since+step
         self.corridor_since = 0.0 if both else self.corridor_since+step
         self.red = self.red_since <= c['cone_red_memory']
@@ -396,7 +423,7 @@ class ConeDriving:
             # 모드가 끝나는 지점(max_travel)보다 먼 콘은 어차피 지나지 않음 → 구간 뒤 트랙 옆 물체로 끌려가지 않게 제외
             posts = posts[np.hypot(posts[:, 0], posts[:, 1]) < self.max_travel-self.travel]
         if not self.active:
-            start = self.start_gate(posts, wide)
+            start = self.start_gate(posts, wide) if self.corridor or not red_only else None
             self.confirm = self.confirm+1 if start else 0
             self.debug = dict(state='wait', confirm=self.confirm, posts=int(len(posts)), red=self.red)
             if self.confirm < c['cone_confirm_count']:

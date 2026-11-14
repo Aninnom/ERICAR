@@ -130,14 +130,18 @@ class ControlLoop:
         else:
             if required_camera and self.driver.state!='parking_turn' and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
-                                                 if self.driver.lane_driver.in_corner(now) else None)
+                                                 # 라바콘 통과 중·직후, 3번 코너 안(차선 변경 중 제외)도 같은 규칙 (11/14 lap5:
+                                                 # 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전, 3번 코너 유지 뒤 168 s도 같음)
+                                                 if (self.driver.lane_driver.in_corner(now) or self.driver.cones.active
+                                                     or self.driver.cone_exit_left > 0
+                                                     or (self.driver.corner3() and not self.driver.lane_change.active)) else None)
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.vision.outer_yellow = self.driver.outer_yellow()
                 self.vision.fork_direction = self.driver.fork_direction()
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산
-                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') else None,
+                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') or self.driver.cone_early() else None,
                                                 c['lidar']))
                 self.lane_stamp = s.image_stamp
                 self.lane_bias = self.driver.fork_bias
