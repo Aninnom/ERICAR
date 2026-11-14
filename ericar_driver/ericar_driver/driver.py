@@ -223,6 +223,9 @@ class Driver:
         image_stamp = lane.get('stamp', now)
         new_image = image_stamp != self.last_lane_stamp
         self.last_lane_stamp = image_stamp
+        if new_image and lane['stop_distance'] is not None:
+            # 횡단보도 앞 선을 못 찾을 때 쓰는 '정지선 너머 흰 선' 기록 (원본 거리, 찍힌 시각)
+            self.plain_seen = (lane['stop_distance'] - velocity*max(0.0, now-image_stamp), now)
         cross = lane.get('crosswalk_distance')
         if new_image and (cross is not None or lane['stop_distance'] is not None):
             # 횡단보도 바로 앞 선이 보이면 그 선 우선. 한 번 잡으면 일반 흰 선(서행 시작선·횡단보도 뒤 선)으로 안 바꿈 (소민)
@@ -243,6 +246,19 @@ class Driver:
                 self.line_distance = candidate
                 self.line_seen = image_stamp
                 self.line_kind = kind
+                self.line_measured = candidate   # 카메라로 직접 잰 마지막 거리 (오도메트리 추정 아님)
+        if (new_image and self.state.startswith('traffic') and self.line_kind == 'crosswalk' and
+                self.line_distance is not None):
+            # 신호등: 따라가던 횡단보도 앞 선을 가까이서 계속 다시 잼 (소민 11/14). 가까워지면 횡단보도 판정·두께 조건에서
+            # 빠져 0.9 m를 오도메트리로만 가던 문제 → 같은 위치(line_match_tolerance 안) 후보면 종류·두께 상관없이 거리 갱신.
+            # 종류는 crosswalk 유지. 보행자 상태에는 적용 안 함
+            lag = velocity * max(0.0, now-image_stamp)
+            near = [cand['distance'] - lag for cand in lane.get('stop_candidates', []) if cand.get('complete', True)]
+            near = [d for d in near if abs(d - self.line_distance) < m['line_match_tolerance']]
+            if near:
+                self.line_distance = min(near, key=lambda d: abs(d - self.line_distance))
+                self.line_seen = image_stamp
+                self.line_measured = self.line_distance
         if (now - self.line_seen > m['stop_line_memory'] and
                 not self.state.endswith(('_hold', '_approach'))):
             self.line_distance = None
@@ -250,6 +266,7 @@ class Driver:
             self.line_distance = None
         if self.line_distance is None:
             self.line_kind = None
+            self.line_measured = None
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
@@ -292,6 +309,8 @@ class Driver:
 
     def stop_missions(self, speed, velocity, green_only, now):
         m = self.c['missions']
+        if self.state == 'lane':
+            self.far_mode = False
         if self.state.endswith('_approach'):
             # 신호등: 횡단보도 바로 앞 선에만 정지 (서행 시작 흰 선에 서지 않음). 선 못 찾으면 저속 접근·큰 빨강 예비 정지
             traffic = self.state == 'traffic_approach'
@@ -299,10 +318,28 @@ class Driver:
             if traffic and m.get('traffic_crosswalk_only', True) and self.line_kind != 'crosswalk':
                 line = None
             offset = m.get('traffic_stop_offset', m['stop_offset']) if traffic else m['stop_offset']
+            # 신호등: 선을 가까이(traffic_near_measure m 안)에서 직접 잰 적이 있으면 보행자와 같은 조건 → traffic_stop_offset_near.
+            # 먼 곳에서 한 번만 재고 오도메트리로 온 경우는 그 오차를 보정한 traffic_stop_offset (11/14 실측 −0.045)
+            measured = getattr(self, 'line_measured', None)
+            if traffic and measured is not None and measured <= m.get('traffic_near_measure', .6):
+                offset = m.get('traffic_stop_offset_near', m['stop_offset'])
+            # 횡단보도 앞 선을 못 찾았을 때: 신호등 가까이(빨강 면적 traffic_far_red_area 이상)에서 보이는 흰 선은
+            # 정지선 너머 선. 맞는 정지 위치에서 이 선이 앞축 0.51~0.52 m 앞에 보임 (소민 11/14 run_1957·2001 두 번 일치)
+            far = None
+            if traffic and line is None:
+                if self.traffic_red_area >= m.get('traffic_far_red_area', .025):
+                    self.far_mode = True
+                seen = getattr(self, 'plain_seen', None)
+                if getattr(self, 'far_mode', False) and seen and now - seen[1] < m.get('trigger_line_freshness', .4):
+                    d = seen[0] - velocity*(now-seen[1])
+                    if .3 < d < 1.0:
+                        far = d
             crossing_on_green = (self.state == 'traffic_approach' and green_only and
                                  (not m.get('traffic_require_stop', True) or self.traffic_stop_completed))
             red_now = self.state == 'traffic_approach' and self.traffic_red_area > 0.0
-            if now - self.state_started > m['approach_timeout']:
+            # 신호등이 정지선을 따라가는 중이면 시간 제한 없음 (소민 11/14 run_1114_1952: 빨강을 약 2.8 m 앞에서 확정 →
+            # 0.13 m/s로 선을 따라가던 중 15초 초과 → 선 0.57 m 앞에서 정지). 시간 제한은 선을 끝내 못 찾을 때만
+            if now - self.state_started > m['approach_timeout'] and not (traffic and (line is not None or far is not None)):
                 if red_now:
                     # 빨강·노랑이 보이는데 정지선을 못 찾음: 지나가지 않고 그 자리 정지 (신호 위반 방지, 소민)
                     self.transition('traffic_hold', now)
@@ -310,25 +347,25 @@ class Driver:
                 # 정지선에 도달하지 못함: 멈춰 있지 않고 차선 주행으로 복귀 (미션 단계는 유지)
                 self.leave_mission(self.state.replace('_approach', ''), now)
                 return speed
-            if line is None and red_now and self.traffic_red_area >= m.get('traffic_stop_area', .04):
+            if line is None and far is None and red_now and self.traffic_red_area >= m.get('traffic_stop_area', .04):
                 # 정지선 없이 신호등이 충분히 가까움(박스가 큼): 예비 정지
                 self.transition('traffic_hold', now)
                 return 0.0
-            if line is None:
+            if line is None and far is None:
                 # 정지선이 아직 안 보이면 멈추지 않고 저속으로 다가가며 찾는다.
                 # (멈춰 있으면 정지선이 계속 안 보여 결국 시간 초과 실패)
                 speed = min(speed, m['stop_approach_speed'])
             elif crossing_on_green:
                 # Seeing green far away is not mission completion. Keep watching
                 # red/yellow until the measured front axle crosses this stripe.
-                if line < -m['stop_tolerance']:
+                if (line is not None and line < -m['stop_tolerance']) or (line is None and far is not None):
                     for name in ['traffic_red', 'traffic_yellow', 'traffic_green']:
                         self.cooldowns[name] = now + m['sign_cooldown']
                     self.advance('traffic')
                     self.line_distance = None
                     self.transition('lane', now)
             else:
-                remaining = line - offset
+                remaining = line - offset if line is not None else far - m.get('traffic_far_line_stop', .49)
                 speed = min(speed, m['stop_approach_speed'], max(0.0, remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
@@ -354,7 +391,17 @@ class Driver:
             minimum_stop = m.get('traffic_min_stop', .3) if m.get('traffic_require_stop', True) else 0.0
             if self.stopped_since is not None and now - self.stopped_since >= minimum_stop:
                 self.traffic_stop_completed = True
-            if green_only and self.traffic_stop_completed:
+            # 녹색이 traffic_green_hold(s) 동안 끊김 없이 보여야 출발. 빨강·노랑이 한 번이라도 보이면 처음부터 다시 셈
+            # (소민 11/14 run_1957·2001: 빨간불 대기 중 녹색 오검출 1~2프레임에 출발 → 신호 위반·찔끔 이동)
+            if green_only and self.traffic_red_area == 0.0:
+                if getattr(self, 'green_since', None) is None:
+                    self.green_since = now
+            else:
+                self.green_since = None
+            green_ok = (getattr(self, 'green_since', None) is not None and
+                        now - self.green_since >= m.get('traffic_green_hold', 1.0))
+            if green_ok and self.traffic_stop_completed:
+                self.green_since = None
                 self.transition('traffic_approach', now)
             elif (self.signs_lost >= self.c['stall']['seconds'] or
                     now - self.state_started > m['traffic_max_wait']):

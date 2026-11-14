@@ -234,7 +234,7 @@ ANSWER_CONFIG = {
         # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
-        'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.088,
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.045,
         # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
         # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
         'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
