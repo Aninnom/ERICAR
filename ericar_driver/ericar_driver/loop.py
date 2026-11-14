@@ -133,7 +133,13 @@ class ControlLoop:
                 # 한 선 이름 판단 경계: 우회전 코너 유지가 먼저, 없으면 라바콘 직후 힌트 (유경)
                 cone_hint = self.driver.cone_left_limit()
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
-                                                 if self.driver.lane_driver.in_corner(now) else cone_hint)
+                                                 # 3번 코너 안(차선 변경 중 제외)도 같은 규칙 (11/14 lap5: 3번 코너 유지 뒤 168 s)
+                                                 if (self.driver.lane_driver.in_corner(now)
+                                                     or (self.driver.corner3() and not self.driver.lane_change.active))
+                                                 # 라바콘 통과 중·직후: 유경 힌트(cone_lane_left_limit, 더 넓음)가 먼저,
+                                                 # 그 거리가 끝난 뒤 저속 구간이 남아 있으면 코너 값 (lap5: 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전)
+                                                 else cone_hint if cone_hint is not None
+                                                 else c['corner_hold']['corner_left_limit'] if self.driver.cone_exit_left > 0 else None)
                 if cone_hint is not None and self.cone_hint is None:
                     self.vision.forget_lines()   # 라바콘 구간에서 붙은 틀린 이름이 이어지지 않게 한 번만
                 self.cone_hint = cone_hint
@@ -143,7 +149,7 @@ class ControlLoop:
                 self.lane_cache = self.vision.analyze(s.image, self.driver.fork_bias)
                 self.lane_cache['stamp'] = s.image_stamp
                 # 라바콘 붉은색 비율 (cones.py). 라바콘 구간에서만 계산
-                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') else None,
+                self.lane_cache.update(red_info(s.image if self.driver.sections.allows('cones') or self.driver.cone_early() else None,
                                                 c['lidar']))
                 self.lane_stamp = s.image_stamp
                 self.lane_bias = self.driver.fork_bias

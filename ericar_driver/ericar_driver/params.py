@@ -40,7 +40,13 @@ ANSWER_CONFIG = {
     # 진입 → 4번 코너 이탈)로 꺼 뒀다가 11/12 다시 켬 (유경): 단독 시험 corn_test_1112_193257 통과 (모드 3.1 m, 충돌 없음).
     # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
-                 'hold_distance': 3.0, 'off': []},
+                 'hold_distance': 3.0, 'off': [],
+                 # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
+                 'cone_early_turn': 20.0,
+                 # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
+                 'lane_change_max_turn': 15.0,
+                 # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
+                 'hold_min_turned': 15.0},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
@@ -62,6 +68,9 @@ ANSWER_CONFIG = {
             'traffic_green': 0.003, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
+        # 신호등 박스 안 켜진 램프 위치로 색 재확인 (traffic_lamp.py, 11/14). 밝기·채도 하한, 칸 화소 비율 하한, 둘째 칸 대비 배수
+        # lamp_min_area: 이보다 작은 박스는 판별 안 함 (11/14 lap5: 먼 배경의 빨간 상자 0.003을 녹색으로 판정)
+        'lamp_check': True, 'lamp_min_area': 0.005, 'lamp_value_min': 180, 'lamp_saturation_min': 60, 'lamp_min_fraction': 0.002, 'lamp_ratio': 3.0,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
         'shutdown_timeout': 5.0,
         # 시작 직후 첫 검출을 기다리는 최대 시간(s). 그 뒤로는 검출이 끊겨도(timeout 초과·예외) 표지판 미션만 끄고 주행 계속
@@ -176,6 +185,8 @@ ANSWER_CONFIG = {
         # 0.30: 합성 복귀 뒤 차로 중앙 이탈이 최대 0.23 m라 그보다 크게. 도면상 라바콘 끝은 4번 코너 직전이라
         #       안쪽(오른쪽) 선은 코너 사각으로 빠져 한 선만 보이면 바깥 선일 가능성이 큼 (11/14 유경 도면 확인)
         'cone_lane_left_limit': 0.30, 'cone_lane_left_distance': 1.5,
+        # 라바콘 모드가 꺼진 뒤 이 거리(m) 동안 속도 상한 (11/14 lap4: 4번 코너에서 속도 출렁임)
+        'cone_exit_slow_distance': 2.0, 'cone_exit_slow_speed': 0.22,
         'cone_max_distance': 2.5,    # 안전장치: 첫 진입 시 문까지 거리 + 이 값 넘게 주행하면 끝 (다시 안 켜짐). 라바콘 구간 약 2.1 m + 여유
         # 카메라 붉은색 (11/12 유경): 주최 측 안내 = 콘은 빨강에 가까운 붉은색. 11/12 cone_lane_3 진입 못 하고 차선 복귀·충돌
         # 붉은색이 보이면 진입·통과 조건 완화: 문 간격 최대 cone_red_gate_max, 좌우 cone_red_half_width, 거리 cone_red_start_range
@@ -202,7 +213,7 @@ ANSWER_CONFIG = {
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
         'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
-        'stop_offset': 0.015, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
+        'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,
@@ -212,6 +223,10 @@ ANSWER_CONFIG = {
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
         'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.088,
+        # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
+        # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
+        'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
+        'slow_min_speed': 0.05,   # 이 속도(m/s) 이상으로 움직일 때만 서행 표지판 수용 (출발 전 소진 방지)
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
         # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
         'fork_distance': 3.0,
@@ -227,7 +242,26 @@ ANSWER_CONFIG = {
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
-        'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 8., 'turn_distance_limit': .85,
+        # 양수 offset: 더 일찍 회전. 음수: 더 늦게 회전. 시작 오차·초과 허용은 m
+        'approach_start_offset': 0., 'approach_start_tolerance': .02, 'approach_passed_tolerance': .06,
+        'approach_timeout': 15., 'approach_distance_limit': 1.2,
+        # 주차 전용 PD. 도색 칸 폭 사용, 장애물 사이 폭과 분리. I항 0으로 초기 적용
+        # 11/14: 끔. lap4에서 경계선 연결이 한 번도 안 됨(NO_ASSOCIATED_PARKING_BOUNDARY), 연결 끊기면 정지 대기 경로 있음 → 실차 확인 뒤 켬
+        'pd': {'enabled': False, 'kp': 1.5, 'ki': 0., 'kd': .08,
+               'integral_limit': .10, 'derivative_alpha': .25, 'heading_weight': .35,
+               'reference_distance': .55, 'activate_heading': .70, 'full_heading': .20,
+               'slot_width': .50, 'width_tolerance': .12, 'center_association': .30,
+               'single_association': .12, 'direction_tolerance': .25, 'parallel_tolerance': .15,
+               'merge_distance': .035, 'minimum_ground_length': .10,
+               'ground_near': .30, 'ground_far': 2., 'maximum_extrapolation': .20,
+               'maximum_lateral': 1., 'feedback_timeout': .30, 'steering_rate': .8},
+
+        # 11/14: 회전 90° = 반경 0.615 × π/2 = 0.97 m·8 s → 상한 0.85 m·8 s로는 79°에서 실패 종료 (lap4). 1.2 m·13 s로
+        'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 13., 'turn_distance_limit': 1.2,
+        # 실측 회전 반경(m, 조향 −0.35, lap4 IMU 69°·0.756 m). 회전 시작 시점(turn lead) 계산에 사용. None이면 축거/tan(조향)
+        'turn_radius': .615,
+        # 칸 방향이 정면 ±turn_done_heading(rad) 안이면 회전 끝·정지. 흰 선 소실 정지는 칸 방향이 white_stop_heading 안일 때만
+        'turn_done_heading': .05, 'white_stop_heading': .35,
         'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
         'slot_depth': .59, 'view_near': .30,
         'gap_view_far': 3., 'gap_view_right': 1.5, 'gap_cluster_distance': .12,
@@ -244,7 +278,11 @@ ANSWER_CONFIG = {
     'lane_change': {
         'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
         'lookahead': 0.55, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
-        'finish_error': 0.025, 'finish_heading': 0.035,
+        # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
+        # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
+        'finish_error': 0.05, 'finish_heading': 0.15,
+        # 좌·우 선택은 최근 choice_window(s) 동안 옆 차로 빈 거리의 최솟값으로 (11/14 lap3: 의자 다리 한 스캔 누락 → 1.42 → 3.0 m로 튀어 막힌 쪽 선택)
+        'choice_window': 0.5,
         'max_distance': 3.0,         # 한 차로 이동 최대 주행 거리(m). 넘으면 차선 주행으로 복귀
         # 좌·우 선택 (라이다): 옆 차로가 min_free_distance 이상, 지금 차로보다 free_gain 이상 더 비어 있어야 이동.
         # 둘 다 되면 더 멀리 비어 있는 쪽. 점이 없으면 free_range로 봄 (= lidar planning_point_range)

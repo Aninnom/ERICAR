@@ -56,6 +56,7 @@ class LaneChange:
         self.seen_lane, self.seen_count, self.seen_stamp = None, 0, None
         self.walls = {}
         self.debug = {}
+        self.clock, self.free_log = 0.0, []   # 좌·우 선택용 최근 빈 거리 기록 (시각, free)
 
     def observe_lane(self, lane):
         """선 색으로 본 차로가 새 카메라 프레임 index_confirm_frames번 연속 같으면 index 보정.
@@ -199,6 +200,7 @@ class LaneChange:
 
     def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0, avoid_only=False):
         self.waiting = False
+        self.clock += dt
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
         self.observe_lane(lane)
@@ -218,6 +220,8 @@ class LaneChange:
                 self.index += self.direction if moved else 0
                 return None
             return self.steer(points, dt)
+        if self.active or not enabled or not lane['valid']:
+            self.free_log = []
         if not enabled or not lane['valid']:
             self.debug = dict(reason='disabled' if not enabled else 'lane_invalid')
             return None
@@ -234,6 +238,11 @@ class LaneChange:
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
         center = 0.0 if requested else camera_center
         free = free_distances(forward, left, center, self.robot, self.c)
+        # 옆 차로는 최근 choice_window 동안의 최솟값 사용: 가는 물체(의자 다리 등)가 한 스캔 빠지면 빈 차로로 보임 (11/14 lap3)
+        window = self.c.get('choice_window', 0.0)
+        self.free_log = [(t, f) for t, f in self.free_log if self.clock-t <= window]+[(self.clock, dict(free))]
+        for side in (1, -1):
+            free[side] = min(f[side] for _, f in self.free_log)
         self.debug = dict(free=free, index=self.index, walls=self.walls)
         # 차체가 진행할 통로 안의 전방 장애물만 확인한다.
         if free[0] >= self.c['trigger_distance'] and not requested:
@@ -241,6 +250,12 @@ class LaneChange:
             return None
         direction = self.choose_direction(free, lane, requested, preferred)
         self.debug['choice'] = direction
+        if direction == 0 and not requested and all(
+                self.debug['rejected'].get(side) in ('outside_lane_count', 'yellow_boundary') for side in ('left', 'right')):
+            # 양쪽 다 차로 자체가 없음 (갈림길 뒤 일반 차로·코너): 차선 변경으로 풀 수 없는 장애물 → 차선 주행·코너 유지에 맡김
+            # 예전: 저속 접근 모드가 3번 코너 조향을 대신해 덜 돌고 바깥 라바콘에 닿음 (11/14 lap3 264~273 s)
+            self.debug['reason'] = 'no_side_lane'
+            return None
         if direction == 0 and requested:
             # 목표 쪽 막힘: 목표는 유지하고 일반 장애물 회피로 우회 가능
             rejected = dict(self.debug['rejected'])
