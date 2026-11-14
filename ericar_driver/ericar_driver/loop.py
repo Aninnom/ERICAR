@@ -74,6 +74,7 @@ class Sensors:
     pose: object = None          # 뒷축 base_link의 odom x,y,yaw
     camera_info: object = None   # 주차 BEV의 K/D. 없으면 기존 camera hfov 모델 사용
     pose_history: object = ()    # 이미지/스캔 시각 보간용 짧은 기록
+    tilt_rate: tuple = (0.0, 0.0)   # IMU 자이로 x·y (rad/s). 방지턱 감지용 (slow_zone)
 
 
 @dataclass
@@ -121,6 +122,7 @@ class ControlLoop:
                             now - self.started < c['detector']['startup_wait'])
         # 회전 속도: IMU가 최신이면 IMU, 아니면 odom × 보정 (driver.update에서 처리)
         imu_ok = 0 <= now - s.imu_stamp < c['sections']['imu_timeout'] and math.isfinite(s.yaw_rate)
+        tilt_ok = imu_ok and all(math.isfinite(rate) for rate in s.tilt_rate)
         if (not sensor_ready or waiting_detector or
                 not math.isfinite(s.velocity) or not math.isfinite(s.angular_velocity)):
             self.driver.debug['published_speed'] = 0.0
@@ -160,7 +162,8 @@ class ControlLoop:
                                                          yaw_rate=s.yaw_rate if imu_ok else None,
                                                          signs_ok=signs_ok or not c['detector']['enabled'],
                                                          parking_input=dict(image=s.image,image_stamp=s.image_stamp,
-                                                             scan_stamp=s.scan_stamp,pose=s.pose,pose_stamp=s.odom_stamp,history=s.pose_history,camera_info=s.camera_info))
+                                                             scan_stamp=s.scan_stamp,pose=s.pose,pose_stamp=s.odom_stamp,history=s.pose_history,camera_info=s.camera_info),
+                                                         tilt_rate=s.tilt_rate if tilt_ok else None)
             if was_avoiding and not self.driver.avoiding:
                 self.vision.memory = {}
                 self.vision.previous_center = None

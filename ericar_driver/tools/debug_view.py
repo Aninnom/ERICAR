@@ -544,8 +544,8 @@ def status_panel(width, t):
     flags = []
     if control.get('corner_hold'):
         flags.append('corner_hold')
-    if control.get('slow_left'):
-        flags.append(f"slow sign {control['slow_left']:.1f}s")
+    if control.get('slow_zone') == 'slow':
+        flags.append(f"slow zone tilt {control.get('slow_tilt_deg', 0):.1f}deg" + (f" BOOST {control['slow_boost']}" if control.get('slow_boost') else ''))
     if control.get('zigzag_left'):
         flags.append(f"zigzag {control['zigzag_left']:.2f}m")
     if control.get('fork_pending') or control.get('fork_remaining'):
@@ -589,8 +589,14 @@ def mission_state(key, section, signs, control, lane):
         detail = f"camera, any section  seen {lane.get('zigzag', 0)}  left {control.get('zigzag_left', 0):.2f} m"
         return ('ACTIVE' if active else 'ON'), (ORANGE if active else GREY), detail
     if key == 'slow':
-        active = bool(control.get('slow_left'))
-        detail = f"{control.get('slow_left', 0):.1f} s left" if active else seen
+        # slow_zone.py: idle → slow → done. 방지턱 = 자이로 기울기(°)가 문턱을 넘은 지점(서행 시작 뒤 m), boost = 턱에서 멈춤 대응 단계
+        zone = ANSWER.get('slow_zone', {})
+        active = control.get('slow_zone') == 'slow'
+        if active:
+            detail = (f"tilt {control.get('slow_tilt_deg', 0):.1f}/{zone.get('tilt_threshold', 0):.0f} deg  "
+                      f"bump {num(control.get('slow_bump_at'))} m  boost {control.get('slow_boost', 0)}")
+        elif control.get('slow_zone') == 'idle' and zone.get('entry_distance') is not None:
+            detail = f"sign or {control.get('section_distance', 0):.2f}/{zone['entry_distance']:.1f} m  {seen}"
     elif key in ('pedestrian', 'traffic'):
         active = state.startswith(key)
         if active:
@@ -719,6 +725,12 @@ class State:
         if bool(new.get('active')) != bool(was.get('active')):
             self.event(f"lane change {'start dir %+d' % new.get('direction', 0) if new.get('active') else 'end'}"
                        f"  lane {control.get('lane_index')}", ORANGE)
+        if control.get('slow_zone') != before.get('slow_zone') and control.get('slow_zone') in ('slow', 'done'):
+            self.event(f"slow zone {'start' if control['slow_zone'] == 'slow' else 'end'} at S0 {control.get('section_distance', 0):.2f} m", ORANGE)
+        if control.get('slow_bump_at') is not None and before.get('slow_bump_at') is None:
+            self.event(f"bump detected  tilt {control.get('slow_tilt_deg', 0):.1f} deg", ORANGE)
+        if control.get('slow_boost', 0) > before.get('slow_boost', 0):
+            self.event(f"stuck on bump: boost {control['slow_boost']}", RED)
         cones, cones_was = (control.get('cones') or {}).get('state'), (before.get('cones') or {}).get('state')
         if cones != cones_was and cones in ('active', 'done'):
             self.event(f'cones {cones}', ORANGE)

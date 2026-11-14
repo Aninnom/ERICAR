@@ -47,6 +47,18 @@ ANSWER_CONFIG = {
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
                  'hold_min_turned': 15.0},
+    # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
+    # speed: 서행 속도. 상한 0.2와 차이를 분명히
+    # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
+    # exit_distance: 방지턱 감지 실패 시 해제할 S0 거리(m). 현장 실측 = 방지턱 끝 + 뒷바퀴 여유. None이면 미사용
+    # max_distance: 감속 시작 뒤 이 거리(m)면 무조건 해제 (예전 14초 × 0.2 m/s = 2.8 m)
+    # tilt_threshold(°)·tilt_decay(s): 자이로 x·y 누설 적분 기울기가 문턱 넘으면 방지턱. arm_distance(m): 감속 직후 숙임 무시
+    # release_distance: 첫 감지 뒤 해제까지 거리(m). 뒷바퀴 기준 = 축거 0.2 + 턱 길이 + 여유
+    # hold_distance: 첫 감지 뒤 조향 고정 거리(m, 앞·뒷바퀴 통과). stuck_*: 턱에서 멈추면 boost_speeds를 단계로 올림, boost_distance 구르면 복귀
+    'slow_zone': {'speed': 0.15, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
+                  'tilt_threshold': 2.0, 'tilt_decay': 0.5, 'arm_distance': 0.15, 'release_distance': 0.5,
+                  'hold_distance': 0.35, 'stuck_speed': 0.03, 'stuck_seconds': 0.7,
+                  'boost_speeds': [0.2, 0.3], 'boost_distance': 0.1},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
@@ -212,7 +224,7 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
-        'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
+        'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
