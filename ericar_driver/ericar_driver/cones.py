@@ -256,6 +256,7 @@ class ConeDriving:
         self.red = False     # 카메라 붉은색(콘 색)이 최근에 보였는지. lane['cone_red'] (loop.py가 넣음)
         self.red_now = False    # 지금 화면에 콘 색이 보이는지 (기억 아님). 즉시 복귀 판단용
         self.lane_ok = False    # 차선 인식이 유효한지 (lane['valid']). 즉시 복귀 판단용
+        self.since_exit = 0.0   # 라바콘 모드가 꺼진 뒤 주행 거리(m). 켜져 있으면 0
         self.red_since = float('inf')   # 붉은색이 마지막으로 보인 뒤 주행 거리(m)
         self.corridor = False           # 화면 전체 붉은 비율이 진입 기준(cone_red_enter_ratio) 이상을 최근에 넘었는지
         self.corridor_since = float('inf')
@@ -395,6 +396,8 @@ class ConeDriving:
     def update(self, lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
         """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)
         red_only: 붉은색이 화면에 찼을 때만(corridor) 새로 진입 (S2 조기 진입용, 라이다만으로는 안 켬)"""
+        # 복귀 뒤 주행 거리: 차선 쪽에 "지금 라바콘 직후"임을 알리는 데 씀 (driver.cone_left_limit)
+        self.since_exit = 0.0 if self.active else self.since_exit+abs(velocity)*dt
         if not enabled or self.done:
             self.active, self.confirm = False, 0
             return None

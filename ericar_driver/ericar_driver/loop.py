@@ -100,6 +100,7 @@ class ControlLoop:
         self.last_state = ''
         self.started = None          # 첫 제어 주기 시각 (YOLO 첫 검출 대기 기준)
         self.detector_seen = False   # 최신 검출을 한 번이라도 받음
+        self.cone_hint = None        # 직전 주기의 라바콘 차선 힌트 (켜지는 순간 차선 기억 비우기용)
 
     def step(self, s):
         c, now = self.c, s.now
@@ -129,12 +130,19 @@ class ControlLoop:
             state = 'waiting for fresh sensors / detector'
         else:
             if required_camera and self.driver.state!='parking_turn' and (s.image_stamp != self.lane_stamp or self.driver.fork_bias != self.lane_bias):
+                # 한 선 이름 판단 경계: 우회전 코너 유지가 먼저, 없으면 라바콘 직후 힌트 (유경)
+                cone_hint = self.driver.cone_left_limit()
                 self.vision.corner_left_limit = (c['corner_hold']['corner_left_limit']
-                                                 # 라바콘 통과 중·직후, 3번 코너 안(차선 변경 중 제외)도 같은 규칙 (11/14 lap5:
-                                                 # 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전, 3번 코너 유지 뒤 168 s도 같음)
-                                                 if (self.driver.lane_driver.in_corner(now) or self.driver.cones.active
-                                                     or self.driver.cone_exit_left > 0
-                                                     or (self.driver.corner3() and not self.driver.lane_change.active)) else None)
+                                                 # 3번 코너 안(차선 변경 중 제외)도 같은 규칙 (11/14 lap5: 3번 코너 유지 뒤 168 s)
+                                                 if (self.driver.lane_driver.in_corner(now)
+                                                     or (self.driver.corner3() and not self.driver.lane_change.active))
+                                                 # 라바콘 통과 중·직후: 유경 힌트(cone_lane_left_limit, 더 넓음)가 먼저,
+                                                 # 그 거리가 끝난 뒤 저속 구간이 남아 있으면 코너 값 (lap5: 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전)
+                                                 else cone_hint if cone_hint is not None
+                                                 else c['corner_hold']['corner_left_limit'] if self.driver.cone_exit_left > 0 else None)
+                if cone_hint is not None and self.cone_hint is None:
+                    self.vision.forget_lines()   # 라바콘 구간에서 붙은 틀린 이름이 이어지지 않게 한 번만
+                self.cone_hint = cone_hint
                 self.vision.double_left = self.driver.lane_driver.beside_start_lane(self.driver.sections)
                 self.vision.outer_yellow = self.driver.outer_yellow()
                 self.vision.fork_direction = self.driver.fork_direction()
