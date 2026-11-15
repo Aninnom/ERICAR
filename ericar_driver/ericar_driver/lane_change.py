@@ -54,9 +54,28 @@ class LaneChange:
         self.direction = 0
         self.waiting = False
         self.seen_lane, self.seen_count, self.seen_stamp = None, 0, None
+        self.fork_running = False      # 갈림길 표지판 확정 뒤 (driver가 preferred로 알려 줌)
         self.walls = {}
         self.debug = {}
         self.clock, self.free_log = 0.0, []   # 좌·우 선택용 최근 빈 거리 기록 (시각, free)
+
+    def trusted_colors(self, lane):
+        """선 색에서 교통섬 노란 선을 걸러 냄 (소민 11/14 run_1114_2330: 가운데 차로에서 교통섬 노란 선을 바깥선으로 봐
+        차로 번호 1 → 0 → 왼쪽 끝으로 쓸데없이 이동, 끝 차로 도착 뒤 번호가 다시 바뀌어 재이동)
+        바깥 노란 선 = 차 바로 앞(BEV 아래쪽)부터 이어지고 도로 방향과 나란함
+        교통섬 노란 선 = 분기 입구 앞쪽 멀리서 시작하거나(가까운 끝이 yellow_near_max m보다 멂) 비스듬함
+        → 이런 노란 선은 'island'로 바꿔 차로 번호·노란 경계 판단에 안 씀. 차선 따라가기(lane_vision)는 그대로"""
+        colors = dict(lane.get('colors', {}))
+        near_ends, headings = lane.get('near_ends', {}), lane.get('line_headings', {})
+        for side, color in colors.items():
+            if color != 'yellow':
+                continue
+            far_start = near_ends.get(side, 0.0) > self.c.get('yellow_near_max', .9)
+            slanted = (side in headings and
+                       abs(headings[side]-lane.get('heading', 0.0)) > self.c.get('yellow_heading_max', .25))
+            if far_start or slanted:
+                colors[side] = 'island'
+        return colors
 
     def observe_lane(self, lane):
         """선 색으로 본 차로가 새 카메라 프레임 index_confirm_frames번 연속 같으면 index 보정.
@@ -66,9 +85,13 @@ class LaneChange:
         if stamp is not None and stamp == self.seen_stamp:
             return
         self.seen_stamp = stamp
-        colors = lane.get('colors', {}) if lane.get('valid') else {}
+        colors = self.trusted_colors(lane) if lane.get('valid') else {}
         seen = LANE_BY_COLORS.get((colors.get('left'), colors.get('right')))
         if seen is None or seen >= self.c['lane_count']:
+            return
+        if self.fork_running and seen == self.c['lane_count']//2:
+            # 갈림길 표지판 확정 뒤 '가운데'(흰/흰) 판정은 안 믿음: 분기 앞 끝 차로에서 바깥선이 흰색처럼 보이거나
+            # 교통섬 선이 빠져 흰/흰으로 보여 번호가 2 → 1로 바뀌고 다시 이동 (run_1114_2330 39.1 s). 끝 차로 판정은 그대로
             return
         if seen == self.seen_lane:
             self.seen_count += 1
@@ -97,7 +120,7 @@ class LaneChange:
                 rejected[side] = 'outside_lane_count'
                 continue
             # YOLO 요청도 노란 바깥선·교통섬 경계 횡단 금지. 점선 차로에서 정렬 필요
-            if lane.get('colors', {}).get(side) == 'yellow':
+            if self.trusted_colors(lane).get(side) == 'yellow':
                 rejected[side] = 'yellow_boundary'
                 continue
             if not requested and lane.get('solid', {}).get(side, False):
@@ -164,7 +187,7 @@ class LaneChange:
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
         points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction)
         error = self.target-self.offset
-        x, y = to_body(c['lookahead'], error, self.heading)
+        x, y = to_body(c.get('request_lookahead', c['lookahead']) if getattr(self, 'requested_move', False) else c['lookahead'], error, self.heading)
         desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
         self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
@@ -203,6 +226,7 @@ class LaneChange:
         self.clock += dt
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
+        self.fork_running = bool(preferred)
         self.observe_lane(lane)
         if self.active:
             self.offset -= velocity*math.sin(self.heading)*dt
@@ -233,7 +257,7 @@ class LaneChange:
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
         heading = lane['heading']
         camera_center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
-        points = self.drop_walls(points, heading, camera_center, self.index, lane.get('colors'))
+        points = self.drop_walls(points, heading, camera_center, self.index, self.trusted_colors(lane))
         forward, left = to_road(points, heading)
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
         center = 0.0 if requested else camera_center
@@ -285,7 +309,7 @@ class LaneChange:
             self.waiting = True
             self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
-        self.active, self.direction = True, direction
+        self.active, self.direction = True, direction; self.requested_move = bool(requested)
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = heading, 0.0, 0.0
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)

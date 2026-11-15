@@ -47,6 +47,18 @@ ANSWER_CONFIG = {
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
                  'hold_min_turned': 15.0},
+    # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
+    # speed: 서행 속도. 상한 0.2와 차이를 분명히
+    # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
+    # exit_distance: 방지턱 감지 실패 시 해제할 S0 거리(m). 현장 실측 = 방지턱 끝 + 뒷바퀴 여유. None이면 미사용
+    # max_distance: 감속 시작 뒤 이 거리(m)면 무조건 해제 (예전 14초 × 0.2 m/s = 2.8 m)
+    # tilt_threshold(°)·tilt_decay(s): 자이로 x·y 누설 적분 기울기가 문턱 넘으면 방지턱. arm_distance(m): 감속 직후 숙임 무시
+    # release_distance: 첫 감지 뒤 해제까지 거리(m). 뒷바퀴 기준 = 축거 0.2 + 턱 길이 + 여유
+    # hold_distance: 첫 감지 뒤 조향 고정 거리(m, 앞·뒷바퀴 통과). stuck_*: 턱에서 멈추면 boost_speeds를 단계로 올림, boost_distance 구르면 복귀
+    'slow_zone': {'speed': 0.15, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
+                  'tilt_threshold': 2.0, 'tilt_decay': 0.5, 'arm_distance': 0.15, 'release_distance': 0.5,
+                  'hold_distance': 0.35, 'stuck_speed': 0.03, 'stuck_seconds': 0.7,
+                  'boost_speeds': [0.2, 0.3], 'boost_distance': 0.1},
     # 멈춤 방지 (driver.stall_guard): 의도하지 않은 정지가 seconds 넘으면 강제 전환 (규정: 15초 넘게 서면 그 미션 0점)
     # 차선 변경 대기 → lane_change_off_distance(m) 동안 차선 변경 끄고 차선 주행
     # 전방 비상 정지 → 라이다 점에서 creep_margin(m) 떨어진 조향이 creep_horizon(m) 앞까지 있으면 creep_speed로 비켜 감
@@ -179,6 +191,12 @@ ANSWER_CONFIG = {
         # → 위 기억 거리를 기다리지 않고 바로 차선 주행으로 넘김. 기억으로 끌면 틀어진 방향으로 직진해 차로를 벗어남
         # 0.4: 마지막 콘을 지나치는 중에는 넘기지 않도록. 0이면 콘이 바로 앞에 있어도 넘김
         'cone_exit_clear': 0.4,
+        # 라바콘 직후 차선 한 선 이름 힌트 (11/14 유경). lane_vision.single_name의 corner_left_limit 자리에 넣음
+        # 왜: 탈출 직후 차가 바깥(왼쪽) 선 가까이·비스듬히 있어 왼쪽 선이 화면 중앙 오른쪽에 찍힘 → 오른쪽 선으로 오인
+        #     → 차로 중앙을 그 선의 왼쪽으로 잡아 더 바깥으로 나감. 한 번 틀리면 기억으로 이어져 고착
+        # 0.30: 합성 복귀 뒤 차로 중앙 이탈이 최대 0.23 m라 그보다 크게. 도면상 라바콘 끝은 4번 코너 직전이라
+        #       안쪽(오른쪽) 선은 코너 사각으로 빠져 한 선만 보이면 바깥 선일 가능성이 큼 (11/14 유경 도면 확인)
+        'cone_lane_left_limit': 0.30, 'cone_lane_left_distance': 1.5,
         # 라바콘 모드가 꺼진 뒤 이 거리(m) 동안 속도 상한 (11/14 lap4: 4번 코너에서 속도 출렁임)
         'cone_exit_slow_distance': 2.0, 'cone_exit_slow_speed': 0.22,
         'cone_max_distance': 2.5,    # 안전장치: 첫 진입 시 문까지 거리 + 이 값 넘게 주행하면 끝 (다시 안 켜짐). 라바콘 구간 약 2.1 m + 여유
@@ -206,7 +224,7 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
-        'sign_cooldown': 12.0, 'slow_seconds': 14.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
+        'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
         'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
@@ -216,7 +234,7 @@ ANSWER_CONFIG = {
         # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
-        'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.088,
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.045,
         # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
         # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
         'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
@@ -284,7 +302,7 @@ ANSWER_CONFIG = {
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
-        'lookahead': 0.55, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
+        'lookahead': 0.40, 'request_lookahead': 0.40, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
         # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
         # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
         'finish_error': 0.05, 'finish_heading': 0.15,

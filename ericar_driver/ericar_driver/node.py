@@ -68,6 +68,7 @@ class DriverNode(Node):
         self.angular_velocity = 0.0
         self.odom_stamp = -1e9
         self.yaw_rate = 0.0
+        self.tilt_rate = (0.0, 0.0)
         self.imu_stamp = -1e9
         self.detector_failures = 0
         self.detections = []
@@ -123,6 +124,8 @@ class DriverNode(Node):
 
     def on_imu(self, message):
         self.yaw_rate = message.angular_velocity.z
+        # 방지턱 감지용 x·y (slow_zone). 축 방향은 장착에 따라 달라 크기만 사용
+        self.tilt_rate = (getattr(message.angular_velocity, 'x', 0.0), getattr(message.angular_velocity, 'y', 0.0))
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
     @staticmethod
@@ -195,7 +198,8 @@ class DriverNode(Node):
                               detector_ok=self.detector_failures < self.c['detector']['failure_limit'],
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
-                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp)
+                              yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
+                              tilt_rate=self.tilt_rate)
         out = self.loop.step(sensors)
         elapsed=self.now()-sensors.now
         fresh=0<=elapsed<self.c['parking']['command_deadline']

@@ -234,6 +234,10 @@ class LaneVision:
                       # 가장 먼 흰 점선까지 앞 거리(m). 없으면 None. 분기 입구(점선 끝) 판단용 (fork.py, 소민)
                       dash_end=float(self.meters_at(np.flatnonzero(dashes.any(axis=1)).min())) if white_lane else None,
                       colors=line_colors,
+                      # 선별 가까운 끝 앞 거리(m)·가까운 끝 기울기(rad, + 왼쪽). 교통섬 노란 선 구분용 (lane_change.trusted_colors, 소민 11/14)
+                      near_ends={s: float(self.meters_at(spans[s][1])) for s in spans},
+                      line_headings={s: float(math.atan(float(np.polyval(np.polyder(fits[s]), spans[s][1])) / self.scale / self.row_m))
+                                     for s in fits},
                       # 서행 유도선(지그재그): 2 = 서로 다른 좌우 선이 모두 톱니 모양, 1 = 찾은 선 중 하나라도, 0 = 없음
                       # 좌우 창이 같은 선에 붙은 경우는 1 (11/10 skip_1110_lap1 142 s: 현수막 주름으로 한 선이 물결 → 2로 세면 오검출)
                       zigzag=2 if len(source) == 2 and all(zigzag.get(k) for k in source.values()) else int(any(zigzag.values())))
@@ -290,6 +294,14 @@ class LaneVision:
             return []
         groups = np.split(above, np.flatnonzero(np.diff(above) > 1) + 1)
         return [lo + int(g[np.argmax(hist[lo + g])]) for g in groups]
+
+    def forget_lines(self):
+        """좌/우 선 기억 삭제 (11/14 유경)
+
+        라바콘처럼 차선을 제대로 못 보는 구간을 지나는 동안 한 선에 붙은 이름이 틀려 있으면, 그 뒤로도
+        기억 이어받기(single_name)가 계속 넘겨 고착됨 → 그 구간을 벗어날 때 한 번 비움
+        """
+        self.memory = {}
 
     def remembered_side(self, anchor):
         """기억한 선과 반 차로 이내인 가까운 끝의 이름. 없으면 None"""
