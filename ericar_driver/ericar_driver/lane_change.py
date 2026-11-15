@@ -86,6 +86,9 @@ class LaneChange:
             return
         self.seen_stamp = stamp
         colors = self.trusted_colors(lane) if lane.get('valid') else {}
+        if abs(lane.get('heading', 0.0)) > self.c.get('index_heading_max', .3):
+            # 크게 틀어진 자세: 옆 차로 너머 선까지 보여 색 조합이 다른 차로처럼 보임 → 판정 안 함
+            colors = {}
         seen = LANE_BY_COLORS.get((colors.get('left'), colors.get('right')))
         if seen is None or seen >= self.c['lane_count']:
             return
@@ -242,6 +245,7 @@ class LaneChange:
                 moved = done or abs(self.offset) > self.c['lane_width']/2
                 self.active = False
                 self.index += self.direction if moved else 0
+                self.seen_lane, self.seen_count = None, 0   # 이동 중 본 차로 기억은 다음 판단에 안 씀
                 return None
             return self.steer(points, dt)
         if self.active or not enabled or not lane['valid']:
@@ -310,6 +314,9 @@ class LaneChange:
             self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
         self.active, self.direction = True, direction; self.requested_move = bool(requested)
+        # 이전에 본 차로 기억 비움 (11/15 main_1115_1904 180.07 s: 0→1 이동 중 비스듬히 본 '2번 차로' 기억이 남아
+        # 1→2 이동이 시작한 주기에 camera_correct → overshoot 종료, 가운데 차로인데 index 2 → 교통섬 직진·표지판 추돌)
+        self.seen_lane, self.seen_count = None, 0
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = heading, 0.0, 0.0
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)

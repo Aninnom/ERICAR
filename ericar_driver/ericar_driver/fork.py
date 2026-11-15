@@ -20,6 +20,7 @@ class ForkMission:
         self.lane_count = lane_count
         self.follow_distance = follow_distance
         self.far, self.dash_gap, self.entrance_confirm = far, dash_gap, entrance_confirm
+        self.lock_distance = 0.6   # 남은 점선이 이 거리(m) 아래면 끝 확정 (far − dash_gap 1.25보다 충분히 짧음)
         self.phase = 'lane'
         self.sign = self.stamp = self.destination = None
         self.direction = 0
@@ -28,6 +29,7 @@ class ForkMission:
         self.dash_seen = False
         self.dash_left = None    # 남은 흰 점선 거리 추정(m). None = 아직 못 봄
         self.dash_gone = 0.      # 마지막으로 점선을 본 뒤 주행 거리(m)
+        self.dash_locked = False  # 점선 끝 확정: 이후 더 먼 '점선'(길 안 흰 글자·흰 선)으로 남은 거리 안 늘림
 
     @property
     def running(self):
@@ -61,13 +63,23 @@ class ForkMission:
         dash_end = lane.get('dash_end') if lane.get('valid') else None
         step = max(0., velocity)*dt
         held = None if self.dash_left is None else max(0., self.dash_left-step)
-        if dash_end is not None:
+        if self.dash_locked:
+            # 끝 확정 뒤: 주행 거리만큼만 줄임 (11/15 main_1115_1904 198~227 s: A 길 안 흰 글자·라바콘 앞 흰 선을 점선으로 봐
+            # dash_left가 0.5 → 1.5 m로 되돌아가 입구 판정이 안 남 → follow가 S3 전환까지 유지)
+            self.dash_left = held or 0.
+            self.dash_gone += step
+        elif dash_end is not None:
             # 순간 짧아진 값(빈칸·잘린 조각)은 무시: 이전 추정에서 주행 거리만 뺀 값보다 짧아지지 않음
             self.dash_seen, self.dash_gone = True, 0.
             self.dash_left = float(dash_end) if held is None else max(float(dash_end), held)
         elif self.dash_seen:
             self.dash_left = held or 0.
             self.dash_gone += step
+        # 끝 확정: 목적 차로를 따라가는 중(follow), 차선이 보이는 프레임에서 남은 점선이 lock_distance 아래
+        # = 화면에 그보다 먼 점선이 없음. 차선을 못 본 프레임·차선 변경 중에는 확정 안 함 (못 본 동안 줄어든 값일 수 있음)
+        if (self.phase == 'follow' and not changing and lane.get('valid') and self.dash_seen
+                and self.dash_left is not None and self.dash_left < self.lock_distance):
+            self.dash_locked = True
         if self.entered or self.phase == 'done' or not self.dash_seen or changing:
             return
         if self.dash_left > 0. or self.dash_gone < self.entrance_confirm:

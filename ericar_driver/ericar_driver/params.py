@@ -224,8 +224,13 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
-        'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
-        'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
+        'sign_cooldown': 12.0, 'fork_bias': 0.55,
+        # 11/15 주최 답변: 정지 거리(정지선 ±5 cm) 판정은 앞바퀴 → 목표 = 앞축이 선 가까운 모서리 위.
+        # main_1115_1904: stop_offset 0.088 + stop_tolerance 0.025 → 앞축이 선 0.111 m 앞 정지(보행자·신호등 모두) = 범위 밖
+        # 실제 정지 지점 = stop_offset + stop_tolerance 근처. stop_min_speed: 마지막 접근 최저 속도(m/s, 너무 느리면 안 움직임)
+        # pedestrian_wait: 같은 녹화 실제 정지 3.2 s (규정 3초 이상, 여유 부족) → 4.0
+        'pedestrian_wait': 4.0,
+        'stop_offset': 0.0, 'stop_tolerance': 0.01, 'stop_min_speed': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,
@@ -234,8 +239,8 @@ ANSWER_CONFIG = {
         # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
-        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.045,
-        # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.133,   # 11/15: −0.045에서 stop_offset과 같은 폭(−0.088) 이동, 실차 재확인 필요
+        # 11/14: 보행자 stop_offset 0.015 → 0.088 (lap3 보행자 선 0.04 m 앞을 선 밟음으로 봄). 11/15 앞바퀴 기준 확정으로 0.0
         # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
         'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
         'slow_min_speed': 0.05,   # 이 속도(m/s) 이상으로 움직일 때만 서행 표지판 수용 (출발 전 소진 방지)
@@ -316,6 +321,9 @@ ANSWER_CONFIG = {
         'stop_distance': 0.6, 'approach_speed': 0.15,
         # 선 색으로 현재 차로 확인: 노랑/흰 → 2, 흰/흰 → 1, 흰/노랑 → 0. 새 카메라 프레임 이 수만큼 연속 같으면 index 보정
         'index_confirm_frames': 5,
+        # 차가 도로 방향에서 이만큼(rad) 넘게 틀어져 있으면 선 색으로 차로를 판정하지 않음 (11/15 main_1115_1904 178~179 s:
+        # 0→1 이동 중 왼쪽으로 약 30° 틀어진 채 두 차로 건너 바깥 노란 선 + 흰 점선을 '노랑/흰 = 2번 차로'로 봄)
+        'index_heading_max': 0.3,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,

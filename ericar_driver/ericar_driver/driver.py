@@ -372,7 +372,9 @@ class Driver:
                     self.transition('lane', now)
             else:
                 remaining = line - offset if line is not None else far - m.get('traffic_far_line_stop', .49)
-                speed = min(speed, m['stop_approach_speed'], max(0.0, remaining * m['stop_gain']))
+                # 마지막 구간은 stop_min_speed 밑으로 안 내림: 허용 오차가 작으면 비례 속도가 너무 느려 선에 못 닿음
+                speed = min(speed, m['stop_approach_speed'],
+                            max(m.get('stop_min_speed', 0.0), remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
                     if abs(velocity) <= m['stopped_speed']:
@@ -502,7 +504,11 @@ class Driver:
             return speed,steering,state+': '+self.parking.reason
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
-        in_fork = self.fork.running
+        # 코너 유지 금지: 갈림길 정렬 중(locked·align), B(오른쪽) 길은 끝날 때까지 (B 입구 45° 오른쪽 꺾임을 코너로 보면 이탈).
+        # A(왼쪽) 길은 목적 차로 도착 뒤(follow·exit) 허용: 예전에는 fork.running 전체를 막아 표지판을 읽으면 S3 전환까지
+        # 3번 코너 유지가 꺼짐 → 선을 놓친 뒤 조향이 풀려 벽으로 직진 (11/15 main_1115_1904 216~221 s).
+        # 표지판을 못 읽은 주행(11/14 lap5)은 원래 유지가 켜진 채 같은 코너 통과. S자 오시작은 start_far_angle·hold_min_turned가 막음
+        in_fork = self.fork.running and not (self.fork.direction > 0 and self.fork.phase in ('follow', 'exit'))
         # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
         # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
         # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함

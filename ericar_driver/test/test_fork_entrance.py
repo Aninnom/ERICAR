@@ -166,6 +166,53 @@ def test_driver_manual_stop():
     assert speed == 0.0, speed
 
 
+def test_false_dash_after_end():
+    """점선이 끝난 뒤 길 안 흰 글자·흰 선을 점선으로 봐도 입구 판정 (11/15 main_1115_1904 198~227 s)
+    예전: 남은 거리가 0.5 → 1.5 m로 되돌아가 follow가 구간 전환까지 유지 → 3번 코너 유지 꺼짐"""
+    f = mission('left')
+    drive(f, 2, .2, FAR)                       # 목적 차로(왼쪽 끝) 도착 → follow
+    assert f.phase == 'follow'
+    drive(f, 2, 1.2, None)                     # 점선 끝이 화면 안으로 들어와 줄어듦 (1.7 → 0.5)
+    assert f.dash_locked and f.dash_left < .6
+    drive(f, 2, 1.0, 1.5)                      # 길 안 흰 표시를 1.5 m 점선으로 오검출
+    assert f.phase == 'exit', f.phase
+    # 차선을 못 본 동안 줄어든 값으로는 끝 확정 안 함 (다시 보이면 원래대로)
+    f = mission('left')
+    drive(f, 2, .2, FAR)
+    for _ in range(120):
+        f.step(2, False, .2, .05)
+        f.observe(dict(valid=False), 2, False, .2, .05)
+    assert not f.dash_locked
+    drive(f, 2, .2, FAR)
+    assert f.phase == 'follow' and f.dash_left == FAR and not f.late
+
+
+def test_corner_hold_after_destination():
+    """A(왼쪽) 길은 목적 차로 도착 뒤(follow·exit) 코너 유지 허용, 정렬 중·B 길은 금지 (11/15 main_1115_1904 216~221 s:
+    표지판을 읽으면 S3 전환까지 fork.running이라 3번 코너 유지가 꺼져 벽으로 직진)"""
+    import copy
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    scan = dict(front=4.0, rear=4.0, valid_fraction=1.0, wide_objects=0, points=[], ranges=[], angle_min=0.,
+                angle_increment=.01, stamp=0.)
+    lane_result = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
+                       abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
+    for sign, phase, index, expected in (('left', 'follow', 2, True), ('left', 'exit', 2, True), ('left', 'align', 1, False),
+                                         ('right', 'follow', 0, False), ('right', 'exit', 0, False)):
+        c = copy.deepcopy(ANSWER_CONFIG)
+        c['missions']['start_stage'] = 'fork'
+        d = Driver({'answer': c, 'robot': robot})
+        d.fork = mission(sign)
+        d.fork.phase, d.lane_change.index = phase, index
+        seen = []
+        original = d.main_lane_command
+        d.main_lane_command = lambda *a, **k: (seen.append(a[5]), original(*a, **k))[1]
+        d.update(lane_result, scan, [], 0., .2, 1.)
+        assert seen and seen[0] is expected, (sign, phase, seen)
+
+
 if __name__ == '__main__':
     test_gaps_not_late()
     test_early_and_late()
@@ -175,4 +222,6 @@ if __name__ == '__main__':
     test_no_sign()
     test_without_dashes_keeps_old_behavior()
     test_driver_manual_stop()
+    test_false_dash_after_end()
+    test_corner_hold_after_destination()
     print('분기 입구 판단 시험 통과')
