@@ -112,8 +112,25 @@ def test_fork_keeps_edge_index():
     middle = dict(valid=True, heading=0., colors={'left': 'white', 'right': 'white'})
     for k in range(10):
         change.observe_lane(dict(middle, stamp=float(k)))
-    assert change.index == 2
-    change.fork_running = False
-    for k in range(10, 20):
+    assert change.index == 2, '잠깐 흰/흰으로 끝 차로 번호가 바뀜'
+    for k in range(10, 25):
         change.observe_lane(dict(middle, stamp=float(k)))
-    assert change.index == 1
+    assert change.index == 1, '오래 이어진 흰/흰은 고쳐야 함'
+
+
+def test_fork_exit_side_yellow():
+    """표지판 확정 뒤: 출구 쪽 노란 선만 바깥선, 반대쪽 노란 선은 거리·각도와 상관없이 교통섬 (분기 근처 이동 중)"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.fork_running, change.fork_dir = True, 1          # left 표지판
+    both_near = dict(valid=True, heading=.3, colors={'left': 'yellow', 'right': 'yellow'},
+                     near_ends={'left': .6, 'right': .6}, line_headings={'left': .3, 'right': .3})
+    colors = change.trusted_colors(both_near)
+    assert colors == {'left': 'yellow', 'right': 'island'}
+    free = {0: 3., 1: 3., -1: 3.}
+    change.index = 1
+    assert change.choose_direction(free, both_near, requested=1) == 0, '진짜 바깥선(출구 쪽) 넘어감'
+    change.fork_dir = -1                                     # right 표지판이면 반대
+    assert change.trusted_colors(both_near) == {'left': 'island', 'right': 'yellow'}
+    change.fork_dir = 0                                      # 표지판 전: 둘 다 가까이·나란하면 둘 다 노랑
+    assert change.trusted_colors(both_near) == {'left': 'yellow', 'right': 'yellow'}

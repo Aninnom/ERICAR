@@ -316,6 +316,13 @@ ANSWER_CONFIG = {
         'stop_distance': 0.6, 'approach_speed': 0.15,
         # 선 색으로 현재 차로 확인: 노랑/흰 → 2, 흰/흰 → 1, 흰/노랑 → 0. 새 카메라 프레임 이 수만큼 연속 같으면 index 보정
         'index_confirm_frames': 5,
+        # 교통섬 노란 선 구분 (소민 11/15, lane_change.trusted_colors)
+        # 표지판 확정 뒤: 출구 쪽 노란 선만 바깥선, 반대쪽 노란 선은 교통섬 (숫자 없음)
+        # 표지판 전: 노란 선 가까운 끝이 yellow_near_max(m, 뒷축 앞 거리. BEV 맨 아래 0.6 m)보다 멀거나
+        #   차선 방향과 yellow_heading_max(rad) 넘게 비스듬하면 교통섬
+        'yellow_near_max': 0.9, 'yellow_heading_max': 0.25,
+        # 표지판 확정 뒤 '가운데'(흰/흰) 판정으로 차로 번호를 고치려면 이 프레임 수 연속 필요 (평소 index_confirm_frames)
+        'index_confirm_frames_fork': 20,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
