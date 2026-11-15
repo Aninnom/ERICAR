@@ -58,6 +58,8 @@ class LaneChange:
         self.walls = {}
         self.debug = {}
         self.clock, self.free_log = 0.0, []   # 좌·우 선택용 최근 빈 거리 기록 (시각, free)
+        self.heading_log = []          # 최근 카메라 차선 방향 (새 프레임마다). 이동 시작 방향은 이 값들의 중앙값
+        self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
 
     def trusted_colors(self, lane):
         """선 색에서 교통섬 노란 선을 걸러 냄 (소민 11/14 run_1114_2330: 가운데 차로에서 교통섬 노란 선을 바깥선으로 봐
@@ -85,7 +87,14 @@ class LaneChange:
         if stamp is not None and stamp == self.seen_stamp:
             return
         self.seen_stamp = stamp
+        if lane.get('valid') and 'heading' in lane:
+            self.heading_log = (self.heading_log+[float(lane['heading'])])[-self.c.get('heading_frames', 5):]
+        else:
+            self.heading_log = []
         colors = self.trusted_colors(lane) if lane.get('valid') else {}
+        if abs(lane.get('heading', 0.0)) > self.c.get('index_heading_max', .3):
+            # 크게 틀어진 자세: 옆 차로 너머 선까지 보여 색 조합이 다른 차로처럼 보임 → 판정 안 함
+            colors = {}
         seen = LANE_BY_COLORS.get((colors.get('left'), colors.get('right')))
         if seen is None or seen >= self.c['lane_count']:
             return
@@ -195,6 +204,18 @@ class LaneChange:
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
         return (c['speed'] if safe else 0.0), steering
 
+    def start_heading(self, camera):
+        """새 이동의 시작 방향(도로 방향 기준 차 방향, rad)
+
+        - 직전 이동이 chain_seconds(s) 안에 끝났으면 그 이동에서 IMU로 적분해 온 방향(self.heading)을 이어 씀
+          (11/15 fix2_1115_2017 156.9 s: 0→1 이동 직후 1→2 이동이 카메라 한 프레임 방향 −0.48 rad로 시작, 실제 차는 직진 자세
+           → 횡이동 과대 추정 + 복귀 조향 0.48 rad 과다 → 도로보다 오른쪽 13~16°로 끝나 교통섬 직진·표지판 추돌)
+        - 그 외에는 최근 heading_frames 프레임 카메라 방향의 중앙값 (한 프레임 튐 제외)"""
+        if self.clock-self.ended_clock <= self.c.get('chain_seconds', 2.0):
+            return self.heading
+        log = sorted(self.heading_log)
+        return log[len(log)//2] if log else camera
+
     def camera_finished(self, lane):
         """카메라로 차선 변경 끝 판단 (소민): 반 넘게 옮겼고, 선 색이 목적 차로 + 차로 중앙 근처·나란함
         추측 항법(odom 적분)은 회전 오차(11/9 실측 1.07배)로 덜·더 감 → 카메라가 확인되면 바로 차선 주행에 넘김"""
@@ -242,6 +263,8 @@ class LaneChange:
                 moved = done or abs(self.offset) > self.c['lane_width']/2
                 self.active = False
                 self.index += self.direction if moved else 0
+                self.seen_lane, self.seen_count = None, 0   # 이동 중 본 차로 기억은 다음 판단에 안 씀
+                self.ended_clock = self.clock
                 return None
             return self.steer(points, dt)
         if self.active or not enabled or not lane['valid']:
@@ -310,8 +333,11 @@ class LaneChange:
             self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
         self.active, self.direction = True, direction; self.requested_move = bool(requested)
+        # 이전에 본 차로 기억 비움 (11/15 main_1115_1904 180.07 s: 0→1 이동 중 비스듬히 본 '2번 차로' 기억이 남아
+        # 1→2 이동이 시작한 주기에 camera_correct → overshoot 종료, 가운데 차로인데 index 2 → 교통섬 직진·표지판 추돌)
+        self.seen_lane, self.seen_count = None, 0
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
-        self.heading, self.offset, self.travel = heading, 0.0, 0.0
+        self.heading, self.offset, self.travel = self.start_heading(heading), 0.0, 0.0
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.target = direction*self.c['lane_width']+center

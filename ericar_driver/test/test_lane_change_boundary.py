@@ -73,12 +73,31 @@ def test_wall_filter():
     assert len(change.drop_walls(pts, 0.0, 0.0, 1, {'left': 'white', 'right': 'white'})) == len(pts) and not change.walls
 
 
-if __name__ == '__main__':
-    test_boundary()
-    test_avoid_only()
-    test_wall_filter()
-    print('노란 경계 횡단 차단 시험 통과')
-
+def test_stale_seen_lane():
+    """이동 중 비스듬히 본 차로 기억으로 다음 이동이 시작하자마자 끝나지 않음 (11/15 main_1115_1904 180.07 s)
+    0→1 이동 중 왼쪽으로 약 30° 틀어진 채 바깥 노란 선 + 흰 점선(= 2번 차로처럼 보임)을 약 1초 봄
+    → 1→2 이동 시작 주기에 camera_correct·overshoot로 종료, 가운데 차로인데 index 2 → 교통섬 직진"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    clear = dict(points=[], wide_objects=0)
+    # 틀어진 자세에서 본 색 조합은 차로 판정에 안 씀
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 1
+    oblique = dict(valid=True, heading=-.45, error=.2, colors={'left': 'yellow', 'right': 'white'})
+    for k in range(20):
+        change.observe_lane(dict(oblique, stamp=float(k)))
+    assert change.index == 1 and change.seen_count == 0, '틀어진 자세의 선 색으로 차로 번호 변경'
+    # 남은 기억이 있어도 새 이동은 시작 주기에 끝나지 않음
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index, change.seen_lane, change.seen_count = 1, 2, 20
+    lane = dict(valid=True, heading=-.2, error=-.29, forward=.65, stamp=100., colors={'left': 'white'},
+                solid={'left': False})
+    result = change.update(lane, clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert result is not None and change.active and change.index == 1, '차선 변경이 시작 주기에 종료 (index %d)' % change.index
+    # 이동이 끝나면 이동 중 기억은 비움
+    change.offset, change.heading = change.target, 0.0
+    change.seen_lane, change.seen_count = 2, 20
+    change.update(dict(lane, stamp=101.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert not change.active and change.index == 2 and change.seen_count == 0
 
 def test_island_yellow():
     """교통섬 노란 선(멀리서 시작하거나 비스듬함)은 바깥선으로 안 봄 (소민 11/14 run_1114_2330)"""
@@ -117,3 +136,40 @@ def test_fork_keeps_edge_index():
     for k in range(10, 20):
         change.observe_lane(dict(middle, stamp=float(k)))
     assert change.index == 1
+
+
+def test_chained_heading():
+    """연속 이동은 직전 이동에서 적분해 온 방향을 이어 씀 (11/15 fix2_1115_2017 156.9 s: 카메라 한 프레임 방향 −0.48로
+    두 번째 이동 시작 → 복귀 조향 과다 → 교통섬 직진). 떨어진 이동은 최근 카메라 방향 중앙값"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    clear = dict(points=[], wide_objects=0)
+    base = dict(valid=True, error=0., forward=.65, colors={'left': 'white', 'right': 'white'},
+                solid={'left': False, 'right': False})
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 0
+    change.update(dict(base, heading=0., stamp=1.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active
+    change.offset, change.heading = change.target, -.1            # 첫 이동 끝: 도로보다 왼쪽 0.1 rad
+    change.update(dict(base, heading=0., stamp=2.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert not change.active and change.index == 1
+    # 바로 이어지는 두 번째 이동: 카메라가 −0.48을 줘도 이어 온 −0.1 사용
+    change.update(dict(base, heading=-.48, stamp=3.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active and abs(change.heading+.1) < .02, change.heading
+    # 떨어진 이동: 최근 5프레임 중앙값 (한 프레임 튐 제외)
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 0
+    for k, heading in enumerate([.02, .03, -.5, .02, .01]):
+        change.update(dict(base, heading=heading, stamp=float(k)), clear, .18, 0., .05, False)
+    change.update(dict(base, heading=-.6, stamp=9.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active and abs(change.heading-.02) < .02, change.heading
+
+
+if __name__ == '__main__':
+    test_boundary()
+    test_avoid_only()
+    test_wall_filter()
+    test_stale_seen_lane()
+    test_island_yellow()
+    test_fork_keeps_edge_index()
+    test_chained_heading()
+    print('노란 경계 횡단 차단 시험 통과')

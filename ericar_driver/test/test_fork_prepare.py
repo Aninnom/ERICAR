@@ -21,9 +21,14 @@ def test_prepare():
         assert d.fork_goal == 0, '두 프레임만으로 방향 확정'
         detect(d, [name], 1.4)
         assert d.fork_goal == direction and d.fork_request == direction, '작은 표지판 조기 이동 요청 누락'
-        for i in range(10):
-            detect(d, ['right' if name == 'left' else 'left'], 2+i*.2, area=.1)
-        assert d.fork_goal == direction and d.fork_sign == name
+        other = 'right' if name == 'left' else 'left'
+        for i in range(4):
+            detect(d, [other], 2+i*.2, area=.1)
+        assert d.fork_goal == direction and d.fork_sign == name, '짧은 반대 검출로 방향 교체'
+        # 11/15: 반대 화살표가 fork_relock_frames(5) 연속이면 목적지 교체 (fix_1115_1949: 트랙 밖 천막을 right로 확정,
+        # 뒤의 진짜 left 51회 무시)
+        detect(d, [other], 2.8, area=.1)
+        assert d.fork_goal == -direction and d.fork_sign == other and d.fork_request == -direction, '반대 화살표 연속 확인 뒤 교체 안 됨'
     d = driver()
     detect(d, ['right'], 1.)
     detect(d, ['right'], 1.2)

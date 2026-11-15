@@ -1,6 +1,8 @@
 """미션 선택·최종 속도/조향 결정"""
 # 출처: hello-osy/2026-orda-mentoring src/orda_sim/orda_sim/answer.py (613c9b4)
 
+import math
+
 from .common import clip
 from .cones import ConeDriving
 from .fork import ForkMission
@@ -34,7 +36,14 @@ class Driver:
         self.slow_zone = SlowZone(self.c['slow_zone'])   # 서행·방지턱 (slow_zone.py)
         m = self.c['missions']
         self.fork = ForkMission(self.c['lane_change']['lane_count'], m['fork_distance'], far=self.c['lane']['far'],
-                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3))
+                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3),
+                                pass_area=m.get('fork_sign_pass_area', .006),
+                                pass_distance=m.get('fork_sign_pass_distance', .15),
+                                pass_seconds=m.get('fork_sign_pass_seconds', .5),
+                                wrong_lane_distance=m.get('fork_wrong_lane_distance', .4),
+                                outer_distance=m.get('fork_outer_distance', .8))
+        self.hold_section = 0        # 지금(또는 마지막) 코너 유지가 시작된 구간 번호 (코너 유지 누적 회전 상한용)
+        self.signs_fresh = True      # 표지판 검출이 최신인지 (update의 signs_ok)
         self.sync_fork()
         self.traffic_stop_completed = False
         self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
@@ -70,6 +79,18 @@ class Driver:
         early = s.get('cone_early_turn')
         return bool(s['enabled'] and early is not None and 'cones' not in s.get('off', ()) and
                     self.sections.index == START_SECTION['cones']-1 and self.sections.turned >= early)
+
+    def three_lane_over(self):
+        """3차선 구간이 끝났는지 → 차선 변경 판단(회피·정렬·저속 접근) 자체를 끔 (11/15 사용자 지시)
+        분기 입구를 지났거나(fork.passed), 표지판·점선을 못 봤어도 S2 주행 거리가 lane_change_max_distance(m) 이상 (None이면 거리 기준 안 씀)
+        예전: 표지판을 못 읽거나 점선을 못 본 주행은 3번 코너 15° 전까지 켜져 있어 벽·라바콘을 앞 장애물로 보고
+        저속 접근(approaching_blocked_lane)이 조향을 가져감 (main_1115_1904 215.5~217.6 s, fix_1115_1949 204.7~205.5 s)"""
+        s = self.c['sections']
+        if self.fork.passed:
+            return True
+        limit = s.get('lane_change_max_distance')
+        return bool(s['enabled'] and limit is not None and self.sections.index == START_SECTION['lane_change'] and
+                    self.sections.distance >= limit)
 
     def corner3(self):
         """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
@@ -142,7 +163,7 @@ class Driver:
         # 갈림길 목적 끝 차로에 들어간 뒤(follow·exit)에는 바깥 노란 선 하나만 따라감 (소민 11/15 실차: 차선 따라가다
         # 교통섬 노란 선을 반대쪽 차선으로 잡아 교통섬 쪽으로 꺾어 들어감). fork_bias 부호 = 남길 쪽 (+ 왼쪽).
         # 크기는 0.002 m라 기준 중앙 이동은 무시할 정도 (lane_vision.find_starts: 반대쪽 시작점만 뺌)
-        if (self.c['missions'].get('fork_outer_only', True) and f.phase in ('follow', 'exit') and f.direction
+        if (self.c['missions'].get('fork_outer_only', True) and f.outer_only and f.direction
                 and not self.lane_change.active and self.lane_change.index == f.destination):
             self.fork_bias = 0.002 if f.direction > 0 else -0.002
         self.fork_remaining = f.remaining
@@ -201,6 +222,33 @@ class Driver:
             self.traffic_box = (list(main['bbox']), main['area'])
         kept = {id(d) for d in keep}
         return [d for d in detections if d['name'] not in names or id(d) in kept]
+
+    def arrow_off_axis(self):
+        """S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어짐 = 교통섬 표지판이 화면 밖일 수 있는 자세"""
+        s = self.c['sections']
+        return bool(s['enabled'] and self.sections.index == START_SECTION['fork'] and
+                    abs(self.sections.turned) > self.c['missions'].get('fork_sign_max_turn', 20.0))
+
+    def arrow_filter(self, detections):
+        """갈림길 화살표 박스 선별 (11/15 fix_1115_1949 168.3 s: 장애물 회피로 오른쪽 34° 틀어진 동안 트랙 밖 파란 천막을
+        right로 3프레임 검출 → 방향 확정, 뒤의 진짜 left 51회는 무시됨)
+        - 박스 가로:세로(화소)가 fork_sign_aspect 밖이면 버림 (천막 2.45, 진짜 표지판 0.87~1.11)
+        - S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어져 있으면 버림 (표지판은 교통섬 = 도로 방향 앞에 있음)"""
+        m = self.c['missions']
+        low, high = m.get('fork_sign_aspect', (.6, 1.6))
+        off_axis = self.arrow_off_axis()
+        kept = []
+        for d in detections:
+            if d['name'] in ('left', 'right'):
+                box = d.get('bbox')
+                if off_axis:
+                    continue
+                if box and box[3] > box[1]:
+                    aspect = (box[2]-box[0])*m.get('fork_sign_image_aspect', 4/3)/(box[3]-box[1])
+                    if not low <= aspect <= high:
+                        continue
+            kept.append(d)
+        return kept
 
     def confirmed(self, detections, stamp):
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
@@ -276,7 +324,7 @@ class Driver:
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
-        detections = self.traffic_filter(detections)
+        detections = self.arrow_filter(self.traffic_filter(detections))
         names = self.confirmed(detections, detection_stamp)
         if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
@@ -296,6 +344,14 @@ class Driver:
         if self.allowed('fork') and self.fork.lock(ready, detection_stamp):
             self.advance('fork')
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
+        elif self.fork.running:
+            # 방향 교체: 반대 화살표가 fork_relock_frames 연속이면 목적지 변경 (대기 시간 cooldown과 무관하게 확인)
+            again = {n for n in ('left', 'right') if self.sign_counts.get(n, 0) >= m.get('fork_relock_frames', 5)}
+            self.fork.relock(again, detection_stamp)
+        # 표지판 통과 = 분기 입구 (fork.see_sign). 화살표가 이번 검출에 없으면 None
+        arrows = [d['area'] for d in detections if d['name'] in ('left', 'right')]
+        self.fork.see_sign(max(arrows) if arrows else None, self.lane_change.index, self.lane_change.active,
+                           velocity, dt, fresh=self.signs_fresh and not self.arrow_off_axis())
         self.sync_fork()
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):
@@ -372,7 +428,9 @@ class Driver:
                     self.transition('lane', now)
             else:
                 remaining = line - offset if line is not None else far - m.get('traffic_far_line_stop', .49)
-                speed = min(speed, m['stop_approach_speed'], max(0.0, remaining * m['stop_gain']))
+                # 마지막 구간은 stop_min_speed 밑으로 안 내림: 허용 오차가 작으면 비례 속도가 너무 느려 선에 못 닿음
+                speed = min(speed, m['stop_approach_speed'],
+                            max(m.get('stop_min_speed', 0.0), remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
                     if abs(velocity) <= m['stopped_speed']:
@@ -476,6 +534,7 @@ class Driver:
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
         self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
+        self.signs_fresh = signs_ok
         self.update_stop_line(lane, velocity, now, dt)
         previous_state=self.state
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
@@ -502,14 +561,31 @@ class Driver:
             return speed,steering,state+': '+self.parking.reason
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
-        in_fork = self.fork.running
+        # 코너 유지 금지는 갈림길 정렬 중(locked·align)·manual에만. 목적 차로 도착 뒤(follow·exit)는 A·B 모두 허용
+        # 예전에는 fork.running 전체를 막아 표지판을 읽으면 S3 전환까지 3번 코너 유지가 꺼짐 → 선을 놓친 뒤 조향이 풀려
+        # 벽으로 직진 (11/15 main_1115_1904 216~221 s A 길, fix_1115_1949 204~209 s B 길)
+        # 표지판을 못 읽은 주행(11/14 lap5)은 원래 유지가 켜진 채 같은 코너 통과. S자 오시작은 start_far_angle·hold_min_turned가 막음
+        in_fork = self.fork.running and self.fork.phase not in ('follow', 'exit')
         # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
         # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
         # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함
         s = self.c['sections']
         left_of_axis = -self.sections.turned if s['enabled'] and self.sections.index == START_SECTION['fork'] else 0.0
         self.lane_driver.hold_start_ok = left_of_axis <= s.get('hold_min_turned', 15.0)
-        self.lane_driver.hold_extra = max(0.0, left_of_axis)/s['odom_yaw_scale']
+        # 라바콘 구간(S3)도 틀어진 만큼 더 돎 (시작 금지 조건은 없음): 콘을 나오며 왼쪽으로 15~21° 틀어진 채 4번 코너 유지 시작 →
+        # 65°만 돌아 누적 31~37°에서 끝남 → 남은 코너를 한 선 pursuit로 느리게 돌아 옆 차로 이탈, 횡단보도 앞에서 반대쪽 이탈
+        # (11/15 fix3_1115_2113 197~217 s. 같은 날 앞선 녹화 3개도 31~37°에서 종료). 과회전은 hold_max_turned가 막음
+        tilt = left_of_axis
+        if s['enabled'] and self.sections.index == START_SECTION['cones']:
+            tilt = -self.sections.turned
+        self.lane_driver.hold_extra = max(0.0, tilt)/s['odom_yaw_scale']
+        # 코너 유지 상한: 유지를 시작한 구간의 직선 방향에서 오른쪽으로 hold_max_turned(°, IMU) 넘게 돌았으면 끝내고 새로 시작도 안 함
+        # 유지는 '시작부터 65°(odom)'라 코너 중간에서 시작하면 과회전 (11/15 fix2_1115_2017 204 s: 44° 돈 지점에서 시작 →
+        # 안쪽 첫 콘으로 향함). 정상 코너는 누적 48~67°에서 끝나 영향 없음 (같은 날 녹화 3개)
+        if self.lane_driver.hold is None:
+            self.hold_section = self.sections.index
+        self.lane_driver.hold_stop = bool(
+            s['enabled'] and -math.degrees(self.sections.yaw)-90.0*self.hold_section >= s.get('hold_max_turned', 70.0))
         speed, steering = self.main_lane_command(lane,now,dt,velocity,angular_velocity,
                                                   self.state == 'lane' and not self.avoiding and not in_fork,
                                                   self.avoiding)
@@ -544,12 +620,14 @@ class Driver:
             in_corner = self.lane_driver.hold is not None or self.corner3()
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner,
+                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner
+                                            and not self.three_lane_over(),
                                             requested, preferred, avoid_only=self.lane_change_off > 0)
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt,
                 (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,
-                red_only=cone_early and not self.sections.allows('cones'))
+                red_only=cone_early and not self.sections.allows('cones'),
+                holding=self.lane_driver.hold is not None)
             if change is not None:
                 stuck_change = self.lane_change.active and change[0] == 0.0
                 speed, steering = change

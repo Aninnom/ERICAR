@@ -46,7 +46,13 @@ ANSWER_CONFIG = {
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
-                 'hold_min_turned': 15.0},
+                 'hold_min_turned': 15.0,
+                 # 코너 유지는 시작한 구간 직선 방향에서 오른쪽으로 이 각도(°, IMU)까지만. 넘으면 끝내고 새로 시작 안 함
+                 'hold_max_turned': 70.0,
+                 # S2에서 이 거리(m) 넘게 가면 3차선 구간 끝으로 보고 차선 변경 판단을 끔 (분기 입구를 지나면 그 전에 꺼짐).
+                 # 11/15 녹화: 교통섬 앞머리 약 5.0 m(3차선 끝), 3번 코너 약 7.2 m, 코너 앞 저속 접근이 켜진 곳 8.0~8.3 m → 6.0
+                 # 합성 시험 장면은 3차선이 더 길어 None으로 끔 (three_lane.py, test_sections.py)
+                 'lane_change_max_distance': 6.0},
     # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
     # speed: 서행 속도. 상한 0.2와 차이를 분명히
     # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
@@ -221,11 +227,19 @@ ANSWER_CONFIG = {
         # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지.
         # 같은 날 문 중점 직선거리 0.3 m는 안 켜짐 (차로 중앙과 문 중점이 옆으로 어긋남) → 붉은색 + 콘 앞 방향 거리로 변경
         'cone_enter_distance': 0.3,
+        # 11/15 인계 조건 (cones.start_gate): 코너 유지 중에는 차 진행 폭(좌우 cone_hold_half_width m) 안 콘이 바로 앞일 때만,
+        # 유지가 아니면 문을 정면으로 볼 때(문 중점 앞 cone_face_distance·옆 cone_face_lateral 안, 방향 cone_face_angle rad 안) 미리 인계
+        'cone_hold_half_width': 0.2, 'cone_face_distance': 1.0, 'cone_face_lateral': 0.2, 'cone_face_angle': 0.35,
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
-        'sign_cooldown': 12.0, 'fork_bias': 0.55, 'pedestrian_wait': 3.2,
-        'stop_offset': 0.088, 'stop_tolerance': 0.025, 'stop_approach_speed': 0.13,
+        'sign_cooldown': 12.0, 'fork_bias': 0.55,
+        # 11/15 주최 답변: 정지 거리(정지선 ±5 cm) 판정은 앞바퀴 → 목표 = 앞축이 선 가까운 모서리 위.
+        # main_1115_1904: stop_offset 0.088 + stop_tolerance 0.025 → 앞축이 선 0.111 m 앞 정지(보행자·신호등 모두) = 범위 밖
+        # 실제 정지 지점 = stop_offset + stop_tolerance 근처. stop_min_speed: 마지막 접근 최저 속도(m/s, 너무 느리면 안 움직임)
+        # pedestrian_wait: 같은 녹화 실제 정지 3.2 s (규정 3초 이상, 여유 부족) → 4.0
+        'pedestrian_wait': 4.0,
+        'stop_offset': 0.0, 'stop_tolerance': 0.01, 'stop_min_speed': 0.025, 'stop_approach_speed': 0.13,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,
@@ -234,14 +248,27 @@ ANSWER_CONFIG = {
         # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
-        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.045,
-        # 11/14: 보행자 stop_offset 0.015 → 0.088 (신호등과 같은 값. lap3 보행자는 선 0.04 m 앞 = 선 밟음, 신호등은 0.14 m 앞)
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.133,   # 11/15: −0.045에서 stop_offset과 같은 폭(−0.088) 이동, 실차 재확인 필요
+        # 11/14: 보행자 stop_offset 0.015 → 0.088 (lap3 보행자 선 0.04 m 앞을 선 밟음으로 봄). 11/15 앞바퀴 기준 확정으로 0.0
         # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
         'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
         'slow_min_speed': 0.05,   # 이 속도(m/s) 이상으로 움직일 때만 서행 표지판 수용 (출발 전 소진 방지)
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
         # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
-        'fork_distance': 3.0,
+        # 11/15: 3.0 → 2.5. 표지판 통과(구간 거리 4.2~4.8 m) + 2.5 m = 교통섬 꼬리(약 6.7 m)는 지나고 3번 코너(약 7.2 m) 전
+        # (fix_1115_1949 B 길, main_1115_1904 A 길). 이 거리 동안만 바깥선 하나 추종(fork_outer_only), 뒤에는 일반 차선 주행
+        'fork_distance': 2.5,
+        # 분기 입구 1순위 = 표지판 통과: 화살표를 면적 fork_sign_pass_area 이상으로 본 뒤 fork_sign_pass_distance(m)·
+        # fork_sign_pass_seconds(s) 넘게 안 보이면 입구 (두 녹화에서 사라지기 직전 면적 0.009~0.08)
+        'fork_sign_pass_area': 0.006, 'fork_sign_pass_distance': 0.15, 'fork_sign_pass_seconds': 0.5,
+        # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
+        'fork_wrong_lane_distance': 0.4,
+        # 분기 입구 뒤 이 거리(m)까지만 바깥선 하나 추종 (교통섬 앞머리의 비스듬한 선 구간). 뒤에는 두 선 모두 사용
+        'fork_outer_distance': 0.8,
+        # 화살표 박스 선별 (driver.arrow_filter): 가로:세로 범위, S2 직선 방향에서 허용 틀어짐(°), 영상 가로/세로 비
+        'fork_sign_aspect': (0.6, 1.6), 'fork_sign_max_turn': 20.0, 'fork_sign_image_aspect': 4/3,
+        # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
+        'fork_relock_frames': 5,
         # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
         # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
         # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)
@@ -317,6 +344,11 @@ ANSWER_CONFIG = {
         'stop_distance': 0.6, 'approach_speed': 0.15,
         # 선 색으로 현재 차로 확인: 노랑/흰 → 2, 흰/흰 → 1, 흰/노랑 → 0. 새 카메라 프레임 이 수만큼 연속 같으면 index 보정
         'index_confirm_frames': 5,
+        # 차가 도로 방향에서 이만큼(rad) 넘게 틀어져 있으면 선 색으로 차로를 판정하지 않음 (11/15 main_1115_1904 178~179 s:
+        # 0→1 이동 중 왼쪽으로 약 30° 틀어진 채 두 차로 건너 바깥 노란 선 + 흰 점선을 '노랑/흰 = 2번 차로'로 봄)
+        'index_heading_max': 0.3,
+        # 이동 시작 방향: 직전 이동이 chain_seconds(s) 안에 끝났으면 적분해 온 방향을 이어 씀, 아니면 최근 heading_frames 프레임 중앙값
+        'chain_seconds': 2.0, 'heading_frames': 5,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
