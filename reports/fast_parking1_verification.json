@@ -6,9 +6,32 @@
   "new_tests_passed": 9,
   "colcon_build": "passed",
   "installed_launch": "fast_parking1.launch.py",
-  "synthetic_approach_speeds_m_s": [0.2, 0.3, 0.4],
-  "braking_model_m_s2": 0.30,
+  "synthetic_approach_speeds_m_s": [
+    0.2,
+    0.3,
+    0.4
+  ],
+  "braking_model_m_s2": 0.3,
   "turn_speed_m_s": 0.12,
   "hardware_verified": false,
-  "scope": "Synthetic controller transitions, ideal braking model, parking and traffic regressions. No measured lap-time or physical parking success rate."
+  "scope": "Synthetic controller transitions, ideal braking model, parking and traffic regressions. No measured lap-time or physical parking success rate.",
+  "integration": {
+    "main_commit": "8cd83d8",
+    "merge_commit": "d597565",
+    "tests_passed": 128,
+    "tests_failed": 4,
+    "build": "passed",
+    "failures": [
+      "TrafficTest.test_stop_then_green_crossing",
+      "TrafficStopTest.test_traffic_ignores_plain_line_and_stops_3cm_before",
+      "test_sections.test_missing_signs",
+      "test_sections.test_detector_loss"
+    ],
+    "baseline_main_confirmed_failures": [
+      "TrafficTest.test_stop_then_green_crossing",
+      "TrafficStopTest.test_traffic_ignores_plain_line_and_stops_3cm_before",
+      "test_sections.test_missing_signs"
+    ],
+    "notes": "Parking, lane-change boundary and cone-exit tests passed. Full-course synthetic scenarios did not reach parking. No hardware verification."
+  }
 }
