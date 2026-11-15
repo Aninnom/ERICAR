@@ -143,6 +143,8 @@ ANSWER_CONFIG = {
         'lost_grace': 1.2,           # 차선 놓친 뒤 몇 초까지 계속 갈지
         'smoothing': 0.55,           # lookahead 중앙 흔들림 완화. 1에 가까울수록 이번 프레임을 더 믿음
         'stop_min_width': 0.32, 'stop_max_thickness': 0.13,   # 정지선 최소 길이·최대 두께(m)
+        # 정지선 탐색 전 흰 마스크를 차선 방향으로 펴는 세로 밀기 기울기(행/px) 하한·상한. stop_level_max 0이면 끔 (11/16, lane_vision.stop_level)
+        'stop_level_min': 0.03, 'stop_level_max': 0.6,
         'abnormal_fit_residual': 0.035, 'solid_row_fraction': 0.85,
     },
     'pid': {
@@ -354,7 +356,8 @@ ANSWER_CONFIG = {
         # arc_finish_heading: 복귀 뒤 이 각(rad) 안이면 종료. lateral_scale: 추측 항법 횡이동 배율 (실제가 더 감 → 1보다 큼)
         # 자전거 모델 계산(추측 항법 0.8배, 조향 지연 0.15 s): pursuit 1.35 m·최대 42°·끝 8.6°·차선 오차 0.21 m
         #   → arc + 1.2배 1.26 m·30°·2.8°·0.04 m. 두 값(arc_angle, lateral_scale)은 실차 조정 필요
-        'steer_mode': 'arc', 'arc_angle': 30.0, 'arc_gain': 2.5, 'arc_margin': 0.03, 'arc_finish_heading': 0.05,
+        # 11/16 main_1116_fix1: 30°에서 직선 구간 2.5~3.1 s(실제 최대 33~38°)로 김 → 36 (계산상 직선 약 1.8 s, 최대 약 42°). 실차 34~38에서 조정
+        'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.03, 'arc_finish_heading': 0.05,
         'lateral_scale': 1.2,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료

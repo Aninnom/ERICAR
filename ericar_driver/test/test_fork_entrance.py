@@ -271,19 +271,25 @@ def test_corner_hold_after_destination():
                 angle_increment=.01, stamp=0.)
     lane_result = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
                        abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
-    for sign, phase, index, expected in (('left', 'follow', 2, True), ('left', 'exit', 2, True), ('left', 'align', 1, False),
-                                         ('right', 'follow', 0, True), ('right', 'exit', 0, True),
-                                         ('right', 'align', 1, False)):
+    import math
+    # 정렬 중이어도 S2 6 m 뒤(3차선 끝)·3번 코너 안(15° 넘게 돎)이면 허용 (11/16 main_1116_arc1 205~210 s)
+    for sign, phase, index, expected, distance, turned in (
+            ('left', 'follow', 2, True, 0., 0.), ('left', 'exit', 2, True, 0., 0.), ('left', 'align', 1, False, 0., 0.),
+            ('right', 'follow', 0, True, 0., 0.), ('right', 'exit', 0, True, 0., 0.), ('right', 'align', 1, False, 0., 0.),
+            ('left', 'align', 1, False, 5.5, 10.), ('left', 'align', 1, True, 6.2, 0.), ('left', 'align', 1, True, 5.5, 17.),
+            ('right', 'align', 1, True, 9.9, 17.)):
         c = copy.deepcopy(ANSWER_CONFIG)
         c['missions']['start_stage'] = 'fork'
         d = Driver({'answer': c, 'robot': robot})
         d.fork = mission(sign)
         d.fork.phase, d.lane_change.index = phase, index
+        d.sections.distance = distance
+        d.sections.yaw = -math.radians(90.*d.sections.index+turned)
         seen = []
         original = d.main_lane_command
         d.main_lane_command = lambda *a, **k: (seen.append(a[5]), original(*a, **k))[1]
         d.update(lane_result, scan, [], 0., .2, 1.)
-        assert seen and seen[0] is expected, (sign, phase, seen)
+        assert seen and seen[0] is expected, (sign, phase, distance, turned, seen)
 
 
 def test_outer_only_ends_after_island():

@@ -148,6 +148,9 @@ class Driver:
         cones = self.cones
         if not cones.started:
             return None
+        # S4(4번 코너 뒤 직선)에서는 안 씀: 코너 안은 코너 유지 규칙(corner_left_limit)이 맡음 (11/16)
+        if self.c['sections']['enabled'] and self.sections.index >= START_SECTION['traffic']:
+            return None
         if not (cones.active or cones.since_exit <= self.c['lidar']['cone_lane_left_distance']):
             return None
         return self.c['lidar']['cone_lane_left_limit']
@@ -565,7 +568,11 @@ class Driver:
         # 예전에는 fork.running 전체를 막아 표지판을 읽으면 S3 전환까지 3번 코너 유지가 꺼짐 → 선을 놓친 뒤 조향이 풀려
         # 벽으로 직진 (11/15 main_1115_1904 216~221 s A 길, fix_1115_1949 204~209 s B 길)
         # 표지판을 못 읽은 주행(11/14 lap5)은 원래 유지가 켜진 채 같은 코너 통과. S자 오시작은 start_far_angle·hold_min_turned가 막음
-        in_fork = self.fork.running and self.fork.phase not in ('follow', 'exit')
+        # 정렬 중이어도 3차선 구간이 끝났거나(three_lane_over) 3번 코너 안(corner3)이면 허용 (11/16 main_1116_arc1 205~210 s:
+        # 차선 변경이 수동 개입으로 늦어져 S2 6 m 뒤 차선 변경이 꺼짐 → 목적 차로에 못 가 align에 고정 → 3번 코너 유지 금지 →
+        # 선 놓친 뒤 조향 −0.25 → −0.04로 풀려 라바콘 정면 정지). 갈림길이 어떤 이유로 안 끝나든 코너는 돌게 함
+        in_fork = (self.fork.running and self.fork.phase not in ('follow', 'exit')
+                   and not self.three_lane_over() and not self.corner3())
         # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
         # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
         # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함
@@ -640,6 +647,13 @@ class Driver:
                 # 라바콘 직후: 콘 통과 방향이 틀어진 채 4번 코너에 들어감 → 코너 유지 뒤 0.37 ↔ 0.23 m/s로 출렁임 (lap4 214~216 s)
                 self.cone_exit_left -= abs(velocity)*dt
                 speed = min(speed, self.c['lidar'].get('cone_exit_slow_speed', 0.22))
+        if self.state != 'lane':
+            # 라바콘 뒤 거리(한 선 이름 힌트·저속 구간)는 상태와 무관하게 셈. 예전: lane 상태에서만 줄어 정지 접근에 들어가면 멈춤 →
+            # 힌트가 접근 내내 켜져 오른쪽 선을 왼쪽으로 이름 → 우회전·신호등 추돌 (11/16 main_1116_fix1 218~225 s, 라바콘 뒤 1.49 m에서 멈춤)
+            if not self.cones.active:
+                self.cones.since_exit += abs(velocity)*dt
+            if self.cone_exit_left > 0:
+                self.cone_exit_left -= abs(velocity)*dt
         speed = self.stop_missions(speed, velocity, green_only, now)
         if self.c['parking'].get('test_drive_until_sign',False):
             speed=min(speed,self.c['parking']['scan_speed'])

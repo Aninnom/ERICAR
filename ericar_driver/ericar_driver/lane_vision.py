@@ -33,6 +33,7 @@ class LaneVision:
         self.previous_center = None   # 이전 프레임 차로 중앙(px), 시작점 탐색 기준
         self.memory = {}              # 좌/우 선별 마지막으로 본 픽셀 {이름: (행 배열, x 배열, 지난 프레임 수)}, 이름 이어받기용
         self.corner_left_limit = None # 우회전 코너 중이면 m 값 (loop가 설정). 기억 없는 한 선 이름 판단 기준
+        self.memory_first = False     # 참이면 한 선 이름을 기억한 선에서 먼저 이어받고, 기억이 없을 때만 corner_left_limit (loop가 정지 접근 중 설정)
         # 3차선 끝 차로(또는 그쪽으로 차선 변경 중)면 노란 바깥선이 있는 쪽 'left'/'right' (loop가 설정), 아니면 None
         # 바깥 차로에서 노란 선만 보일 때 위치로 이름을 붙이면 차가 노란 선에 붙은 순간 '오른쪽 선'으로 오판
         # → 차로 중앙을 더 바깥으로 계산해 트랙 밖으로 나감 (11/11 run_1111_1241 17.8~22.7 s, n=r → 이탈) (소민)
@@ -276,8 +277,40 @@ class LaneVision:
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
 
         # ---------- 정지선 ----------
-        self.find_stop_line(result, stop_lines, lane_px, bird if white_bird is None else white_bird)
+        # 차가 차로 방향에서 틀어져 있으면 BEV에서 정지선이 기울어 가로 열림(1행 × stop_min_width)에 통째로 지워짐
+        # (11/16 main_1116_arc1 244.5~250.6 s: 4번 코너 뒤 7° 틀어진 채 접근 → 신호등 정지선 후보 0개 → 빨강 면적 예비 정지로
+        #  선 약 0.6 m 앞 '천천히' 위 정지). 차선 방향으로 흰 마스크를 세로 밀기(shear)해 수평으로 편 뒤 탐색. 차로 중심 열은 그대로라 거리 불변
+        white_source = bird if white_bird is None else white_bird
+        self.find_stop_line(result, stop_lines, lane_px, white_source)
+        # 원래 탐색이 우선. 횡단보도 앞 선을 못 찾았을 때만 편 마스크로 다시 찾아 보탬 (원래 찾던 선은 그대로 → 보행자 등 기존 동작 유지)
+        level = self.stop_level(fits, spans, result['center_px'], w, h) if result['valid'] else None
+        if level is not None and result['crosswalk_distance'] is None:
+            leveled = cv2.warpAffine(white_source, level, (w, h), flags=cv2.INTER_NEAREST)
+            extra = dict(stop_distance=None, stop_candidates=[], crosswalk_distance=None, center_px=result['center_px'])
+            valid = self.valid_bird
+            if valid is not None and valid.shape == leveled.shape:
+                self.valid_bird = cv2.warpAffine(valid.astype(np.uint8), level, (w, h), flags=cv2.INTER_NEAREST) > 0
+            self.find_stop_line(extra, cv2.morphologyEx(leveled, cv2.MORPH_OPEN, kernel), lane_px, leveled)
+            self.valid_bird = valid
+            result['crosswalk_distance'] = extra['crosswalk_distance']
+            if result['stop_distance'] is None:
+                result['stop_distance'] = extra['stop_distance']
+            known = [cand['distance'] for cand in result['stop_candidates']]
+            result['stop_candidates'] += [cand for cand in extra['stop_candidates']
+                                          if all(abs(cand['distance'] - d) > 0.05 for d in known)]
         return result
+
+    def stop_level(self, fits, spans, center, w, h):
+        """정지선을 수평으로 펴는 세로 밀기 행렬 (없으면 None). 차선 기울기 s(px/행) → 차로에 수직인 선의 기울기 k(행/px) = s × (행/m ÷ px/m)²"""
+        c = self.c
+        limit = c.get('stop_level_max', 0.6)
+        if not fits or not limit:
+            return None
+        slopes = [float(np.mean(np.polyval(np.polyder(fits[sd]), np.arange(spans[sd][0], spans[sd][1] + 1, 5.0)))) for sd in fits]
+        k = float(np.clip(np.mean(slopes) * (1.0 / self.row_m / self.scale) ** 2, -limit, limit))
+        if abs(k) < c.get('stop_level_min', 0.03):
+            return None
+        return np.float32([[1, 0, 0], [k, 1, -k * center]])
 
     @staticmethod
     def band_hist(mask):
@@ -446,6 +479,11 @@ class LaneVision:
         c = self.c
         row, x = anchor
         lateral = (c['width_px'] / 2 - x) / self.scale                   # 가까운 끝 좌우 위치(m, + 왼쪽)
+        if self.memory_first and self.memory:
+            distances = {sd: float(np.min(np.hypot((x - mx) / self.scale, (row - mr) * self.row_m)))
+                         for sd, (mr, mx, _) in self.memory.items()}
+            if min(distances.values()) < c['lane_width'] / 2:
+                return min(distances, key=distances.get)
         if self.corner_left_limit is not None:
             # 우회전 코너 유지 중·직후(loop가 설정): 안쪽 선은 오른쪽 사각으로 빠지고 앞에 남는 건 바깥(왼쪽) 선
             # 위치 경계(±0.14)로 나누면 차 앞 선을 오른쪽으로 오판 → 왼쪽 목표 → 바깥 선 넘음
