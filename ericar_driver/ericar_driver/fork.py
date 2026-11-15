@@ -2,8 +2,12 @@
 
 
 class ForkMission:
-    """lane → locked → align → follow → (분기 입구) exit → done. 입구에서 목표 차로가 아니면 manual(정지).
-    +1=A(왼쪽), -1=B(오른쪽)
+    """lane → locked → align → follow → (분기 입구) exit → done. 입구에서 가운데 차로면 manual(정지),
+    반대편 끝 차로면 그 길로 진행 (미션 점수는 잃지만 멈추지 않음). +1=A(왼쪽), -1=B(오른쪽)
+
+    11/15 (fix_1115_1949): 점선 끝 판정이 실제 트랙에서 안 걸림 (길 안 흰 표시를 점선으로 봄) → follow가 구간 전환까지 유지.
+    - 분기 입구 1순위 = 표지판 통과 (see_sign): 표지판이 크게 보이다가 사라짐 = 교통섬 바로 앞. 점선 끝은 보조
+    - 방향 교체 (relock): 입구 전까지 반대 화살표가 다시 확정되면 목적지 변경 (트랙 밖 물체를 표지판으로 오검출)
 
     분기 입구 = 흰 점선이 끝나는 곳 (소민 11/12). 카메라로 본 가장 먼 점선까지 거리(lane['dash_end'])를
     기억하고, 안 보이면 주행 거리만큼 줄여 남은 점선 거리(dash_left)를 추정
@@ -16,7 +20,8 @@ class ForkMission:
     - 점선을 한 번도 못 봤으면 예전 동작 그대로 (follow에서 follow_distance 뒤 done)
     """
 
-    def __init__(self, lane_count, follow_distance, far=1.7, dash_gap=0.3, entrance_confirm=0.3):
+    def __init__(self, lane_count, follow_distance, far=1.7, dash_gap=0.3, entrance_confirm=0.3,
+                 pass_area=0.006, pass_distance=0.15, pass_seconds=0.5, wrong_lane_distance=0.4):
         self.lane_count = lane_count
         self.follow_distance = follow_distance
         self.far, self.dash_gap, self.entrance_confirm = far, dash_gap, entrance_confirm
@@ -30,6 +35,12 @@ class ForkMission:
         self.dash_left = None    # 남은 흰 점선 거리 추정(m). None = 아직 못 봄
         self.dash_gone = 0.      # 마지막으로 점선을 본 뒤 주행 거리(m)
         self.dash_locked = False  # 점선 끝 확정: 이후 더 먼 '점선'(길 안 흰 글자·흰 선)으로 남은 거리 안 늘림
+        # 표지판 통과 판단: 면적 pass_area 이상으로 본 뒤(sign_near) pass_distance(m)·pass_seconds(s) 넘게 안 보이면 통과
+        # 반대편 끝 차로(align)는 wrong_lane_distance(m)까지 안 보여야 그 길로 진행 (검출 끊김에 목적지를 쉽게 포기하지 않게)
+        self.pass_area, self.pass_distance, self.pass_seconds = pass_area, pass_distance, pass_seconds
+        self.wrong_lane_distance = wrong_lane_distance
+        self.sign_near = False
+        self.sign_gone = self.sign_gone_time = 0.
 
     @property
     def running(self):
@@ -90,10 +101,57 @@ class ForkMission:
             # 표지판 없이 끝 차로: 그 차로의 출구로 진행
             self.destination = index
             self.direction = 1 if index > center else -1
+        self.enter(index)
+
+    def enter(self, index):
+        """분기 입구 도착 처리. 목표 차로 → exit, 반대편 끝 차로 → 그 길로 exit, 가운데 → manual(정지)"""
+        center = self.lane_count//2
+        if self.destination is not None and index != self.destination and index != center:
+            # 반대편 끝 차로: 교통섬을 가로지를 수 없음. 멈추지 않고 지금 차로의 길로 진행 (11/15, 예전: manual 정지)
+            self.destination = index
+            self.direction = 1 if index > center else -1
         if self.destination is not None and index == self.destination:
             self.phase, self.travel = 'exit', 0.
         else:
-            self.phase = 'manual'   # 가운데·반대편: 교통섬을 가로지르지 않고 정지
+            self.phase = 'manual'   # 가운데: 교통섬을 가로지르지 않고 정지
+
+    def see_sign(self, area, index, changing, velocity, dt, fresh=True):
+        """매 주기 호출. area = 이번 주기 화살표 표지판 최대 면적 비율 (안 보이면 None)
+        fresh = 이번 주기에 표지판을 볼 수 있었는지 (검출 최신 + 차가 도로 방향을 봄)
+        표지판은 교통섬 앞머리에 있음 → 크게 보이다가 화면에서 사라지면 섬 바로 앞 = 분기 입구
+        목적 차로를 따라가는 중(follow)이거나 반대편 끝 차로(align)일 때만 판정. 가운데 차로는 점선 판정에 맡김
+        차선 변경 중·볼 수 없는 주기는 '안 보인 거리'를 세지 않음 (틀어진 자세라 화면 밖일 뿐)"""
+        if not self.running or self.entered:
+            return
+        if area is not None:
+            self.sign_gone = self.sign_gone_time = 0.
+            if area >= self.pass_area:
+                self.sign_near = True
+            return
+        if changing or not fresh:
+            self.sign_gone = self.sign_gone_time = 0.
+            return
+        if not self.sign_near:
+            return
+        self.sign_gone += max(0., velocity)*dt
+        self.sign_gone_time += dt
+        if self.sign_gone < self.pass_distance or self.sign_gone_time < self.pass_seconds:
+            return
+        if self.phase == 'follow' or (self.phase == 'align' and index != self.lane_count//2
+                                      and self.sign_gone >= self.wrong_lane_distance):
+            self.enter(index)
+
+    def relock(self, signs, stamp):
+        """확정 뒤 반대 화살표가 다시 확정되면 목적지 교체. 입구를 지난 뒤(exit·manual)에는 안 바꿈"""
+        arrows = set(signs) & {'left', 'right'}
+        if self.phase not in ('locked', 'align', 'follow') or len(arrows) != 1 or arrows == {self.sign}:
+            return False
+        self.sign = next(iter(arrows))
+        self.direction = 1 if self.sign == 'left' else -1
+        self.destination = self.lane_count-1 if self.direction > 0 else 0
+        self.stamp, self.phase = stamp, 'align'
+        self.sign_near, self.sign_gone, self.sign_gone_time = False, 0., 0.
+        return True
 
     def lock(self, signs, stamp):
         arrows = set(signs) & {'left', 'right'}

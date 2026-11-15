@@ -87,13 +87,16 @@ def test_early_and_late():
 
 
 def test_wrong_lane_stops():
-    for sign, index in [('left', 1), ('left', 0), ('right', 1), ('right', 2)]:
+    # 가운데 차로: 교통섬 정면 → 정지. 반대편 끝 차로: 멈추지 않고 그 길로 진행 (11/15, 예전 manual)
+    for sign, index, phase in [('left', 1, 'manual'), ('left', 0, 'exit'), ('right', 1, 'manual'), ('right', 2, 'exit')]:
         f = mission(sign)
         drive(f, index, .5, FAR)
         assert f.phase == 'align'
         drive(f, index, 1.7, None)          # 점선 끝 → 입구
-        assert f.phase == 'manual', (sign, index, f.phase)
+        assert f.phase == phase, (sign, index, f.phase)
         assert not f.allows_change(False) and f.request(index, False) == 0
+        if phase == 'exit':
+            assert f.destination == index and f.direction == (1 if index == 2 else -1)
 
 
 def test_right_lane_exits():
@@ -187,9 +190,78 @@ def test_false_dash_after_end():
     assert f.phase == 'follow' and f.dash_left == FAR and not f.late
 
 
+def test_sign_pass():
+    """표지판 통과 = 분기 입구 (11/15 fix_1115_1949: 점선 끝 판정이 안 걸려 follow가 구간 전환까지 유지)"""
+    def see(f, index, distance, area, changing=False, fresh=True, v=.2, dt=.05):
+        for _ in range(int(round(distance/(v*dt)))):
+            f.step(index, changing, v, dt)
+            f.observe(lane(FAR), index, changing, v, dt)      # 점선은 계속 보임 (오검출 포함) → 점선 판정은 안 걸림
+            f.see_sign(area, index, changing, v, dt, fresh)
+    # 목적 차로: 크게 보이다 사라지면 exit, 2.5 m 뒤 done
+    f = ForkMission(3, 2.5, far=FAR, dash_gap=.45, entrance_confirm=.3)
+    f.observe(lane(FAR), 1, False, 0., .05)
+    assert f.lock({'left'}, 0.)
+    see(f, 2, .5, .003)
+    assert f.phase == 'follow'
+    see(f, 2, .3, None)
+    assert f.phase == 'follow', '멀리서(작은 박스) 놓친 것을 통과로 봄'
+    see(f, 2, .5, .01)
+    see(f, 2, .1, None)
+    assert f.phase == 'follow'
+    see(f, 2, .1, None)
+    assert f.phase == 'exit' and not f.allows_change(False)
+    see(f, 2, 2.4, None)
+    assert f.phase == 'exit'
+    see(f, 2, .2, None)
+    assert f.phase == 'done'
+    # 차선 변경 중·검출 끊김·틀어진 자세(fresh False)는 안 보인 거리로 안 셈
+    f = mission('left')
+    see(f, 2, .3, .01)
+    see(f, 2, 1., None, changing=True)
+    see(f, 2, 1., None, fresh=False)
+    assert f.phase in ('align', 'follow')
+    # 반대편 끝 차로: 0.4 m 넘게 안 보이면 그 길로 진행. 가운데 차로는 표지판 통과로 판정 안 함
+    f = mission('left')
+    see(f, 0, .3, .01)
+    see(f, 0, .3, None)
+    assert f.phase == 'align'
+    see(f, 0, .2, None)
+    assert f.phase == 'exit' and f.destination == 0 and f.direction == -1
+    f = mission('left')
+    see(f, 1, .3, .01)
+    see(f, 1, 1., None)
+    assert f.phase == 'align'
+
+
+def test_relock():
+    f = mission('right')
+    assert not f.relock({'right'}, 1.) and not f.relock({'left', 'right'}, 1.)
+    assert f.relock({'left'}, 1.) and f.destination == 2 and f.direction == 1 and f.phase == 'align'
+    f.phase = 'exit'
+    assert not f.relock({'right'}, 2.), '입구를 지난 뒤 방향 교체'
+
+
+def test_arrow_filter():
+    """트랙 밖 물체 오검출 제외 (fix_1115_1949 168.3 s 파란 천막: 가로:세로 2.45, 차 34° 틀어짐)"""
+    import copy
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    c = copy.deepcopy(ANSWER_CONFIG)
+    c['missions']['start_stage'] = 'fork'
+    d = Driver({'answer': c, 'robot': robot})
+    tarp = dict(name='right', area=.0184, bbox=[.303, .373, .486, .473])
+    sign = dict(name='left', area=.008, bbox=[.1, .348, .177, .452])
+    other = dict(name='slow', area=.01, bbox=[.1, .3, .5, .4])
+    assert d.arrow_filter([tarp, sign, other]) == [sign, other]
+    d.sections.turned = 34.0
+    assert d.arrow_filter([tarp, sign, other]) == [other]
+
+
 def test_corner_hold_after_destination():
-    """A(왼쪽) 길은 목적 차로 도착 뒤(follow·exit) 코너 유지 허용, 정렬 중·B 길은 금지 (11/15 main_1115_1904 216~221 s:
-    표지판을 읽으면 S3 전환까지 fork.running이라 3번 코너 유지가 꺼져 벽으로 직진)"""
+    """목적 차로 도착 뒤(follow·exit)에는 A·B 모두 코너 유지 허용, 정렬 중은 금지 (11/15 main_1115_1904 216~221 s A 길,
+    fix_1115_1949 204~209 s B 길: 표지판을 읽으면 S3 전환까지 fork.running이라 3번 코너 유지가 꺼져 벽으로 직진)"""
     import copy
     import yaml
     from ericar_driver.driver import Driver
@@ -200,7 +272,8 @@ def test_corner_hold_after_destination():
     lane_result = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
                        abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
     for sign, phase, index, expected in (('left', 'follow', 2, True), ('left', 'exit', 2, True), ('left', 'align', 1, False),
-                                         ('right', 'follow', 0, False), ('right', 'exit', 0, False)):
+                                         ('right', 'follow', 0, True), ('right', 'exit', 0, True),
+                                         ('right', 'align', 1, False)):
         c = copy.deepcopy(ANSWER_CONFIG)
         c['missions']['start_stage'] = 'fork'
         d = Driver({'answer': c, 'robot': robot})
@@ -223,5 +296,8 @@ if __name__ == '__main__':
     test_without_dashes_keeps_old_behavior()
     test_driver_manual_stop()
     test_false_dash_after_end()
+    test_sign_pass()
+    test_relock()
+    test_arrow_filter()
     test_corner_hold_after_destination()
     print('분기 입구 판단 시험 통과')

@@ -246,7 +246,18 @@ ANSWER_CONFIG = {
         'slow_min_speed': 0.05,   # 이 속도(m/s) 이상으로 움직일 때만 서행 표지판 수용 (출발 전 소진 방지)
         'traffic_max_wait': 60.0,   # 신호등 정지 후 녹색을 못 본 채 이 시간(s) 넘으면 포기하고 진행. 신호 주기 확인 후 조정 (소민)
         # 목표 끝 차로 도착 후 출구 추종 거리(m). 정렬·회피 중에는 차감 없음
-        'fork_distance': 3.0,
+        # 11/15: 3.0 → 2.5. 표지판 통과(구간 거리 4.2~4.8 m) + 2.5 m = 교통섬 꼬리(약 6.7 m)는 지나고 3번 코너(약 7.2 m) 전
+        # (fix_1115_1949 B 길, main_1115_1904 A 길). 이 거리 동안만 바깥선 하나 추종(fork_outer_only), 뒤에는 일반 차선 주행
+        'fork_distance': 2.5,
+        # 분기 입구 1순위 = 표지판 통과: 화살표를 면적 fork_sign_pass_area 이상으로 본 뒤 fork_sign_pass_distance(m)·
+        # fork_sign_pass_seconds(s) 넘게 안 보이면 입구 (두 녹화에서 사라지기 직전 면적 0.009~0.08)
+        'fork_sign_pass_area': 0.006, 'fork_sign_pass_distance': 0.15, 'fork_sign_pass_seconds': 0.5,
+        # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
+        'fork_wrong_lane_distance': 0.4,
+        # 화살표 박스 선별 (driver.arrow_filter): 가로:세로 범위, S2 직선 방향에서 허용 틀어짐(°), 영상 가로/세로 비
+        'fork_sign_aspect': (0.6, 1.6), 'fork_sign_max_turn': 20.0, 'fork_sign_image_aspect': 4/3,
+        # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
+        'fork_relock_frames': 5,
         # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
         # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
         # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)

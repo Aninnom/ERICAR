@@ -64,8 +64,9 @@ def test_immediate_and_memory():
     for t in (0., .1, .2):
         signs(d, ['right'], t)
     assert d.fork_request == -1, '장애물 없을 때 즉시 요청 누락'
-    for i in range(100):
+    for i in range(4):
         signs(d, ['left'], 1+i*.05, wide=1)
+    # 짧은 반대 검출(4프레임)로는 안 바뀜. fork_relock_frames(5) 연속이면 교체 (11/15, test_fork_prepare에서 확인)
     assert d.fork_goal == -1 and d.fork_request == -1, '방향 기억 변경'
     assert d.fork_direction() == 0, '정렬 전 갈림길 선 보정 활성'
     d.lane_change.index = 0

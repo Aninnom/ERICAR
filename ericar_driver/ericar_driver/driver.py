@@ -34,7 +34,12 @@ class Driver:
         self.slow_zone = SlowZone(self.c['slow_zone'])   # 서행·방지턱 (slow_zone.py)
         m = self.c['missions']
         self.fork = ForkMission(self.c['lane_change']['lane_count'], m['fork_distance'], far=self.c['lane']['far'],
-                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3))
+                                dash_gap=m.get('fork_dash_gap', .3), entrance_confirm=m.get('fork_entrance_confirm', .3),
+                                pass_area=m.get('fork_sign_pass_area', .006),
+                                pass_distance=m.get('fork_sign_pass_distance', .15),
+                                pass_seconds=m.get('fork_sign_pass_seconds', .5),
+                                wrong_lane_distance=m.get('fork_wrong_lane_distance', .4))
+        self.signs_fresh = True      # 표지판 검출이 최신인지 (update의 signs_ok)
         self.sync_fork()
         self.traffic_stop_completed = False
         self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
@@ -202,6 +207,33 @@ class Driver:
         kept = {id(d) for d in keep}
         return [d for d in detections if d['name'] not in names or id(d) in kept]
 
+    def arrow_off_axis(self):
+        """S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어짐 = 교통섬 표지판이 화면 밖일 수 있는 자세"""
+        s = self.c['sections']
+        return bool(s['enabled'] and self.sections.index == START_SECTION['fork'] and
+                    abs(self.sections.turned) > self.c['missions'].get('fork_sign_max_turn', 20.0))
+
+    def arrow_filter(self, detections):
+        """갈림길 화살표 박스 선별 (11/15 fix_1115_1949 168.3 s: 장애물 회피로 오른쪽 34° 틀어진 동안 트랙 밖 파란 천막을
+        right로 3프레임 검출 → 방향 확정, 뒤의 진짜 left 51회는 무시됨)
+        - 박스 가로:세로(화소)가 fork_sign_aspect 밖이면 버림 (천막 2.45, 진짜 표지판 0.87~1.11)
+        - S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어져 있으면 버림 (표지판은 교통섬 = 도로 방향 앞에 있음)"""
+        m = self.c['missions']
+        low, high = m.get('fork_sign_aspect', (.6, 1.6))
+        off_axis = self.arrow_off_axis()
+        kept = []
+        for d in detections:
+            if d['name'] in ('left', 'right'):
+                box = d.get('bbox')
+                if off_axis:
+                    continue
+                if box and box[3] > box[1]:
+                    aspect = (box[2]-box[0])*m.get('fork_sign_image_aspect', 4/3)/(box[3]-box[1])
+                    if not low <= aspect <= high:
+                        continue
+            kept.append(d)
+        return kept
+
     def confirmed(self, detections, stamp):
         truncated_allowed = self.c['detector'].get('allow_truncated_classes', ['traffic_red', 'traffic_yellow', 'traffic_green'])
         names = {d['name'] for d in detections
@@ -276,7 +308,7 @@ class Driver:
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
-        detections = self.traffic_filter(detections)
+        detections = self.arrow_filter(self.traffic_filter(detections))
         names = self.confirmed(detections, detection_stamp)
         if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
@@ -296,6 +328,14 @@ class Driver:
         if self.allowed('fork') and self.fork.lock(ready, detection_stamp):
             self.advance('fork')
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
+        elif self.fork.running:
+            # 방향 교체: 반대 화살표가 fork_relock_frames 연속이면 목적지 변경 (대기 시간 cooldown과 무관하게 확인)
+            again = {n for n in ('left', 'right') if self.sign_counts.get(n, 0) >= m.get('fork_relock_frames', 5)}
+            self.fork.relock(again, detection_stamp)
+        # 표지판 통과 = 분기 입구 (fork.see_sign). 화살표가 이번 검출에 없으면 None
+        arrows = [d['area'] for d in detections if d['name'] in ('left', 'right')]
+        self.fork.see_sign(max(arrows) if arrows else None, self.lane_change.index, self.lane_change.active,
+                           velocity, dt, fresh=self.signs_fresh and not self.arrow_off_axis())
         self.sync_fork()
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):
@@ -478,6 +518,7 @@ class Driver:
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
         self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
+        self.signs_fresh = signs_ok
         self.update_stop_line(lane, velocity, now, dt)
         previous_state=self.state
         green_only = self.update_signs(scan, detections, detection_stamp, velocity, now, dt)
@@ -504,11 +545,11 @@ class Driver:
             return speed,steering,state+': '+self.parking.reason
         # 코너 유지는 일반 차선 주행일 때만 (차로 변경·라바콘·정지·주차 중 제외)
         # 갈림길 표지판 후 fork_distance 동안도 제외: 꺾인 선 구간에서 고정 조향 후 과회전 (11/9 hold_1109_c1 150 s)
-        # 코너 유지 금지: 갈림길 정렬 중(locked·align), B(오른쪽) 길은 끝날 때까지 (B 입구 45° 오른쪽 꺾임을 코너로 보면 이탈).
-        # A(왼쪽) 길은 목적 차로 도착 뒤(follow·exit) 허용: 예전에는 fork.running 전체를 막아 표지판을 읽으면 S3 전환까지
-        # 3번 코너 유지가 꺼짐 → 선을 놓친 뒤 조향이 풀려 벽으로 직진 (11/15 main_1115_1904 216~221 s).
+        # 코너 유지 금지는 갈림길 정렬 중(locked·align)·manual에만. 목적 차로 도착 뒤(follow·exit)는 A·B 모두 허용
+        # 예전에는 fork.running 전체를 막아 표지판을 읽으면 S3 전환까지 3번 코너 유지가 꺼짐 → 선을 놓친 뒤 조향이 풀려
+        # 벽으로 직진 (11/15 main_1115_1904 216~221 s A 길, fix_1115_1949 204~209 s B 길)
         # 표지판을 못 읽은 주행(11/14 lap5)은 원래 유지가 켜진 채 같은 코너 통과. S자 오시작은 start_far_angle·hold_min_turned가 막음
-        in_fork = self.fork.running and not (self.fork.direction > 0 and self.fork.phase in ('follow', 'exit'))
+        in_fork = self.fork.running and self.fork.phase not in ('follow', 'exit')
         # 갈림길 뒤 S자 구간 (11/14 lap5 161 s): 차가 S2 직선 방향보다 왼쪽으로 35° 틀어진 채 코너 유지 시작 → 일찍 꺾어 안쪽 선 이탈,
         # 65°만 돌아 코너도 20°에서 끝남. 표지판을 읽으면 fork.running이 막지만 못 읽으면 그대로 시작됨
         # → S2에서 왼쪽으로 hold_min_turned(°) 넘게 틀어져 있으면 새 유지 시작 안 함, 시작할 때 틀어진 만큼 회전각 더함
