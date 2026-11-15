@@ -254,9 +254,8 @@ ANSWER_CONFIG = {
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
-        # 최초 표지판부터 탐색. 목표 감속 거리에서 서행, 표지판 통과만으로 감속 제외
+        # 최초 표지판은 탐색만 시작. 가까운 표지판 통과 또는 목표 감속 거리에서 서행 전환
         'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
-        'slow_on_sign_passed': False, 'no_target_cruise_seconds': 1.0, 'no_target_cruise_distance': .35,
         'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
         'sign_gone_frames': 3, 'sign_gone_seconds': .35,
         'cruise_reaction_time': .25, 'cruise_braking_acceleration': .30, 'cruise_slow_buffer': .10,
@@ -301,7 +300,10 @@ ANSWER_CONFIG = {
     'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
-        'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
+        # 11/15 소민: trigger_distance 1.15 → 1.4 (가까워진 뒤 시작하면 조향 공간 없음 no_safe_steering, 다음 장애물 늦게 봄)
+        'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.4,
+        # 보는 거리: 이동 시작 lookahead(표지판 이동 request_lookahead) → 도착할수록 lookahead_end까지 늘림 (11/15 소민)
+        'lookahead_end': 0.70,
         'lookahead': 0.40, 'request_lookahead': 0.40, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
         # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
         # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
@@ -311,7 +313,11 @@ ANSWER_CONFIG = {
         'max_distance': 3.0,         # 한 차로 이동 최대 주행 거리(m). 넘으면 차선 주행으로 복귀
         # 좌·우 선택 (라이다): 옆 차로가 min_free_distance 이상, 지금 차로보다 free_gain 이상 더 비어 있어야 이동.
         # 둘 다 되면 더 멀리 비어 있는 쪽. 점이 없으면 free_range로 봄 (= lidar planning_point_range)
-        'min_free_distance': 1.0, 'free_gain': 0.3, 'free_range': 3.0,
+        # 11/15 소민: 1.0/0.3 → 0.8/0.1 (지그재그 장애물에서 양쪽 다 탈락해 정지). 0.8보다 낮추면 옮긴 직후 앞 장애물에 닿을 위험
+        'min_free_distance': 0.8, 'free_gain': 0.1, 'free_range': 3.0,
+        # 옆 차로가 차 바로 옆 물체(빈 거리 < beside_free m) 때문에만 막혔으면 앞 장애물에 stop_distance_beside(m, 뒷축)까지 접근
+        # 일반 회피에서 실선을 막힘으로 볼지 (False: 3차선 차로 사이는 점선, 점선 오판 방지)
+        'beside_free': 0.3, 'stop_distance_beside': 0.45, 'solid_blocks_avoid': False,
         # 갈 차로가 없을 때: 앞 장애물까지 stop_distance(m, 뒷축 기준) 넘게 남았으면 approach_speed로 지금 차로 계속 주행,
         # 그 안이면 정지. 0.6 = 한 차로 비켜 가는 데 필요한 최소 앞 거리 근사 (R 0.45, 횡 0.25 m). 실차 조정 필요
         'stop_distance': 0.6, 'approach_speed': 0.15,
