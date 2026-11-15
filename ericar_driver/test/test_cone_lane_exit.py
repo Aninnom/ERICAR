@@ -84,6 +84,10 @@ def test_hint_window():
     from ericar_driver.driver import Driver  # noqa: E402
     driver = FakeDriver()
     driver.c, driver.cones = c, cones
+
+    class Sections:
+        index = 3
+    driver.sections = Sections()
     hint = Driver.cone_left_limit.__get__(driver, FakeDriver)
 
     assert hint() is None, '라바콘이 한 번도 안 켜졌으면 힌트 없음'
@@ -93,10 +97,35 @@ def test_hint_window():
     assert hint() == limit, f'복귀 뒤 {reach} m 안에서는 힌트 유지'
     cones.since_exit = reach + 0.1
     assert hint() is None, f'복귀 뒤 {reach} m를 넘으면 힌트 꺼짐'
+    cones.since_exit = reach - 0.1
+    driver.sections.index = 4
+    assert hint() is None, 'S4(4번 코너 뒤 직선)에서는 힌트 꺼짐'
     print(f'힌트 창: 통과 중 ~ 복귀 뒤 {reach} m, 경계 {limit} m')
 
 
+def test_distance_counts_in_stop_approach():
+    """라바콘 뒤 거리는 정지 접근 상태에서도 셈 (11/16 main_1116_fix1: 1.49 m에서 traffic_approach로 바뀌어 멈춤 →
+    힌트가 접근 내내 켜져 오른쪽 선을 왼쪽으로 이름 → 우회전·신호등 추돌)"""
+    from ericar_driver.driver import Driver  # noqa: E402
+    c = copy.deepcopy(ANSWER_CONFIG)
+    c['missions']['start_stage'] = 'cones'
+    d = Driver({'answer': c, 'robot': ROBOT})
+    scan = dict(front=4.0, rear=4.0, valid_fraction=1.0, wide_objects=0, points=[], ranges=[], angle_min=0.,
+                angle_increment=.01, stamp=0.)
+    lane = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
+                abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
+    d.cones.started, d.cones.active, d.cones.since_exit, d.cone_exit_left = True, False, 1.4, 1.0
+    assert d.cone_left_limit() is not None
+    d.state, d.state_started = 'traffic_approach', 0.
+    for i in range(1, 21):                      # 0.2 m/s로 1 s
+        d.state = 'traffic_approach'
+        d.update(lane, scan, [], 0., .2, i*.05)
+    assert d.cones.since_exit > 1.55 and d.cone_exit_left < .85, (d.cones.since_exit, d.cone_exit_left)
+    assert d.cone_left_limit() is None
+
+
 if __name__ == '__main__':
+    test_distance_counts_in_stop_approach()
     test_single_line_without_hint()
     test_single_line_with_cone_hint()
     test_hint_beats_wrong_memory()

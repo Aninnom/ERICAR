@@ -142,6 +142,10 @@ class ControlLoop:
                                                  # 그 거리가 끝난 뒤 저속 구간이 남아 있으면 코너 값 (lap5: 라바콘 안에서 붙은 '오른쪽' 기억이 4번 코너 바깥 선에 이어져 좌회전)
                                                  else cone_hint if cone_hint is not None
                                                  else c['corner_hold']['corner_left_limit'] if self.driver.cone_exit_left > 0 else None)
+                # 정지 접근·정지 중(보행자·신호등)에는 기억이 힌트보다 먼저 (11/16 main_1116_fix1: 접근 중 왼쪽 선이 노면 표시에 가려
+                # 한 선만 보인 22프레임에서 힌트가 직전까지 '오른쪽'이던 선을 왼쪽으로 이름 → 우회전·신호등 추돌).
+                # 힌트 자체는 유지: 코너 출구에서 기억 없이 보이는 바깥 선은 그대로 왼쪽
+                self.vision.memory_first = self.driver.state.endswith(('_approach', '_hold'))
                 if cone_hint is not None and self.cone_hint is None:
                     self.vision.forget_lines()   # 라바콘 구간에서 붙은 틀린 이름이 이어지지 않게 한 번만
                 self.cone_hint = cone_hint

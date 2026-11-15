@@ -94,7 +94,7 @@ def test_stale_seen_lane():
     result = change.update(lane, clear, .18, 0., .05, True, requested=1, preferred=1)
     assert result is not None and change.active and change.index == 1, '차선 변경이 시작 주기에 종료 (index %d)' % change.index
     # 이동이 끝나면 이동 중 기억은 비움
-    change.offset, change.heading = change.target, 0.0
+    change.offset, change.heading, change.back = change.target, 0.0, True   # 복귀 원호까지 끝난 상태
     change.seen_lane, change.seen_count = 2, 20
     change.update(dict(lane, stamp=101.), clear, .18, 0., .05, True, requested=1, preferred=1)
     assert not change.active and change.index == 2 and change.seen_count == 0
@@ -149,12 +149,12 @@ def test_chained_heading():
     change.index = 0
     change.update(dict(base, heading=0., stamp=1.), clear, .18, 0., .05, True, requested=1, preferred=1)
     assert change.active
-    change.offset, change.heading = change.target, -.1            # 첫 이동 끝: 도로보다 왼쪽 0.1 rad
+    change.offset, change.heading, change.back = change.target, -.04, True   # 첫 이동 끝: 도로보다 왼쪽 0.04 rad
     change.update(dict(base, heading=0., stamp=2.), clear, .18, 0., .05, True, requested=1, preferred=1)
     assert not change.active and change.index == 1
-    # 바로 이어지는 두 번째 이동: 카메라가 −0.48을 줘도 이어 온 −0.1 사용
+    # 바로 이어지는 두 번째 이동: 카메라가 −0.48을 줘도 이어 온 −0.04 사용
     change.update(dict(base, heading=-.48, stamp=3.), clear, .18, 0., .05, True, requested=1, preferred=1)
-    assert change.active and abs(change.heading+.1) < .02, change.heading
+    assert change.active and abs(change.heading+.04) < .02, change.heading
     # 떨어진 이동: 최근 5프레임 중앙값 (한 프레임 튐 제외)
     change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
     change.index = 0

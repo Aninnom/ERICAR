@@ -59,6 +59,7 @@ class LaneChange:
         self.debug = {}
         self.clock, self.free_log = 0.0, []   # 좌·우 선택용 최근 빈 거리 기록 (시각, free)
         self.heading_log = []          # 최근 카메라 차선 방향 (새 프레임마다). 이동 시작 방향은 이 값들의 중앙값
+        self.back = False              # 원호–직선–원호 조향: 복귀 원호(방향을 도로 방향으로 되돌림) 단계인지
         self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
 
     def trusted_colors(self, lane):
@@ -196,13 +197,35 @@ class LaneChange:
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
         points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction)
         error = self.target-self.offset
-        x, y = to_body(c.get('request_lookahead', c['lookahead']) if getattr(self, 'requested_move', False) else c['lookahead'], error, self.heading)
-        desired = pursuit_steering(x, y, self.robot)
+        if c.get('steer_mode', 'arc') == 'arc':
+            desired = self.arc_steering(error)
+        else:
+            x, y = to_body(c.get('request_lookahead', c['lookahead']) if getattr(self, 'requested_move', False) else c['lookahead'], error, self.heading)
+            desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
         self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
         self.debug['reason'] = 'changing' if safe else 'no_safe_steering'
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
         return (c['speed'] if safe else 0.0), steering
+
+    def arc_steering(self, error):
+        """원호–직선–원호 (11/15): 차 방향을 도로 방향에서 arc_angle(°)까지 틀어 유지하다가, 남은 횡오차가
+        '방향을 되돌리는 원호가 차지할 횡거리' 이하가 되면 도로 방향으로 되돌림. 방향은 IMU 적분값(self.heading) 되먹임
+
+        예전 pure pursuit(목표점 0.40 m 앞): 횡오차 0.57 m면 55°를 조준 → 조향 0.42 포화, 최대 41~47° 틀어짐,
+        방향 8.6°(finish_heading) 남은 채 종료 → 차선 주행이 0.2~0.3 m 어긋난 것으로 봄 (fix3_1115_2113 130~149 s)
+        heading 부호: + = 차가 도로 방향보다 오른쪽을 봄 (offset은 heading이 −일 때 왼쪽으로 늘어남)"""
+        c = self.c
+        side = 1.0 if self.target >= 0 else -1.0             # +1 = 왼쪽으로 이동
+        yaw = -self.heading                                   # 도로 방향 기준 차 방향 (+ 왼쪽)
+        radius = self.robot['wheelbase']/math.tan(self.robot['max_steering'])
+        # 지금 방향을 0으로 되돌리는 동안 더 가는 횡거리 + 조향 지연 여유
+        need = radius*(1-math.cos(abs(yaw)))+c.get('arc_margin', .03)
+        if side*error <= need:
+            self.back = True
+        goal = 0.0 if self.back else side*math.radians(c.get('arc_angle', 30.0))
+        limit = self.robot['max_steering']
+        return float(max(-limit, min(limit, c.get('arc_gain', 2.5)*(goal-yaw))))
 
     def start_heading(self, camera):
         """새 이동의 시작 방향(도로 방향 기준 차 방향, rad)
@@ -250,11 +273,16 @@ class LaneChange:
         self.fork_running = bool(preferred)
         self.observe_lane(lane)
         if self.active:
-            self.offset -= velocity*math.sin(self.heading)*dt
+            # lateral_scale: 추측 항법이 실제 횡이동보다 덜 셈 (11/15 fix3_1115_2113: 두 번 모두 0.09~0.20 m 더 감, 11/12 소민 13~19 cm)
+            self.offset -= velocity*math.sin(self.heading)*dt*self.c.get('lateral_scale', 1.0)
             self.travel += abs(velocity)*dt
             self.camera_correct(lane)
             error = self.target-self.offset
-            done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
+            if self.c.get('steer_mode', 'arc') == 'arc':
+                # 복귀 원호가 끝나 도로 방향과 나란해지면 종료 (남은 횡오차는 차선 주행이 처리)
+                done = self.back and abs(self.heading) < self.c.get('arc_finish_heading', .05)
+            else:
+                done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
             done = done or self.camera_finished(lane)
             # 지나침 방지: 목표보다 overshoot(m) 넘게 갔으면 바로 차선 주행으로 (바깥 노란 선 넘음 방지, 소민)
             done = done or abs(self.offset) > abs(self.target)+self.c.get('overshoot', .08)
@@ -338,6 +366,7 @@ class LaneChange:
         self.seen_lane, self.seen_count = None, 0
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = self.start_heading(heading), 0.0, 0.0
+        self.back = False
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.target = direction*self.c['lane_width']+center
