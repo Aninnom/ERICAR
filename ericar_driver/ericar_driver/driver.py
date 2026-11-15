@@ -572,7 +572,13 @@ class Driver:
         s = self.c['sections']
         left_of_axis = -self.sections.turned if s['enabled'] and self.sections.index == START_SECTION['fork'] else 0.0
         self.lane_driver.hold_start_ok = left_of_axis <= s.get('hold_min_turned', 15.0)
-        self.lane_driver.hold_extra = max(0.0, left_of_axis)/s['odom_yaw_scale']
+        # 라바콘 구간(S3)도 틀어진 만큼 더 돎 (시작 금지 조건은 없음): 콘을 나오며 왼쪽으로 15~21° 틀어진 채 4번 코너 유지 시작 →
+        # 65°만 돌아 누적 31~37°에서 끝남 → 남은 코너를 한 선 pursuit로 느리게 돌아 옆 차로 이탈, 횡단보도 앞에서 반대쪽 이탈
+        # (11/15 fix3_1115_2113 197~217 s. 같은 날 앞선 녹화 3개도 31~37°에서 종료). 과회전은 hold_max_turned가 막음
+        tilt = left_of_axis
+        if s['enabled'] and self.sections.index == START_SECTION['cones']:
+            tilt = -self.sections.turned
+        self.lane_driver.hold_extra = max(0.0, tilt)/s['odom_yaw_scale']
         # 코너 유지 상한: 유지를 시작한 구간의 직선 방향에서 오른쪽으로 hold_max_turned(°, IMU) 넘게 돌았으면 끝내고 새로 시작도 안 함
         # 유지는 '시작부터 65°(odom)'라 코너 중간에서 시작하면 과회전 (11/15 fix2_1115_2017 204 s: 44° 돈 지점에서 시작 →
         # 안쪽 첫 콘으로 향함). 정상 코너는 누적 48~67°에서 끝나 영향 없음 (같은 날 녹화 3개)

@@ -365,6 +365,30 @@ def test_lane_change_off_after_three_lane():
     assert d.three_lane_over() and not d.lane_change.active and d.lane_change.debug.get('reason') == 'disabled'
 
 
+def test_hold_extra_after_cones():
+    """라바콘 구간(S3)에서도 왼쪽으로 틀어진 만큼 코너 유지 회전각을 더함 (11/15 fix3_1115_2113: −21°에서 시작해 +31°에서 종료)"""
+    import copy
+    import math
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    scan = dict(front=4.0, rear=4.0, valid_fraction=1.0, wide_objects=0, points=[], ranges=[], angle_min=0.,
+                angle_increment=.01, stamp=0.)
+    lane_result = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
+                       abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
+    for stage, tilt, expected in (('cones', 21., 21.), ('cones', -5., 0.), ('fork', 10., 10.), ('traffic', 21., 0.)):
+        c = copy.deepcopy(ANSWER_CONFIG)
+        c['missions']['start_stage'] = stage
+        d = Driver({'answer': c, 'robot': robot})
+        d.cones.done = True
+        d.sections.yaw = -math.radians(90.*d.sections.index-tilt)
+        d.update(lane_result, scan, [], 0., .2, 1.)
+        want = expected/c['sections']['odom_yaw_scale']
+        assert abs(d.lane_driver.hold_extra-want) < .5, (stage, tilt, d.lane_driver.hold_extra)
+        assert d.lane_driver.hold_start_ok, (stage, tilt)
+
+
 if __name__ == '__main__':
     test_gaps_not_late()
     test_early_and_late()
@@ -382,4 +406,5 @@ if __name__ == '__main__':
     test_outer_only_ends_after_island()
     test_hold_max_turned()
     test_lane_change_off_after_three_lane()
+    test_hold_extra_after_cones()
     print('분기 입구 판단 시험 통과')
