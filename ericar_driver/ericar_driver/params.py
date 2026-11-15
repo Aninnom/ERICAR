@@ -254,8 +254,9 @@ ANSWER_CONFIG = {
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
-        # 최초 표지판은 탐색만 시작. 가까운 표지판 통과 또는 목표 감속 거리에서 서행 전환
+        # 최초 표지판부터 탐색. 목표 감속 거리에서 서행, 표지판 통과만으로 감속 제외
         'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
+        'slow_on_sign_passed': False, 'no_target_cruise_seconds': 1.0, 'no_target_cruise_distance': .35,
         'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
         'sign_gone_frames': 3, 'sign_gone_seconds': .35,
         'cruise_reaction_time': .25, 'cruise_braking_acceleration': .30, 'cruise_slow_buffer': .10,
