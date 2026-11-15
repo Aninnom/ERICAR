@@ -1,4 +1,4 @@
-"""parking_auto2: 일반속도 탐색 → 보정 반경 접근 → 기본 우회전 유지 → 흰 선 소실 즉시 정지"""
+"""fast_parking1: 목표 감속 거리까지 차선 주행 → 저속 우회전 → 흰 선 소실 즉시 정지"""
 import math
 import numpy as np
 from .common import clip
@@ -27,6 +27,7 @@ class Parking:
     def _reset_progress(self):
         self.cruise_distance=0.;self.nearest_start=None;self.slow_started=0.;self.slow_reason=None
         self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
+        self.no_target_since=None;self.no_target_distance=0.;self.braking_distance=0.
 
     def start(self,now):
         self.pd.reset();self.sign.reset();self._reset_progress()
@@ -56,9 +57,11 @@ class Parking:
         feedback=dict(self.pd.debug)
         if self.state in ('parked','parking_failed','parking_cancelled'):
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None,steering_rad=0.)
-        self.debug=dict(mode='parking_auto2',state=self.state,reason=self.reason,gap=self.gap_debug,
+        self.debug=dict(mode='fast_parking1',state=self.state,reason=self.reason,gap=self.gap_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
+                        braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
+                        no_target_age_s=0. if self.no_target_since is None else max(0.,self.last_tick-self.no_target_since),
                         turn_phase=self.turn_phase,turn_angle_deg=math.degrees(self.turn_angle),arc_released=self.arc_released,white_line=self.line_debug,line_seen=self.line_seen,
                         search_distance_m=self.search_distance,turn_distance_m=self.turn_distance,
                         published_speed=float(speed),steering=float(steering))
@@ -199,9 +202,22 @@ class Parking:
                 self._move_target(self.selected,dt,velocity,rate)
                 self.nearest_start=self.selected['entrance'][0]-self._turn_lead()
             else:late=self._find_gap(scan,scan_stamp,now,velocity,rate)
-            close=self.nearest_start is not None and self.nearest_start<=slow_distance(velocity,self.c)
-            if self.sign.passed or close:
-                self._slow(now,'TARGET_BRAKING_DISTANCE' if close else 'NEAR_SIGN_PASSED')
+            cap=self.c['trial_cruise_max_speed'] if self.c.get('test_drive_until_sign') else self.c['cruise_max_speed']
+            requested=0. if search_command is None else min(cap,max(0.,search_command[0]))
+            # 가속 직전에도 요구 속도 기준 감속 거리 확보
+            self.braking_distance=slow_distance(max(abs(velocity),requested),self.c)
+            close=self.nearest_start is not None and self.nearest_start<=self.braking_distance
+            missing=self.sign.passed and self.selected is None and self.nearest_start is None
+            if missing:
+                if self.no_target_since is None:self.no_target_since=now;self.no_target_distance=0.
+                self.no_target_distance+=abs(velocity)*dt
+            else:self.no_target_since=None;self.no_target_distance=0.
+            fallback=missing and (now-self.no_target_since>=self.c['no_target_cruise_seconds'] or
+                                  self.no_target_distance>=self.c['no_target_cruise_distance'])
+            sign_slow=self.sign.passed and self.c['slow_on_sign_passed']
+            if close or sign_slow or fallback:
+                self._slow(now,'TARGET_BRAKING_DISTANCE' if close else
+                           'NEAR_SIGN_PASSED' if sign_slow else 'NO_TARGET_AFTER_SIGN_PASSAGE')
                 dt=0.  # cruise에서 이미 반영한 목표 이동·주행 거리를 중복 적분하지 않음
         if self.state=='parking_scan':
             self.search_distance+=abs(velocity)*dt

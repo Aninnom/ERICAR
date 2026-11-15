@@ -1,0 +1,14 @@
+{
+  "branch": "fast_parking1",
+  "base_commit": "e96c660",
+  "verification_date": "2026-11-15",
+  "tests_passed": 117,
+  "new_tests_passed": 9,
+  "colcon_build": "passed",
+  "installed_launch": "fast_parking1.launch.py",
+  "synthetic_approach_speeds_m_s": [0.2, 0.3, 0.4],
+  "braking_model_m_s2": 0.30,
+  "turn_speed_m_s": 0.12,
+  "hardware_verified": false,
+  "scope": "Synthetic controller transitions, ideal braking model, parking and traffic regressions. No measured lap-time or physical parking success rate."
+}
