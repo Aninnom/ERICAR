@@ -349,6 +349,13 @@ ANSWER_CONFIG = {
         'index_heading_max': 0.3,
         # 이동 시작 방향: 직전 이동이 chain_seconds(s) 안에 끝났으면 적분해 온 방향을 이어 씀, 아니면 최근 heading_frames 프레임 중앙값
         'chain_seconds': 2.0, 'heading_frames': 5,
+        # 이동 중 조향 (11/15): 'arc' = 원호–직선–원호 (lane_change.arc_steering), 'pursuit' = 예전 목표점 추종(lookahead)
+        # arc_angle: 도로 방향에서 틀 최대 각(°). arc_gain: 방향 오차 → 조향 배율. arc_margin: 복귀 시작 여유(m, 조향 지연)
+        # arc_finish_heading: 복귀 뒤 이 각(rad) 안이면 종료. lateral_scale: 추측 항법 횡이동 배율 (실제가 더 감 → 1보다 큼)
+        # 자전거 모델 계산(추측 항법 0.8배, 조향 지연 0.15 s): pursuit 1.35 m·최대 42°·끝 8.6°·차선 오차 0.21 m
+        #   → arc + 1.2배 1.26 m·30°·2.8°·0.04 m. 두 값(arc_angle, lateral_scale)은 실차 조정 필요
+        'steer_mode': 'arc', 'arc_angle': 30.0, 'arc_gain': 2.5, 'arc_margin': 0.03, 'arc_finish_heading': 0.05,
+        'lateral_scale': 1.2,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
