@@ -138,6 +138,32 @@ def test_fork_keeps_edge_index():
     assert change.index == 1
 
 
+def test_chained_heading():
+    """연속 이동은 직전 이동에서 적분해 온 방향을 이어 씀 (11/15 fix2_1115_2017 156.9 s: 카메라 한 프레임 방향 −0.48로
+    두 번째 이동 시작 → 복귀 조향 과다 → 교통섬 직진). 떨어진 이동은 최근 카메라 방향 중앙값"""
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    clear = dict(points=[], wide_objects=0)
+    base = dict(valid=True, error=0., forward=.65, colors={'left': 'white', 'right': 'white'},
+                solid={'left': False, 'right': False})
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 0
+    change.update(dict(base, heading=0., stamp=1.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active
+    change.offset, change.heading = change.target, -.1            # 첫 이동 끝: 도로보다 왼쪽 0.1 rad
+    change.update(dict(base, heading=0., stamp=2.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert not change.active and change.index == 1
+    # 바로 이어지는 두 번째 이동: 카메라가 −0.48을 줘도 이어 온 −0.1 사용
+    change.update(dict(base, heading=-.48, stamp=3.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active and abs(change.heading+.1) < .02, change.heading
+    # 떨어진 이동: 최근 5프레임 중앙값 (한 프레임 튐 제외)
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.index = 0
+    for k, heading in enumerate([.02, .03, -.5, .02, .01]):
+        change.update(dict(base, heading=heading, stamp=float(k)), clear, .18, 0., .05, False)
+    change.update(dict(base, heading=-.6, stamp=9.), clear, .18, 0., .05, True, requested=1, preferred=1)
+    assert change.active and abs(change.heading-.02) < .02, change.heading
+
+
 if __name__ == '__main__':
     test_boundary()
     test_avoid_only()
@@ -145,4 +171,5 @@ if __name__ == '__main__':
     test_stale_seen_lane()
     test_island_yellow()
     test_fork_keeps_edge_index()
+    test_chained_heading()
     print('노란 경계 횡단 차단 시험 통과')

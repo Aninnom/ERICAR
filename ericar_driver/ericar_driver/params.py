@@ -46,7 +46,13 @@ ANSWER_CONFIG = {
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
-                 'hold_min_turned': 15.0},
+                 'hold_min_turned': 15.0,
+                 # 코너 유지는 시작한 구간 직선 방향에서 오른쪽으로 이 각도(°, IMU)까지만. 넘으면 끝내고 새로 시작 안 함
+                 'hold_max_turned': 70.0,
+                 # S2에서 이 거리(m) 넘게 가면 3차선 구간 끝으로 보고 차선 변경 판단을 끔 (분기 입구를 지나면 그 전에 꺼짐).
+                 # 11/15 녹화: 교통섬 앞머리 약 5.0 m(3차선 끝), 3번 코너 약 7.2 m, 코너 앞 저속 접근이 켜진 곳 8.0~8.3 m → 6.0
+                 # 합성 시험 장면은 3차선이 더 길어 None으로 끔 (three_lane.py, test_sections.py)
+                 'lane_change_max_distance': 6.0},
     # 서행·방지턱 (slow_zone.py, 규정 미션 5: 기본의 1/2·최대 0.2 m/s, 육안 판정). 담당 혁준. 값은 실차 확인 전
     # speed: 서행 속도. 상한 0.2와 차이를 분명히
     # entry_distance: 표지판을 못 봐도 S0 주행 거리(m)가 이 값이면 감속 (None이면 표지판만). 현장에서 표지판 위치로 재측정
@@ -221,6 +227,9 @@ ANSWER_CONFIG = {
         # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지.
         # 같은 날 문 중점 직선거리 0.3 m는 안 켜짐 (차로 중앙과 문 중점이 옆으로 어긋남) → 붉은색 + 콘 앞 방향 거리로 변경
         'cone_enter_distance': 0.3,
+        # 11/15 인계 조건 (cones.start_gate): 코너 유지 중에는 차 진행 폭(좌우 cone_hold_half_width m) 안 콘이 바로 앞일 때만,
+        # 유지가 아니면 문을 정면으로 볼 때(문 중점 앞 cone_face_distance·옆 cone_face_lateral 안, 방향 cone_face_angle rad 안) 미리 인계
+        'cone_hold_half_width': 0.2, 'cone_face_distance': 1.0, 'cone_face_lateral': 0.2, 'cone_face_angle': 0.35,
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
@@ -254,6 +263,8 @@ ANSWER_CONFIG = {
         'fork_sign_pass_area': 0.006, 'fork_sign_pass_distance': 0.15, 'fork_sign_pass_seconds': 0.5,
         # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
         'fork_wrong_lane_distance': 0.4,
+        # 분기 입구 뒤 이 거리(m)까지만 바깥선 하나 추종 (교통섬 앞머리의 비스듬한 선 구간). 뒤에는 두 선 모두 사용
+        'fork_outer_distance': 0.8,
         # 화살표 박스 선별 (driver.arrow_filter): 가로:세로 범위, S2 직선 방향에서 허용 틀어짐(°), 영상 가로/세로 비
         'fork_sign_aspect': (0.6, 1.6), 'fork_sign_max_turn': 20.0, 'fork_sign_image_aspect': 4/3,
         # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
@@ -335,6 +346,8 @@ ANSWER_CONFIG = {
         # 차가 도로 방향에서 이만큼(rad) 넘게 틀어져 있으면 선 색으로 차로를 판정하지 않음 (11/15 main_1115_1904 178~179 s:
         # 0→1 이동 중 왼쪽으로 약 30° 틀어진 채 두 차로 건너 바깥 노란 선 + 흰 점선을 '노랑/흰 = 2번 차로'로 봄)
         'index_heading_max': 0.3,
+        # 이동 시작 방향: 직전 이동이 chain_seconds(s) 안에 끝났으면 적분해 온 방향을 이어 씀, 아니면 최근 heading_frames 프레임 중앙값
+        'chain_seconds': 2.0, 'heading_frames': 5,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,

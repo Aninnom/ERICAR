@@ -21,7 +21,8 @@ class ForkMission:
     """
 
     def __init__(self, lane_count, follow_distance, far=1.7, dash_gap=0.3, entrance_confirm=0.3,
-                 pass_area=0.006, pass_distance=0.15, pass_seconds=0.5, wrong_lane_distance=0.4):
+                 pass_area=0.006, pass_distance=0.15, pass_seconds=0.5, wrong_lane_distance=0.4,
+                 outer_distance=0.8):
         self.lane_count = lane_count
         self.follow_distance = follow_distance
         self.far, self.dash_gap, self.entrance_confirm = far, dash_gap, entrance_confirm
@@ -39,8 +40,10 @@ class ForkMission:
         # 반대편 끝 차로(align)는 wrong_lane_distance(m)까지 안 보여야 그 길로 진행 (검출 끊김에 목적지를 쉽게 포기하지 않게)
         self.pass_area, self.pass_distance, self.pass_seconds = pass_area, pass_distance, pass_seconds
         self.wrong_lane_distance = wrong_lane_distance
+        self.outer_distance = outer_distance   # 분기 입구 뒤 바깥선 하나만 따라가는 거리(m)
         self.sign_near = False
         self.sign_gone = self.sign_gone_time = 0.
+        self.passed = False       # 분기 입구를 지났는지 (enter). 한 번 지나면 3차선 구간 끝 = 차선 변경 판단 자체를 끔
 
     @property
     def running(self):
@@ -51,8 +54,15 @@ class ForkMission:
         return max(0., self.follow_distance-self.travel) if self.running else 0.
 
     @property
+    def outer_only(self):
+        """목적 쪽 바깥 노란 선 하나만 따라갈 구간: 목적 차로 도착 ~ 분기 입구 뒤 outer_distance(m) = 교통섬 앞머리
+        그 뒤(exit 나머지)는 두 선 모두 사용 (11/15 fix2_1115_2017 186.6~190.8 s: A 길에서 왼쪽 바깥선이 화면 밖으로 나가고
+        오른쪽 안쪽 선만 보이는데 그 선을 버려 4.5 s 차선 무효 → 직진 → 3번 코너 벽. B 길도 같은 문제, fix_1115_1949)"""
+        return self.phase == 'follow' or (self.phase == 'exit' and self.travel < self.outer_distance)
+
+    @property
     def vision_direction(self):
-        return self.direction if self.phase in ('follow', 'exit') else 0
+        return self.direction if self.outer_only else 0
 
     @property
     def late(self):
@@ -106,6 +116,7 @@ class ForkMission:
     def enter(self, index):
         """분기 입구 도착 처리. 목표 차로 → exit, 반대편 끝 차로 → 그 길로 exit, 가운데 → manual(정지)"""
         center = self.lane_count//2
+        self.passed = True
         if self.destination is not None and index != self.destination and index != center:
             # 반대편 끝 차로: 교통섬을 가로지를 수 없음. 멈추지 않고 지금 차로의 길로 진행 (11/15, 예전: manual 정지)
             self.destination = index

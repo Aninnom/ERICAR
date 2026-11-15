@@ -431,6 +431,27 @@ def test_three_lane_random(seeds=30):
     assert len(failed) <= THREE_LANE_RANDOM_ALLOWED_FAILURES, failed
 
 
+def test_cone_handover():
+    """라바콘 인계 조건 (11/15 fix2_1115_2017 207.6 s: 콘 0.3 m 앞에서야 켜져 안쪽 콘 0.2 m 앞 정지)
+    - 문을 정면으로 보면 1 m 앞에서 미리 인계, 비스듬하거나 옆으로 비켜 있으면 예전처럼 콘이 바로 앞일 때
+    - 코너 유지 중에는 차 진행 폭 안 콘이 바로 앞일 때만"""
+    c = config()
+    lidar_x = ROBOT['lidar']['x']
+    cones = ConeDriving(c, ROBOT)
+    cones.red = cones.corridor = True
+    none = np.zeros((0, 2))
+
+    def posts(distance, center, gap=.6):
+        return np.array([[lidar_x+distance, center+gap/2], [lidar_x+distance, center-gap/2]])
+    assert cones.start_gate(posts(.8, 0.), none) is not None, '정면 문 0.8 m 앞인데 인계 안 함'
+    assert cones.start_gate(posts(1.3, 0.), none) is None, '1 m보다 먼 문에 인계'
+    assert cones.start_gate(posts(.8, .35), none) is None, '옆으로 0.35 m 비켜난 문에 미리 인계'
+    assert cones.start_gate(posts(.8, 0.), none, holding=True) is None, '코너 유지 중 먼 문에 인계'
+    assert cones.start_gate(posts(.25, .35), none) is not None, '바로 앞 콘(예전 조건)에 인계 안 함'
+    assert cones.start_gate(posts(.25, .35), none, holding=True) is not None, '코너 유지 중 진행 폭 안 콘에 인계 안 함'
+    assert cones.start_gate(posts(.25, .6), none, holding=True) is None, '코너 유지 중 진행 폭 밖 콘에 인계'
+
+
 if __name__ == '__main__':
     test_cones_pass()
     test_cone_gates()
@@ -438,4 +459,5 @@ if __name__ == '__main__':
     test_cones_outer_wall()
     test_three_lane_left_right()
     test_three_lane_random()
+    test_cone_handover()
     print('라이다 미션 시험 통과')

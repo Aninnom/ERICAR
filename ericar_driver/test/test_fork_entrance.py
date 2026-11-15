@@ -286,6 +286,85 @@ def test_corner_hold_after_destination():
         assert seen and seen[0] is expected, (sign, phase, seen)
 
 
+def test_outer_only_ends_after_island():
+    """바깥선 하나 추종은 목적 차로 도착 ~ 분기 입구 뒤 0.8 m까지만 (11/15 fix2_1115_2017: exit 2.5 m 내내 켜져 있어
+    섬 뒤에서 보이는 안쪽 선을 버림 → 4.5 s 차선 무효 → 3번 코너 벽)"""
+    f = ForkMission(3, 2.5, far=FAR, dash_gap=.45, entrance_confirm=.3, outer_distance=.8)
+    f.observe(lane(FAR), 1, False, 0., .05)
+    assert f.lock({'left'}, 0.)
+    f.step(1, False, 0., .05)
+    assert not f.outer_only and f.vision_direction == 0          # 정렬 중
+    f.step(2, False, .2, .05)
+    assert f.phase == 'follow' and f.outer_only and f.vision_direction == 1
+    f.enter(2)
+    assert f.phase == 'exit' and f.outer_only
+    for _ in range(int(.7/(.2*.05))):
+        f.step(2, False, .2, .05)
+    assert f.outer_only
+    for _ in range(int(.2/(.2*.05))):
+        f.step(2, False, .2, .05)
+    assert f.phase == 'exit' and not f.outer_only and f.vision_direction == 0 and not f.allows_change(False)
+
+
+def test_hold_max_turned():
+    """코너 유지는 시작한 구간 직선 방향에서 70°(IMU)까지만 (11/15 fix2_1115_2017 204 s: 44° 돈 지점에서 시작해 65° 더 돌려
+    안쪽 콘으로 향함)"""
+    import copy
+    import math
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    scan = dict(front=4.0, rear=4.0, valid_fraction=1.0, wide_objects=0, points=[], ranges=[], angle_min=0.,
+                angle_increment=.01, stamp=0.)
+    lane_result = dict(valid=True, colors={'left': 'yellow'}, error=0., heading=0., forward=.9, pursuit=False,
+                       abnormal=False, fits={}, stop_distance=None, stop_candidates=[], dash_end=None)
+    for turned, stop in ((44., False), (69., False), (71., True)):
+        c = copy.deepcopy(ANSWER_CONFIG)
+        c['missions']['start_stage'] = 'fork'
+        d = Driver({'answer': c, 'robot': robot})
+        d.sections.yaw = -math.radians(90.*d.sections.index+turned)
+        d.lane_driver.hold = dict(yaw=0., distance=0., base=.31, steering=.31, angle=65., error0=0.)
+        d.hold_section = d.sections.index
+        d.update(lane_result, scan, [], 0., .2, 1.)
+        assert d.lane_driver.hold_stop is stop and (d.lane_driver.hold is None) is stop, (turned, d.lane_driver.hold)
+
+
+def test_lane_change_off_after_three_lane():
+    """3차선 구간이 끝나면 차선 변경 판단 자체를 끔: 분기 입구 통과 뒤, 또는 표지판 없이 S2 6 m 뒤 (11/15)"""
+    import copy
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    c = copy.deepcopy(ANSWER_CONFIG)
+    c['missions']['start_stage'] = 'fork'
+    lidar_x = robot['lidar']['x']
+    scan = dict(front=.9, rear=4.0, valid_fraction=1.0, wide_objects=0, points=[[.9-lidar_x, 0.]], ranges=[], angle_min=0.,
+                angle_increment=.01, stamp=0.)
+    lane_result = dict(valid=True, colors={'left': 'white', 'right': 'white'}, solid={'left': False, 'right': False},
+                       error=0., heading=0., forward=.9, pursuit=False, abnormal=False, fits={}, stop_distance=None,
+                       stop_candidates=[], dash_end=None, stamp=1.)
+    # 3차선 안: 앞 장애물이면 차선 변경 판단이 돎
+    d = Driver({'answer': c, 'robot': robot})
+    assert not d.three_lane_over()
+    d.update(lane_result, scan, [], 0., .2, 1.)
+    assert d.lane_change.active or d.lane_change.debug.get('reason') != 'disabled', d.lane_change.debug
+    # 표지판 없이 S2 5 m 뒤
+    d = Driver({'answer': c, 'robot': robot})
+    d.sections.distance = 6.2
+    d.update(lane_result, scan, [], 0., .2, 1.)
+    assert d.three_lane_over() and not d.lane_change.active and d.lane_change.debug.get('reason') == 'disabled'
+    # 분기 입구 통과 뒤 (갈림길이 끝난 뒤에도)
+    d = Driver({'answer': c, 'robot': robot})
+    d.fork = mission('left')
+    d.fork.enter(2)
+    d.fork.phase = 'done'
+    d.lane_change.index = 2
+    d.update(lane_result, scan, [], 0., .2, 1.)
+    assert d.three_lane_over() and not d.lane_change.active and d.lane_change.debug.get('reason') == 'disabled'
+
+
 if __name__ == '__main__':
     test_gaps_not_late()
     test_early_and_late()
@@ -300,4 +379,7 @@ if __name__ == '__main__':
     test_relock()
     test_arrow_filter()
     test_corner_hold_after_destination()
+    test_outer_only_ends_after_island()
+    test_hold_max_turned()
+    test_lane_change_off_after_three_lane()
     print('분기 입구 판단 시험 통과')

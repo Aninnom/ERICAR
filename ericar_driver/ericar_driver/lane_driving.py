@@ -128,6 +128,15 @@ class LaneDriving:
         if not h.get('enabled') or not allow_hold:
             self.hold = None
             return False
+        if getattr(self, 'hold_stop', False):
+            # 누적 회전 상한 (driver가 설정): 진행 중이면 정상 종료와 같게 끝내고, 새로 시작하지 않음
+            if self.hold is not None:
+                self.hold = None
+                self.armed_until = -1e9
+                self.rearm_at = now + h['arm_seconds']
+                self.hold_ended = now
+                self.steering = 0.0
+            return False
         if corner_seen and now >= self.rearm_at:
             self.armed_until = now + h['arm_seconds']
         if lane['valid'] and 'far_heading' in lane:

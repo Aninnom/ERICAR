@@ -266,7 +266,7 @@ class ConeDriving:
         return self.c['cone_red_gate_max'] if self.red else self.c['cone_gate_max']
 
     # ---------- 1. 진입 판단 ----------
-    def start_gate(self, posts, wide):
+    def start_gate(self, posts, wide, holding=False):
         """라바콘 모드로 바꿀 때면 (진입 기준점, 문 폭), 아니면 None. 기준점 방향이 첫 진행 방향
 
         A. 카메라 붉은색 (11/12 유경): 화면 붉은 비율이 cone_red_enter_ratio 이상(corridor)이고 라이다 콘 후보가 라이다 앞
@@ -285,10 +285,29 @@ class ConeDriving:
         lidar_x = self.robot['lidar']['x']
         if self.red and not self.corridor:
             return None
+        if holding:
+            # 코너 유지 중 (11/15): 유지가 코너를 끝까지 돌게 둠. 차가 지나갈 폭(cone_hold_half_width) 안에 콘이
+            # cone_enter_distance 앞까지 온 경우에만 넘겨받음 (콘이 코너 안에서 시작하는 배치, 11/14 lap3)
+            ahead = posts[(posts[:, 0] > 0) & (posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
+                          (np.abs(posts[:, 1]) < c.get('cone_hold_half_width', .2))]
+            if not len(ahead):
+                return None
         if self.corridor:
             near = posts[(posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
                          (np.abs(posts[:, 1]) < c['cone_red_half_width'])]
             if not len(near):
+                # 문을 정면으로 봄 (11/15): 콘이 0.3 m 앞에 올 때까지 기다리면 비스듬히 다가간 경우 피할 공간이 없음
+                # (fix2_1115_2017 207.6 s: 안쪽 콘 0.2 m 앞에서 켜져 정지). 문 중점이 cone_face_distance 안·옆 cone_face_lateral 안,
+                # 문 방향·방위가 cone_face_angle 안, 간격이 일반 문(cone_gate_max) 이내면 미리 넘겨받음
+                face = c.get('cone_face_distance')
+                if not face or holding:
+                    return None
+                gates = gate_pairs(posts[np.abs(posts[:, 1]) < c['cone_red_half_width']], c, c['cone_gate_max'])
+                angle = c.get('cone_face_angle', .35)
+                k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), angle, angle)
+                if (k is not None and gates[0][k][0]-lidar_x <= face and
+                        abs(gates[0][k][1]) <= c.get('cone_face_lateral', .2)):
+                    return gates[0][k], float(gates[2][k])
                 return None
             gates = gate_pairs(posts[np.abs(posts[:, 1]) < c['cone_red_half_width']], c, self.gate_max())
             k = next_gate(gates, np.zeros(2), np.array([1.0, 0.0]), c['cone_start_angle'], c['cone_start_angle'])
@@ -393,9 +412,10 @@ class ConeDriving:
         # 안전한 원호가 없어도 멈추지 않고 천천히 (정지 = 미션 실패). 정면 막힘은 driver의 비상 정지가 처리
         return (c['avoidance_speed'] if safe else c['cone_creep_speed']), steering
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, red_only=False, holding=False):
         """매 제어 주기 호출. 라바콘 모드면 (속도, 조향), 아니면 None (차선 주행)
-        red_only: 붉은색이 화면에 찼을 때만(corridor) 새로 진입 (S2 조기 진입용, 라이다만으로는 안 켬)"""
+        red_only: 붉은색이 화면에 찼을 때만(corridor) 새로 진입 (S2 조기 진입용, 라이다만으로는 안 켬)
+        holding: 코너 유지(고정 조향) 중. 새 진입은 차 진행 폭 안 콘이 바로 앞일 때만 (start_gate)"""
         # 복귀 뒤 주행 거리: 차선 쪽에 "지금 라바콘 직후"임을 알리는 데 씀 (driver.cone_left_limit)
         self.since_exit = 0.0 if self.active else self.since_exit+abs(velocity)*dt
         if not enabled or self.done:
@@ -426,7 +446,7 @@ class ConeDriving:
             # 모드가 끝나는 지점(max_travel)보다 먼 콘은 어차피 지나지 않음 → 구간 뒤 트랙 옆 물체로 끌려가지 않게 제외
             posts = posts[np.hypot(posts[:, 0], posts[:, 1]) < self.max_travel-self.travel]
         if not self.active:
-            start = self.start_gate(posts, wide) if self.corridor or not red_only else None
+            start = self.start_gate(posts, wide, holding) if self.corridor or not red_only else None
             self.confirm = self.confirm+1 if start else 0
             self.debug = dict(state='wait', confirm=self.confirm, posts=int(len(posts)), red=self.red)
             if self.confirm < c['cone_confirm_count']:

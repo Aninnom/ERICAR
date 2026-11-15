@@ -31,6 +31,8 @@ CORNERS = [1.25, 3.5, 10.9, 11.15]
 DT = 0.05
 # 3차선 구간(안쪽 선 = 흰 점선): 2번 코너 뒤 ~ 3번 코너 앞. 그 밖은 선 4개 모두 노란색 (예전 장면)
 THREE_LANE = (4.5, 10.8)
+# 이 장면의 3차선은 S2 시작(3.5) 뒤 7.3 m까지 → 실제 트랙용 거리 기준(lane_change_max_distance)은 끔
+ANSWER_CONFIG['sections']['lane_change_max_distance'] = None
 # 주행 시간(s): S2 방향 확정 전 속도 상한(fork_prepare_speed 0.18, PR #37)으로 주차 완료가 약 111 s → 기본 110 s로는 모자람
 DURATION = 130.0
 
@@ -343,7 +345,7 @@ def test_cone_hold():
         driver = Driver({'answer': c, 'robot': robot})
         cones = driver.cones
         # 라바콘 담당 코드 대신 가짜: 켜져 있는 동안 고정 명령, 구간이 허용하지 않으면 꺼짐 (실제 update와 같은 규칙)
-        def fake(lane, scan, velocity, yaw_rate, dt, enabled, red_only=False):
+        def fake(lane, scan, velocity, yaw_rate, dt, enabled, red_only=False, holding=False):
             if not enabled or cones.done:
                 cones.active = False
                 return None
