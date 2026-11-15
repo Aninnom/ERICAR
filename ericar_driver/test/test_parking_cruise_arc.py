@@ -17,6 +17,7 @@ from ericar_driver.parking_control import image_point
 
 def cruise_config():
     c=config();c['answer']['parking']['cruise_search_enabled']=True
+    c['answer']['parking']['slow_on_sign_passed']=True
     return c
 
 
@@ -84,7 +85,7 @@ def test_free_can_be_latched_while_still_cruising_then_approached():
     c=cruise_config();p=Parking(c);p.start(1.)
     # 넓은 빈틈의 실제 raycast. 반사 근거가 충분하면 먼 위치에서도 FREE 가능
     data=laser(c,[(.15,.4,-.84,-.25),(1.2,1.45,-.84,-.25)])
-    result=tick(p,c,data=data,v=.12)
+    result=tick(p,c,data=data,v=.12,command=(.12,0.))
     assert p.selected is not None
     assert result[2]=='parking_cruise'
     saved=np.array(p.selected['entrance'])
