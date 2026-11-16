@@ -349,7 +349,13 @@ ANSWER_CONFIG = {
         'beside_free': 0.3, 'stop_distance_beside': 0.6, 'solid_blocks_avoid': False,
         # 짧은 S자 (11/16 소민): 이동 시작 때 앞 장애물이 short_front(m, 뒷축)보다 가까우면 원호–직선–원호를 short_arc_angle(°)로
         # 크게 틀어 짧게 옮김 (보통 arc_angle). 속도 short_speed. 끄기: short_front 0
-        'short_front': 1.0, 'short_arc_angle': 60.0, 'short_speed': 0.15,
+        # short_arc_margin: 짧은 S자 복귀 여유(m, 보통 회피는 arc_margin). 큰 각도일수록 실차가 더 밀려 일찍 되돌림
+        # short_flip_seconds(s) 동안 short_flip_speed: 시작 꺾기·복귀 반대 꺾기 순간 감속 (바퀴가 넘어가는 동안 덜 감)
+        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.06,
+        'short_flip_seconds': 0.3, 'short_flip_speed': 0.05,
+        # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
+        # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
+        'front_clear_hold': 0.5, 'no_side_wait': True,
         # 갈 차로가 없을 때: 앞 장애물까지 stop_distance(m, 뒷축 기준) 넘게 남았으면 approach_speed로 지금 차로 계속 주행,
         # 그 안이면 정지. 0.6 = 한 차로 비켜 가는 데 필요한 최소 앞 거리 근사 (R 0.45, 횡 0.25 m). 실차 조정 필요
         'stop_distance': 0.6, 'approach_speed': 0.15,

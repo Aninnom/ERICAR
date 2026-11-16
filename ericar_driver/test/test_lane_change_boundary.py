@@ -191,3 +191,49 @@ if __name__ == '__main__':
     test_chained_heading()
     test_fork_exit_side_yellow()
     print('노란 경계 횡단 차단 시험 통과')
+
+
+def test_anti_oscillation():
+    """흔들림 방지 (소민 11/16 run_1116_1347: 장애물 사이에서 판단이 프레임마다 바뀌어 핸들이 왔다갔다)
+    - 회피 판단 중 앞이 한 스캔 비어도 front_clear_hold 동안은 판단 유지
+    - 짧은 S자 중 안전한 조향이 없어 멈추면 바퀴를 직전 값에 고정
+    - 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않음 (no_side_wait)"""
+    from ericar_driver import lane_change as module
+    robot = yaml.safe_load((HERE.parent/'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    lidar_x = robot['lidar']['x']
+    lane = dict(valid=True, heading=0., error=0., stamp=1., colors={'left': 'white', 'right': 'white'},
+                solid={'left': False, 'right': False})
+    blocked = dict(points=[[0.9-lidar_x, 0.0], [0.5-lidar_x, 0.52], [0.5-lidar_x, -0.52]], wide_objects=0)
+    clear = dict(points=[], wide_objects=0)
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    assert change.update(lane, blocked, 0., 0., .05, True) is not None and not change.active
+    hold = ANSWER_CONFIG['lane_change']['front_clear_hold']
+    t = 0.0
+    while t + .05 < hold:
+        assert change.update(lane, clear, 0., 0., .05, True) is not None, '앞이 한 스캔 비자 바로 판단을 놓음'
+        t += .05
+    for _ in range(3):
+        result = change.update(lane, clear, 0., 0., .05, True)
+    assert result is None and change.debug['reason'] == 'front_clear', '계속 비었는데 판단 유지'
+
+    # 짧은 S자 중 위험: 대체 조향이 좌우로 바뀌어도 바퀴는 고정
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    change.active, change.short, change.direction, change.target = True, True, 1, .52
+    original = module.clear_steering
+    try:
+        module.clear_steering = lambda points, desired, *a: (desired, True)
+        _, first = change.steer(module.np.zeros((0, 2)), .05)
+        for k in range(4):
+            module.clear_steering = lambda points, desired, *a, k=k: ((.3 if k % 2 else -.3), False)
+            speed, steering = change.steer(module.np.zeros((0, 2)), .05)
+            assert speed == 0.0 and steering == first, '멈춘 채 조향이 바뀜'
+    finally:
+        module.clear_steering = original
+
+    # 양쪽 노란 선(차로 없음)으로 잡혀도 갈림길 전이면 회피 판단 유지
+    yellow = dict(lane, colors={'left': 'yellow', 'right': 'yellow'}, solid={'left': True, 'right': True})
+    ahead = dict(points=[[0.9-lidar_x, 0.0]], wide_objects=0)
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    assert change.update(yellow, ahead, 0., 0., .05, True) is not None, 'no_side_lane에서 차선 주행으로 넘김'
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    assert change.update(yellow, ahead, 0., 0., .05, True, preferred=1) is None or change.active, '갈림길 뒤 동작이 바뀜'
