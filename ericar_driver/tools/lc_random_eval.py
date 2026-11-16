@@ -80,8 +80,8 @@ def one(root, seed, name):
     three_lane.ZONE_END = ENTRANCE + 0.3
     paint = three_lane.paint_lines
 
-    def paint_lines(ws, wl, finite):
-        yellow, white = paint(ws, wl, finite)
+    def paint_lines(ws, wl, finite, *extra):
+        yellow, white = paint(ws, wl, finite, *extra)
         inner = np.abs(np.abs(wl) - 0.26) < three_lane.LINE
         white &= ~(inner & (ws >= ENTRANCE))      # 흰 점선은 갈림길 입구에서 끝남
         return yellow, white
@@ -90,7 +90,11 @@ def one(root, seed, name):
     lane_change = params.ANSWER_CONFIG['lane_change']
     lane_change.update(CONFIGS[name])
     lane_change['request_entrance_distance'] = ENTRANCE - 0.2      # 시뮬은 S2 거리가 s와 같음
+    if os.environ.get('LC_SET'):       # 설정 덮어쓰기 (JSON, lane_change 구역)
+        lane_change.update(json.loads(os.environ['LC_SET']))
     case = dict(signs={sign: (SIGN_FROM, ENTRANCE + 1.0)}, obstacles=obstacles, steer_lag=0.7)
+    if os.environ.get('LC_POST', '1') != '0' and hasattr(three_lane, 'POST'):
+        case['post'] = (ENTRANCE, 0.0)      # 섬 위 표지판 기둥 (입구 위치, 가운데 차로 앞)
     r = three_lane.run('random', case, duration=120.0)
     want = 2 if sign == 'left' else 0
     if os.environ.get('LC_VERBOSE'):

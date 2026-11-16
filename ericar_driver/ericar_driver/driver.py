@@ -54,6 +54,8 @@ class Driver:
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
         self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
+        self.heading_bias = 0.0            # 누적 회전의 치우침 추정(°). observe_heading_bias
+        self.heading_bias_samples = 0
         self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
         if self.c['missions'].get('start_stage') == 'parking':
             self.done.add('traffic')  # 주차 지점 재출발: 신호등은 이미 지난 것으로 봄
@@ -98,10 +100,33 @@ class Driver:
         s = self.c['sections']
         if not s['enabled'] or self.sections.index != START_SECTION['lane_change'] or self.fork.entered:
             return None
+        # 누적 회전의 치우침(자이로 누적 오차)을 뺀 값. 치우침은 observe_heading_bias가 직진 구간의 카메라 차선 방향으로 추정
+        turned = self.sections.turned-self.heading_bias
         # 직선 방향에서 60° 넘게 벗어난 값은 기준으로 안 씀 (3번 코너 안, 또는 구간 번호와 누적 회전이 안 맞는 상태)
-        if abs(self.sections.turned) > self.c['lane_change'].get('imu_heading_max', 60.0):
+        if abs(turned) > self.c['lane_change'].get('imu_heading_max', 60.0):
             return None
-        return math.radians(self.sections.turned)
+        return math.radians(turned)
+
+    def observe_heading_bias(self, lane, velocity, dt):
+        """누적 회전(sections.turned)의 치우침(°) 추정: 직진 중이고 두 선이 다 보일 때 (누적 회전 − 카메라 차선 방향)의 느린 평균
+        11/17 early_1117_0015: 노드를 켜고 63 s 정지 뒤 출발 → 자이로 누적으로 3차선에서 +9.6° 치우침 →
+        왼쪽 이동은 36° 대신 46°(바깥선 넘음), 두 칸 이동은 45° 대신 37°(0.2 m 모자람). 직진 중 카메라 방향은 믿을 만하고
+        짧은 회전은 IMU가 정확 → 느린 성분만 카메라에 맞춤. 구간이 바뀌어도 값은 이어 씀 (녹화: S1 +8.4~10.1°, S2 +9.6°)"""
+        c = self.c['lane_change']
+        if not (c.get('heading_bias', True) and self.c['sections']['enabled'] and lane.get('valid')):
+            return
+        colors = lane.get('colors') or {}
+        heading = math.degrees(lane.get('heading', 0.0))
+        straight = (abs(heading) < c.get('heading_bias_camera', 12.0)
+                    and abs(self.debug.get('steering', 0.0) or 0.0) < c.get('heading_bias_steering', 0.08)
+                    and abs(velocity) > 0.1 and 'left' in colors and 'right' in colors)
+        if not straight or self.lane_driver.hold is not None or self.lane_change.active or self.cones.active:
+            return
+        difference = self.sections.turned-heading
+        if abs(difference) > c.get('heading_bias_max', 25.0):
+            return       # 코너 안·구간 번호 어긋남 등: 치우침으로 보지 않음
+        self.heading_bias += (difference-self.heading_bias)*min(1.0, dt/c.get('heading_bias_seconds', 2.0))
+        self.heading_bias_samples += 1
 
     def request_lanes(self, requested=None):
         """표지판 목적 차로까지 칸 수 (요청 이동이 두 칸을 한 번에 건널지 판단용)"""
@@ -669,6 +694,7 @@ class Driver:
             self.sync_fork()
         if self.state == 'lane':
             # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
+            self.observe_heading_bias(lane, velocity, dt)
             requested = self.fork_request
             # 늦은 지점 요청 (11/16): 점선 끝이 보여 '늦음'이어도 경로 계획이 확인해 주면 목적 쪽 이동만 허용
             # 예전: 가운데 차로에 도착한 뒤 새 이동이 금지돼 섬 표지판 기둥 앞까지 직진·정지 (합성 시험)
@@ -757,6 +783,7 @@ class Driver:
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_debug=dict(self.lane_change.debug),
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
+                          heading_bias=round(self.heading_bias, 2), heading_bias_samples=self.heading_bias_samples,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_phase=self.fork.phase, fork_destination=self.fork.destination,
                           fork_dash_left=self.fork.dash_left, fork_late=self.fork.late,

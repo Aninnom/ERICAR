@@ -370,7 +370,7 @@ ANSWER_CONFIG = {
         # 11/16 혁준(실차 전): 표지판 요청 이동은 옆 차로 점을 뒷축 앞 request_side_ahead(m)부터만 막힘으로 보고, 짧은 S자로 옮김
         # 끄기: request_side_ahead None, short_on_request False
         # short_on_request: 11/16 sominb_1116_1753에서 한 칸 1.00 m(보통 1.06 m)·0.10 m/s라 10.7 s → 거리 단축 거의 없어 끔
-        'request_side_ahead': 0.2, 'short_on_request': False,
+        'request_side_ahead': 0.45, 'short_on_request': False,   # 11/17: 0.2 → 0.45 (출발 전 경로 확인이 실제 여유를 봄)
         # 표지판 요청 이동 경로 계획 (lane_change.plan_request, 11/16 혁준, 실차 전). 끄기: request_plan False
         # request_angles(°): 후보 원호 각도. request_plan_margin: 경로와 라이다 점 사이 최소 여유(m)
         # request_plan_stretch: 실차 이동이 계산보다 긴 비율 (한 칸 계산 1.01 m, 실측 1.06~1.14 m)
@@ -400,7 +400,19 @@ ANSWER_CONFIG = {
         # start_align(rad): 이보다 더 틀어져 있으면 새 차선 변경 시작 안 함 (차선 주행으로 먼저 정렬)
         # camera_guard: 카메라 종료·보정은 방향이 camera_trust_heading 안이고 카메라와 camera_agree_heading 안에서 맞을 때만
         'imu_heading': True, 'heading_disagree': 0.2, 'start_align': 0.21,
+        # 누적 회전 치우침 보정 (11/17 혁준, early_1117_0015 대응, driver.observe_heading_bias). 끄기: heading_bias False
+        # 직진(카메라 방향 heading_bias_camera° 안, 조향 heading_bias_steering rad 안, 두 선 보임) 중 (누적 회전 − 카메라 방향)을
+        # heading_bias_seconds(s) 시정수로 평균. 차이가 heading_bias_max(°) 넘으면 표본에서 뺌
+        'heading_bias': True, 'heading_bias_seconds': 2.0, 'heading_bias_camera': 12.0,
+        'heading_bias_steering': 0.08, 'heading_bias_max': 25.0,
         'camera_guard': True, 'camera_trust_heading': 0.26, 'camera_agree_heading': 0.175,
+        # 일반 회피 일찍 시작 (11/16 혁준, imu_1116_2348 대응, 합성 시험만·실차 전). 끄기: avoid_side_ahead None, avoid_plan False
+        # avoid_side_ahead(m): 옆 차로 점은 뒷축 앞 이 거리보다 먼 것만 막힘 (예전: 뒷축보다 앞이면 전부)
+        # avoid_plan: 출발 전에 실제 쓸 각도로 경로를 그려 라이다 점과 여유 avoid_plan_margin(m) 미만이면 아직 출발 안 함
+        # avoid_plan_tail(m): 도착 뒤 목적 차로 앞이 비어 있어야 하는 거리
+        # 0.45: 45° 원호로 꺾으면 앞 오른쪽 모서리가 옆 차로 장애물 선에 닿기까지 뒷축이 약 0.45 m 감. 합성(지그재그, 앞 장애물까지
+        # 간격 0.58 m): 예전 기준·0.2는 앞 0.45 m에서 시작해 충돌·정지, 0.45는 앞 0.71 m에서 시작해 통과
+        'avoid_side_ahead': 0.45, 'avoid_plan': True, 'avoid_plan_margin': 0.04, 'avoid_plan_tail': 0.2,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,
@@ -420,8 +432,10 @@ ANSWER_CONFIG = {
         # 자전거 모델 계산(추측 항법 0.8배, 조향 지연 0.15 s): pursuit 1.35 m·최대 42°·끝 8.6°·차선 오차 0.21 m
         #   → arc + 1.2배 1.26 m·30°·2.8°·0.04 m. 두 값(arc_angle, lateral_scale)은 실차 조정 필요
         # 11/16 main_1116_fix1: 30°에서 직선 구간 2.5~3.1 s(실제 최대 33~38°)로 김 → 36 (계산상 직선 약 1.8 s, 최대 약 42°). 실차 34~38에서 조정
-        'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.03, 'arc_finish_heading': 0.05,
-        'lateral_scale': 1.2,
+        # 11/17 bias_1117_0036: 방향 기준이 맞게 된 뒤 lateral_scale 1.2가 과보정(두 칸 추정 1.11 m·실제 약 0.88 m → 0.16 m 모자라 경계선 밟음)
+        # → 1.0. arc_margin 0.03 → 0.08: 복귀 원호를 시작한 뒤 조향이 넘어가는 동안 계산(0.09 m)보다 약 0.05 m 더 감 (실차 전)
+        'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.08, 'arc_finish_heading': 0.05,
+        'lateral_scale': 1.0,
         # 교통섬 노란 선 구분 (소민 11/15, lane_change.trusted_colors)
         # 표지판 확정 뒤: 출구 쪽 노란 선만 바깥선, 반대쪽 노란 선은 교통섬 (숫자 없음)
         # 표지판 전: 노란 선 가까운 끝이 yellow_near_max(m, 뒷축 앞 거리. BEV 맨 아래 0.6 m)보다 멀거나

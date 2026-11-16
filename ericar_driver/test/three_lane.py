@@ -71,6 +71,10 @@ CASES = {
     'slalom_right': dict(signs={'right': (6.0, 8.5)}, post=(8.76, 0.0),
                          obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, -0.52),
                                     (7.60, -0.52), (7.72, -0.52)]),
+    # 11/17 early_1117_0015 재현: 누적 회전이 +10° 치우친 채 3차선 진입 (왼쪽 회피 → 오른쪽 표지판 → 두 칸)
+    # 치우침 보정 없으면 왼쪽 이동이 46°로 틀어져 바깥선 쪽으로 넘고, 오른쪽 이동은 모자람
+    'bias_plus': dict(signs={'right': (6.6, 7.4)}, obstacles=[(5.0, 0.0)], heading_bias_deg=10.0),
+    'bias_minus': dict(signs={'left': (6.6, 7.4)}, obstacles=[(5.0, 0.0), (5.6, 0.52)], heading_bias_deg=-10.0),
     'slalom_left': dict(signs={'left': (6.0, 8.5)}, post=(8.76, 0.0),
                         obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, 0.52),
                                    (7.60, 0.52), (7.72, 0.52)]),
@@ -187,6 +191,10 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
         config = yaml.safe_load(open(cfg_path))
         camera, wheelbase = scenario.REFERENCE_CAMERA, config['robot']['wheelbase']
         last_print, zero_since, mode = -1.0, None, None
+        if case.get('heading_bias_deg'):
+            # 구간 관리자의 누적 회전에 치우침 주입 (실차: 출발 전 대기·주행 중 자이로 누적, 11/17 early_1117_0015 +9.6°)
+            drv = node.driver if hasattr(node, 'driver') else node.loop.driver
+            drv.sections.yaw -= math.radians(case['heading_bias_deg'])
         for k in range(int(duration / DT)):
             t = k * DT
             fake_ros.Clock.now_s = 100.0 + t

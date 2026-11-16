@@ -97,8 +97,34 @@ def test_cone_advance():
     print('  라바콘 시작 시 구간 전환 통과')
 
 
+def test_anchor_wait():
+    """가운데 차로, 오른쪽 표지판 확정, 기둥 앞 1.4 m. 오른쪽 차로는 옆 장애물로 잠깐 막힘, 왼쪽은 빔 (imu_1116_2348 112.4 s)
+    예전: 요청이 거부되면 일반 회피가 왼쪽으로 감 → 반대 길. 지금: 차로 유지하며 대기. 기둥이 anchor_escape 안이면 회피 허용"""
+    import numpy as np
+    robot = robot_config()
+    lidar_x = robot['lidar']['x']
+    post = [[1.4-lidar_x, y] for y in (-0.02, 0.0, 0.02)]                       # 폭 4 cm 기둥
+    beside = [[x-lidar_x, -0.41] for x in np.arange(0.55, 0.90, 0.03)]          # 오른쪽 차로 장애물 옆면 (앞 0.55~0.9 m)
+    scan = dict(points=post+beside, wide_objects=0)
+    lane = lane_with(0.0)
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    result = change.update(lane, scan, 0.15, 0.0, 0.05, True, requested=-1, preferred=-1, road_heading=0.0)
+    assert change.anchor_front is not None and abs(change.anchor_front-1.4) < 0.05, change.debug
+    assert result is None and not change.active and change.debug.get('reason') == 'request_wait_anchor', change.debug
+    # 기둥이 0.8 m(anchor_escape 1.0 안)까지 왔는데도 오른쪽이 막혀 있으면 반대쪽이라도 피함
+    post = [[0.8-lidar_x, y] for y in (-0.02, 0.0, 0.02)]
+    beside = [[x-lidar_x, -0.41] for x in np.arange(0.50, 0.80, 0.03)]
+    change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
+    lane2 = lane_with(0.0, stamp=2.0)
+    change.update(lane2, dict(points=post+beside, wide_objects=0), 0.15, 0.0, 0.05, True,
+                  requested=-1, preferred=-1, road_heading=0.0)
+    assert change.active and change.direction == 1, change.debug
+    print('  기둥 앞에서 반대쪽 회피 대신 대기 통과')
+
+
 if __name__ == '__main__':
     test_start_alignment()
+    test_anchor_wait()
     test_camera_guard()
     test_cone_advance()
     print('차선 변경 방향 기준 시험 통과')

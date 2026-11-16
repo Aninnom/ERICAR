@@ -469,7 +469,9 @@ class LaneChange:
         anchor_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, camera_center))
         # 표지판 요청 이동: 옆 장애물이 뒷축 앞 request_side_ahead(m) 안까지 빠졌으면 시작 (조향해도 옆 차로에 들어가기까지 약 0.5 m 더 감)
         # 11/16 somin_1116_1714: 확정 뒤 옆 장애물 앞면이 뒷축 뒤로 빠질 때까지 0.90 m 대기 → 둘째 이동 거리 부족
-        ahead = self.c.get('request_side_ahead') if requested else None
+        # 일반 회피도 같은 기준(avoid_side_ahead)으로 일찍 시작. 대신 출발 전에 경로를 그려 옆·앞 장애물과 겹치지 않는지 확인 (아래)
+        # 11/16 imu_1116_2348 93.8~99.0 s: 옆 장애물이 뒷축 뒤로 다 빠질 때까지 기다려 앞 장애물 0.57 m 앞에서야 시작
+        ahead = self.c.get('request_side_ahead') if requested else self.c.get('avoid_side_ahead')
         free = free_distances(forward, left, center, self.robot, self.c, side_ahead=ahead)
         # 옆 차로는 최근 choice_window 동안의 최솟값 사용: 가는 물체(의자 다리 등)가 한 스캔 빠지면 빈 차로로 보임 (11/14 lap3)
         window = self.c.get('choice_window', 0.0)
@@ -496,6 +498,17 @@ class LaneChange:
         if not requested:
             self.engaged = True
         direction = self.choose_direction(free, lane, requested, preferred)
+        if direction and not requested and self.c.get('avoid_plan', False):
+            # 일반 회피 경로 확인: 이 이동이 쓸 각도(앞이 short_front 안이면 short_arc_angle)로 경로를 그려 여유가 모자라면 아직 출발 안 함
+            short = free[0] < self.c.get('short_front', 1.0)
+            angle = self.c.get('short_arc_angle', 45.0) if short else self.c.get('arc_angle', 30.0)
+            plan_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
+            gap = self.path_gap(forward, left, direction*self.c['lane_width']+plan_center, angle,
+                                -self.start_heading(heading), self.c.get('avoid_plan_tail', .2))
+            self.debug['avoid_gap'] = round(min(gap, 9.9), 3)
+            if gap < self.c.get('avoid_plan_margin', .04):
+                self.debug['rejected']['left' if direction > 0 else 'right'] = 'path_blocked'
+                direction = 0
         self.debug['choice'] = direction
         if direction == 0 and not requested and all(
                 self.debug['rejected'].get(side) in ('outside_lane_count', 'yellow_boundary') for side in ('left', 'right')):
@@ -519,6 +532,13 @@ class LaneChange:
             result = self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
             self.debug['request_rejected'], self.debug['escape'] = rejected, True
             return result
+        if (direction == 0 and requested and self.fork_running and self.c.get('anchor_enabled', True)
+                and self.anchor_front is not None and self.anchor_front > self.c.get('anchor_escape', 0.0)):
+            # 표지판 확정 + 섬 기둥이 지금 차로 앞: 목적 쪽이 잠깐 막혀도 반대쪽 회피로 넘기지 않고 차로 유지하며 다시 계획
+            # (11/16 imu_1116_2348 112.4 s: 가운데 차로에서 오른쪽이 0.3 m쯤 뒤 열릴 상황인데 왼쪽으로 회피 → 반대 길).
+            # 기둥이 anchor_escape 안까지 와도 막혀 있으면 아래 일반 회피로 (기둥 앞 정지 방지)
+            self.debug['reason'] = 'request_wait_anchor'
+            return None
         if direction == 0 and requested:
             # 목표 쪽 막힘: 목표는 유지하고 일반 장애물 회피로 우회 가능
             rejected = dict(self.debug['rejected'])
@@ -597,6 +617,17 @@ class LaneChange:
         self.plan = plan
         self.target = direction*self.span*self.c['lane_width']+center
         return self.update(lane, scan, 0.0, 0.0, dt, enabled)
+
+    def path_gap(self, forward, left, target, angle, yaw0, tail):
+        """원호–직선–원호 경로(목표 횡거리 target m, 각도 angle °)를 따라갈 때 차체와 라이다 점 사이 최소 여유(m)"""
+        robot = self.robot
+        points = np.column_stack((forward, left)) if len(forward) else np.zeros((0, 2))
+        radius = robot['wheelbase']/math.tan(robot['max_steering'])
+        path, _ = arc_path(target, yaw0, math.radians(angle), radius, self.c.get('arc_margin', .03), tail=tail)
+        body = path.copy()
+        body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
+        body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
+        return footprint_clearance(points, body, robot)
 
     def plan_request(self, forward, left, direction, center, lanes, limit, yaw0):
         """표지판 요청 이동의 칸 수·원호 각도 선택 (11/16). 장애물 배치가 매번 달라 각도를 고정하지 않음
