@@ -72,8 +72,8 @@ class TrafficStopTest(unittest.TestCase):
         d.line_distance = self.m['traffic_stop_offset']  # 앞 범퍼가 선 3 cm 앞
         self.assertEqual(d.stop_missions(.4, 0.0, False, 1.2), 0.0)
         self.assertEqual(d.state, 'traffic_hold')
-        bumper_gap = d.line_distance - (d.robot['front_bumper_x'] - d.robot['front_axle_x']) if hasattr(d, 'robot') else .03
-        self.assertAlmostEqual(bumper_gap, .03, delta=.005)
+        # 11/14 소민: 규정 = 앞바퀴 기준 정지선 ±5 cm → 앞축이 traffic_stop_offset(실측 −0.045)에 섬 (예전: 앞 범퍼 3 cm 앞)
+        self.assertAlmostEqual(d.line_distance, self.m['traffic_stop_offset'], delta=.005)
 
     def test_vision_crosswalk_flag(self):
         import numpy as np
