@@ -419,7 +419,9 @@ class Driver:
             if line is None and far is None:
                 # 정지선이 아직 안 보이면 멈추지 않고 저속으로 다가가며 찾는다.
                 # (멈춰 있으면 정지선이 계속 안 보여 결국 시간 초과 실패)
-                speed = min(speed, m['stop_approach_speed'])
+                # 신호등: 빨강 박스가 아직 작으면(멀면) traffic_search_speed (11/16 main_1116_1614: 선 1.65 m 앞부터 0.13 m/s 13 s)
+                near = not traffic or self.traffic_red_area >= m.get('traffic_far_red_area', .025)
+                speed = min(speed, m['stop_approach_speed'] if near else m.get('traffic_search_speed', m['stop_approach_speed']))
             elif crossing_on_green:
                 # Seeing green far away is not mission completion. Keep watching
                 # red/yellow until the measured front axle crosses this stripe.
@@ -432,7 +434,9 @@ class Driver:
             else:
                 remaining = line - offset if line is not None else far - m.get('traffic_far_line_stop', .49)
                 # 마지막 구간은 stop_min_speed 밑으로 안 내림: 허용 오차가 작으면 비례 속도가 너무 느려 선에 못 닿음
-                speed = min(speed, m['stop_approach_speed'],
+                # 선까지 stop_slow_distance 넘게 남았으면 stop_far_speed, 그 안은 stop_approach_speed
+                cap = m['stop_approach_speed'] if remaining <= m.get('stop_slow_distance', 0.0) else m.get('stop_far_speed', m['stop_approach_speed'])
+                speed = min(speed, max(cap, m['stop_approach_speed']),
                             max(m.get('stop_min_speed', 0.0), remaining * m['stop_gain']))
                 if remaining <= m['stop_tolerance']:
                     speed = 0.0
@@ -600,7 +604,8 @@ class Driver:
         # 서행·방지턱: 차선 주행 결과에 속도 상한·턱 위 조향 고정 (차선 코드는 그대로)
         if self.state == 'lane' and not self.avoiding:
             speed, steering, finished = self.slow_zone.update(
-                self.allowed('slow'), self.sections.distance, tilt_rate, velocity, speed, steering, now, dt)
+                self.allowed('slow'), self.sections.distance, tilt_rate, velocity, speed, steering, now, dt,
+                line=self.line_distance)
             if finished:
                 self.advance('slow')
             if self.slow_zone.state == 'slow' and mode == 'lane':
@@ -613,7 +618,7 @@ class Driver:
         if self.state == 'lane':
             # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
             requested = self.fork_request
-            if self.sections.allows('lane_change') and not requested:
+            if self.sections.allows('lane_change') and not requested and self.c['missions'].get('fork_center_align', True):
                 requested = self.fork.center_request(self.lane_change.index, self.lane_change.active, lane)
             preferred = self.fork.direction if self.fork.running else 0
             # 멈춤 방지가 차선 변경을 끈 동안(lane_change_off)도 앞 장애물 회피는 함 (avoid_only, 소민 11/12)
@@ -674,7 +679,10 @@ class Driver:
             speed = min(speed, self.c['missions'].get('traffic_watch_speed', .18))
         if self.state == 'lane' and (self.allowed('fork') or self.fork_remaining > 0):
             # 표지판이 가까워질 때까지 기본 0.4 m/s로 접근하지 않도록 준비 속도 적용
-            speed = min(speed, self.c['missions'].get('fork_prepare_speed', .18))
+            # 목적 차로에 들어선 뒤(follow·exit)는 fork_exit_speed (11/16 main_1116_1614: 224.5~239.6 s 2.5 m를 0.18로 감)
+            m = self.c['missions']
+            leaving = self.fork.phase in ('follow', 'exit')
+            speed = min(speed, m.get('fork_exit_speed', .18) if leaving else m.get('fork_prepare_speed', .18))
         self.debug = dict(lane_valid=lane['valid'], lane_error=lane['error'],
                           pid=dict(self.pid.terms), pid_feedback_gain=self.c['pid']['feedback_gain'],
                           stage=self.stage(), section=self.sections.index,
