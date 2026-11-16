@@ -61,7 +61,8 @@ ANSWER_CONFIG = {
     # tilt_threshold(°)·tilt_decay(s): 자이로 x·y 누설 적분 기울기가 문턱 넘으면 방지턱. arm_distance(m): 감속 직후 숙임 무시
     # release_distance: 첫 감지 뒤 해제까지 거리(m). 뒷바퀴 기준 = 축거 0.2 + 턱 길이 + 여유
     # hold_distance: 첫 감지 뒤 조향 고정 거리(m, 앞·뒷바퀴 통과). stuck_*: 턱에서 멈추면 boost_speeds를 단계로 올림, boost_distance 구르면 복귀
-    'slow_zone': {'speed': 0.15, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
+    # entry_at_line: 표지판 확정만으로 시작하지 않고 흰 가로선이 앞축 entry_line_distance(m) 안에 올 때 시작 (11/16, 선은 출발 뒤 약 1.47 m)
+    'slow_zone': {'speed': 0.15, 'entry_at_line': True, 'entry_line_distance': 0.1, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
                   'tilt_threshold': 2.0, 'tilt_decay': 0.5, 'arm_distance': 0.15, 'release_distance': 0.5,
                   'hold_distance': 0.35, 'stuck_speed': 0.03, 'stuck_seconds': 0.7,
                   'boost_speeds': [0.2, 0.3], 'boost_distance': 0.1},
@@ -234,7 +235,10 @@ ANSWER_CONFIG = {
         'cone_hold_half_width': 0.2, 'cone_face_distance': 1.0, 'cone_face_lateral': 0.2, 'cone_face_angle': 0.35,
     },
     'missions': {
-        'fork_prepare_speed': 0.18,  # S2 방향 확정 전·분기 유지 중 상한. 늦은 진입 완화
+        'fork_prepare_speed': 0.18,  # S2 방향 확정 전 상한. 늦은 진입 완화
+        'fork_exit_speed': 0.3,      # 방향 확정 뒤 목적 차로에서 분기 통과 중 상한 (11/16, 실차 전)
+        # 표지판 확정 전 중앙 차로 정렬(fork.center_request). 11/16 끔: 회피 직후 장애물 1.7 m 앞 가운데 차로로 복귀하다 정지 (main_1116_1614 192.3 s)
+        'fork_center_align': False,
         'sign_cooldown': 12.0, 'fork_bias': 0.55,
         # 11/15 주최 답변: 정지 거리(정지선 ±5 cm) 판정은 앞바퀴 → 목표 = 앞축이 선 가까운 모서리 위.
         # main_1115_1904: stop_offset 0.088 + stop_tolerance 0.025 → 앞축이 선 0.111 m 앞 정지(보행자·신호등 모두) = 범위 밖
@@ -242,6 +246,8 @@ ANSWER_CONFIG = {
         # pedestrian_wait: 같은 녹화 실제 정지 3.2 s (규정 3초 이상, 여유 부족) → 4.0
         'pedestrian_wait': 4.0,
         'stop_offset': 0.0, 'stop_tolerance': 0.01, 'stop_min_speed': 0.025, 'stop_approach_speed': 0.13,
+        # 정지 접근 속도 2단 (11/16, 실차 전): 선까지 stop_slow_distance(m) 넘게 남으면 stop_far_speed, 신호등 정지선을 아직 못 찾았고 빨강이 작으면 traffic_search_speed
+        'stop_far_speed': 0.25, 'stop_slow_distance': 0.7, 'traffic_search_speed': 0.25,
         'traffic_require_stop': True, 'traffic_min_stop': 0.3, 'stop_gain': 0.9, 'stopped_speed': 0.012,
         'approach_timeout': 15.0, 'stop_line_memory': 8.0,
         'line_match_tolerance': 0.1,

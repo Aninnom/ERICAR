@@ -253,8 +253,8 @@ def test_stall_guard():
 
 # ---------- 4. 서행·방지턱 ----------
 
-def slow_run(sign=(0.8, 1.4), bump=None, stuck=None, corner=None, length=7.0, tilt=True, **override):
-    """S0 직선 주행. sign: slow 표지판이 보이는 s 구간(None = 누락), bump: 앞바퀴가 턱에 닿는 s (자이로 y에 기울기 주입),
+def slow_run(sign=(0.8, 1.4), bump=None, stuck=None, corner=None, length=7.0, tilt=True, line=0.9, **override):
+    """S0 직선 주행. sign: slow 표지판이 보이는 s 구간(None = 누락), line: 서행 시작 흰 가로선 위치 s(앞축 기준, None = 없음), bump: 앞바퀴가 턱에 닿는 s (자이로 y에 기울기 주입),
     stuck: (s, 초) 그 지점에서 명령 0.2 이하로는 구르지 않음, corner: 1번 코너 시작 s. 반환 [(s, 명령 속도, 조향, mode)]"""
     import yaml
     from ericar_driver.driver import Driver
@@ -273,6 +273,9 @@ def slow_run(sign=(0.8, 1.4), bump=None, stuck=None, corner=None, length=7.0, ti
                 rate = sign_ * math.radians(6.0) / 0.05 * v
         yaw = -(math.pi / 2) / 1.0 * v if corner is not None and corner <= s < corner + 1.0 else 0.0
         lane = lane_ok()
+        lane['stamp'] = t
+        if line is not None and 0.4 <= line - s <= 1.4:   # 카메라가 보는 범위에서만 검출, 그 안쪽은 odom 추정
+            lane['stop_distance'] = line - s
         if rate:
             lane['error'] = 0.3    # 턱 위 카메라 흔들림 → 차선 오차 튐
         speed, steering, mode = driver.update(lane, scan_with(), boxes, t, v, t, yaw_rate=yaw,
@@ -328,6 +331,15 @@ def test_slow_zone():
     # (아) entry_distance 없음(None) + 표지판 누락 → 서행 안 함 (거리 진입을 끈 설정 확인)
     log, driver = slow_run(sign=None, length=3.0, entry_distance=None)
     assert min(row[1] for row in log if row[0] > 0.5) > 0.3
+    # (자) 출발 위치에서 표지판이 이미 보임 + 흰 선 1.5 m: 선 전에는 기본 속도, 선부터 서행 (11/16 main_1116_1605·1614)
+    log, driver = slow_run(sign=(0.0, 2.0), line=1.5, length=3.0)
+    assert speed_at(log, 1.0) > 0.3 and speed_at(log, 1.2) > 0.3 and speed_at(log, 1.7) == z['speed']
+    # (차) 표지판 확정이 선보다 늦음: 확정 즉시 서행
+    log, driver = slow_run(sign=(1.2, 2.0), line=0.9, length=3.0, entry_distance=None)
+    assert speed_at(log, 1.1) > 0.3 and speed_at(log, 1.45) == z['speed']
+    # (카) entry_at_line 끔: 예전처럼 표지판 확정만으로 서행
+    log, driver = slow_run(sign=(0.0, 2.0), line=1.5, length=3.0, entry_at_line=False)
+    assert speed_at(log, 0.6) == z['speed']
     assert base > 2 * z['speed'] - 1e-9 and z['speed'] <= 0.2
     print('서행·방지턱 시험 통과')
 

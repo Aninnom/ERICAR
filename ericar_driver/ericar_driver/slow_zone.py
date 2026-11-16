@@ -4,8 +4,9 @@
 방지턱 통과 뒤 일반 속도 복귀 가능 (v3). 판정 기준은 뒷바퀴.
 
 상태: idle(기본 속도) → slow(속도 상한) → done
-- 진입: slow 표지판 확정 또는 S0 주행 거리 entry_distance 중 먼저 오는 것 (표지판을 놓쳐도 감속)
+- 진입: slow 표지판 확정 뒤 서행 시작 흰 가로선 도달(앞축 기준 entry_line_distance 안) 또는 S0 주행 거리 entry_distance 중 먼저 오는 것
   출발 직후부터 서행하지 않음: 육안 판정이라 줄어드는 모습이 보여야 함
+  11/16 main_1116_1605·1614: 출발 위치에서 표지판이 이미 보여(면적 0.0040~0.0043) 0.02 m부터 서행 → 4.0 m 상한이 일찍 끝나 구간 뒤쪽 1 m를 기본 속도로 지남
 - 방지턱 감지: 자이로 x·y를 짧게 적분한 기울기 크기. 턱 높이와 축거로 정해져 속도와 무관 (24 mm면 최대 약 7°),
   두 축을 합쳐 IMU 장착 방향과 무관. 감속 직후 차체 숙임을 피하려고 진입 뒤 arm_distance부터 감지
 - 해제 (먼저 오는 것): 첫 감지 뒤 release_distance (뒷바퀴까지 통과: 축거 0.2 + 턱 길이 + 여유)
@@ -22,6 +23,7 @@ class SlowZone:
         self.c = config
         self.state = 'idle'
         self.sign = False          # slow 표지판 확정 (driver.update_signs)
+        self.line_passed = False   # 서행 시작 흰 가로선 도달 (확정이 선보다 늦어도 바로 진입)
         self.entered = 0.0         # 서행 시작 뒤 주행 거리(m)
         self.tilt = [0.0, 0.0]     # 자이로 x·y 누설 적분(rad)
         self.tilt_deg = 0.0        # 기울기 크기(°)
@@ -38,9 +40,10 @@ class SlowZone:
         steps = self.c['boost_speeds']
         return steps[min(self.boost, len(steps))-1] if self.boost else self.c['speed']
 
-    def update(self, active, section_distance, tilt_rate, velocity, speed, steering, now, dt):
+    def update(self, active, section_distance, tilt_rate, velocity, speed, steering, now, dt, line=None):
         """active: S0이고 서행 미션이 아직 안 끝남. tilt_rate: 자이로 (x, y) rad/s, IMU 없으면 None
-        speed·steering: 차선 주행 결과. 반환 (속도, 조향, 이번 주기에 끝났는지)"""
+        speed·steering: 차선 주행 결과. line: 추적 중인 흰 가로선까지 거리(m, 앞축 기준), 없으면 None
+        반환 (속도, 조향, 이번 주기에 끝났는지)"""
         c = self.c
         if self.state == 'done':
             return speed, steering, False
@@ -51,7 +54,10 @@ class SlowZone:
             return speed, steering, finished
         if self.state == 'idle':
             far = c['entry_distance'] is not None and section_distance >= c['entry_distance']
-            if not (self.sign or far):
+            if line is not None and line <= c.get('entry_line_distance', 0.1):
+                self.line_passed = True
+            ready = self.sign and (self.line_passed or not c.get('entry_at_line', True))
+            if not (ready or far):
                 self.held += (steering-self.held)*min(1.0, dt/0.5)
                 return speed, steering, False
             self.state = 'slow'
