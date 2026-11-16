@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fork import driver
 
 
-def detect(d, names, stamp, area=.002):
+def detect(d, names, stamp, area=.004):     # 작은 표지판: 화살표 최소 면적 0.003 바로 위 (11/17, 예전 0.002)
     d.update_signs({'wide_objects': 0}, [dict(name=n, area=area) for n in names], stamp, .2, stamp, .05)
 
 

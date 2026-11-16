@@ -158,7 +158,7 @@ def arrive_after_diagonal(d, area):
     """right 확정(왼쪽 끝 차로) → 두 칸을 비스듬히 건너는 동안(40° 틀어짐) 표지판을 area로 봄 → 오른쪽 끝 차로 도착"""
     d.lane_change.index = 2
     for t in (0., .1, .2):     # 멀리서 작게 보고 확정 (실차 확정 때 면적 0.002)
-        d.update_signs({'wide_objects': 1}, [dict(name='right', area=.002)], t, .2, t, .05)
+        d.update_signs({'wide_objects': 1}, [dict(name='right', area=.004)], t, .2, t, .05)   # 최소 면적 0.003 (11/17)
     assert d.fork.sign == 'right'
     d.lane_change.active = True
     d.sections.turned = 40.0
