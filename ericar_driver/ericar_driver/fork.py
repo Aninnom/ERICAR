@@ -204,8 +204,10 @@ class ForkMission:
             if self.travel >= self.follow_distance:
                 self.phase = 'done'
 
-    def request(self, index, changing):
-        if changing or self.phase not in ('locked', 'align') or index == self.destination or self.late:
+    def request(self, index, changing, ignore_late=False):
+        """목적 차로 쪽 이동 요청(+1 왼쪽, −1 오른쪽, 0 없음). ignore_late: 늦은 지점(점선 끝이 보임)이어도 요청
+        (11/16: 경로 계획이 이동 가능 여부를 직접 확인하는 경우. 입구를 지난 뒤에는 phase가 바뀌어 요청 없음)"""
+        if changing or self.phase not in ('locked', 'align') or index == self.destination or (self.late and not ignore_late):
             return 0
         return 1 if self.destination > index else -1
 

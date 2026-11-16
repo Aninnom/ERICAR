@@ -43,6 +43,8 @@ ANSWER_CONFIG = {
                  'hold_distance': 3.0, 'off': [],
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
                  'cone_early_turn': 20.0,
+                 # S2에서 라바콘 모드가 실제로 시작되면 회전 기준(65°)을 기다리지 않고 S3로 전환 (11/16). 끄기 False
+                 'cone_advance': True,
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
@@ -382,6 +384,22 @@ ANSWER_CONFIG = {
         # request_delay_max(m)까지 request_delay_step(m)씩 더 직진한 뒤 꺾는 경로가 열리면 한 칸으로 내려가지 않고 기다림
         # 끄기: request_delay_max 0 (11/16 팀장 동작 그대로)
         'request_delay_max': 0.6, 'request_delay_step': 0.1,
+        # 라이다 기준점 (11/16 혁준, 유경 feat/fork-double-move의 기준점을 옮김, 합성 시험만·실차 전). 끄기: anchor_enabled False
+        # 가운데 차로 앞 통로에서 크기 anchor_width(m) 이하인 물체 = 섬 위 표지판 기둥. anchor_memory(m)까지는 못 봐도 거리 유지
+        # 쓰는 곳: ① 요청 이동이 끝나야 하는 남은 거리(driver.request_limit, 기둥 거리 + anchor_limit_offset)
+        #         ② 기둥이 지금 차로 바로 앞이면(가운데 차로 확실) 요청 방향은 옆 선이 노랑으로 읽혀도 넘음
+        #         ③ 늦은 지점에서 목적 쪽이 끝내 막혀 있고 기둥이 anchor_escape(m) 안이면 반대쪽으로라도 피함 (기둥 앞 정지 방지)
+        # anchor_limit_offset: 이동이 기둥 옆을 이만큼(m) 지나서 끝나도 됨 (끝 구간은 이미 목적 차로 쪽, 기둥과의 간격은 경로 확인이 봄)
+        'anchor_enabled': True, 'anchor_width': 0.15, 'anchor_memory': 0.5, 'anchor_limit_offset': 0.4, 'anchor_escape': 1.0,
+        # request_late: 늦은 지점(점선 끝이 보임)에서도 경로가 확인되면 목적 쪽 이동 허용. 끄기 False (예전: 새 이동 금지)
+        'request_late': True,
+        # 방향 기준 (11/16 혁준, anchor_1116_2313 대응, 합성 시험만·실차 전)
+        # imu_heading: 도로 방향 기준 차 방향을 구간 관리자의 IMU 누적 회전으로 (끄면 예전처럼 카메라·이어받기)
+        # heading_disagree(rad): 카메라 차선 방향이 IMU 값과 이만큼 넘게 다르면 IMU 값 사용
+        # start_align(rad): 이보다 더 틀어져 있으면 새 차선 변경 시작 안 함 (차선 주행으로 먼저 정렬)
+        # camera_guard: 카메라 종료·보정은 방향이 camera_trust_heading 안이고 카메라와 camera_agree_heading 안에서 맞을 때만
+        'imu_heading': True, 'heading_disagree': 0.2, 'start_align': 0.21,
+        'camera_guard': True, 'camera_trust_heading': 0.26, 'camera_agree_heading': 0.175,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,

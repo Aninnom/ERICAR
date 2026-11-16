@@ -92,24 +92,40 @@ class Driver:
         return bool(s['enabled'] and limit is not None and self.sections.index == START_SECTION['lane_change'] and
                     self.sections.distance >= limit)
 
-    def request_lanes(self):
+    def road_heading(self):
+        """3차선 직선 방향 기준 차 방향(rad, + 오른쪽). S2(3차선·갈림길 구간)에서만, 그 밖은 None
+        구간 관리자의 누적 회전(IMU, 없으면 odom 보정값). 갈림길 입구를 지난 뒤는 길이 직선이 아니라 안 씀"""
+        s = self.c['sections']
+        if not s['enabled'] or self.sections.index != START_SECTION['lane_change'] or self.fork.entered:
+            return None
+        # 직선 방향에서 60° 넘게 벗어난 값은 기준으로 안 씀 (3번 코너 안, 또는 구간 번호와 누적 회전이 안 맞는 상태)
+        if abs(self.sections.turned) > self.c['lane_change'].get('imu_heading_max', 60.0):
+            return None
+        return math.radians(self.sections.turned)
+
+    def request_lanes(self, requested=None):
         """표지판 목적 차로까지 칸 수 (요청 이동이 두 칸을 한 번에 건널지 판단용)"""
         destination = getattr(self.fork, 'destination', None)
-        if not self.fork_request or destination is None:
+        if not (self.fork_request if requested is None else requested) or destination is None:
             return 1
         return abs(int(destination)-self.lane_change.index)
 
     def request_limit(self):
-        """요청 이동을 끝내야 하는 남은 거리(m): 갈림길 입구(흰 점선 끝)까지. 둘 다 모르면 None
-        - 점선 끝이 화면 안에 들어왔으면(fork.late) fork.dash_left. 그 전의 dash_left는 '보이는 가장 먼 점선'이라 입구 거리가 아님
-        - S2 주행 거리 기준 lane_change.request_entrance_distance(실측) − 지금 거리"""
-        candidates = []
+        """요청 이동을 끝내야 하는 남은 거리(m). 모르면 None. 정확한 것부터 하나만 씀
+        1) 섬 표지판 기둥이 라이다에 잡히면 그 거리 + anchor_limit_offset (뒷축이 기둥 옆에 올 때까지 목적 차로 쪽에 들어가 있어야 함)
+        2) 점선 끝이 화면 안에 들어왔으면(fork.late) fork.dash_left. 그 전의 dash_left는 '보이는 가장 먼 점선'이라 입구 거리가 아님
+        3) S2 주행 거리 기준 lane_change.request_entrance_distance(실측 고정값) − 지금 거리
+        (11/16: 예전에는 셋 중 최솟값 → 고정값이 틀리면 한계가 0이 돼 출발 지연이 막힘)"""
+        lc = self.c['lane_change']
+        anchor = getattr(self.lane_change, 'anchor', None)
+        if anchor is not None and lc.get('anchor_enabled', True):
+            return max(0.0, float(anchor)+lc.get('anchor_limit_offset', 0.0))
         if self.fork.late:
-            candidates.append(float(self.fork.dash_left))
-        entrance = self.c['lane_change'].get('request_entrance_distance')
+            return max(0.0, float(self.fork.dash_left))
+        entrance = lc.get('request_entrance_distance')
         if entrance is not None and self.sections.index == START_SECTION['lane_change']:
-            candidates.append(float(entrance)-self.sections.distance)
-        return max(0.0, min(candidates)) if candidates else None
+            return max(0.0, float(entrance)-self.sections.distance)
+        return None
 
     def corner3(self):
         """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
@@ -571,7 +587,11 @@ class Driver:
         # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
         # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
-        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
+        # 라바콘이 앞 구간(S2)에서 시작됐으면 보류하지 않고 라바콘 구간(S3)으로 넘김 (11/16 anchor_1116_2313: 3번 코너 유지가
+        # 누적 회전 59~63°에서 끝나(전환 기준 65°) 라바콘 내내 S2로 남음 → 라바콘 뒤 4번 코너 유지가 S2 상한 70°에 걸려 0.68 s 만에 종료)
+        cone_ahead = (self.c['sections'].get('cone_advance', True) and self.cones.active
+                      and self.sections.index == START_SECTION['cones']-1)
+        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold, advance=cone_ahead)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.signs_fresh = signs_ok
         self.update_stop_line(lane, velocity, now, dt)
@@ -650,6 +670,14 @@ class Driver:
         if self.state == 'lane':
             # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
             requested = self.fork_request
+            # 늦은 지점 요청 (11/16): 점선 끝이 보여 '늦음'이어도 경로 계획이 확인해 주면 목적 쪽 이동만 허용
+            # 예전: 가운데 차로에 도착한 뒤 새 이동이 금지돼 섬 표지판 기둥 앞까지 직진·정지 (합성 시험)
+            late_request = 0
+            lc = self.c['lane_change']
+            if (not requested and lc.get('request_plan', False) and lc.get('request_late', False)
+                    and self.fork.running and not self.fork.entered):
+                late_request = self.fork.request(self.lane_change.index, self.lane_change.active, ignore_late=True)
+                requested = late_request
             if self.sections.allows('lane_change') and not requested and self.c['missions'].get('fork_center_align', True):
                 requested = self.fork.center_request(self.lane_change.index, self.lane_change.active, lane)
             preferred = self.fork.direction if self.fork.running else 0
@@ -664,10 +692,11 @@ class Driver:
             in_corner = self.lane_driver.hold is not None or self.corner3()
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner
-                                            and not self.three_lane_over(),
+                                            and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
+                                            and not cone_first and not in_corner and not self.three_lane_over(),
                                             requested, preferred, avoid_only=self.lane_change_off > 0,
-                                            request_lanes=self.request_lanes(), request_limit=self.request_limit())
+                                            request_lanes=self.request_lanes(requested), request_limit=self.request_limit(),
+                                            request_only=bool(late_request), road_heading=self.road_heading())
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt,
                 (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,

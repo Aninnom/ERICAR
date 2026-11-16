@@ -45,11 +45,18 @@ class SectionManager:
             return False
         return not self.c['enabled'] or mission in self.missions()
 
-    def update(self, yaw_rate, velocity, dt, hold=False):
-        """hold: 이번 주기 구간 전환 보류 (driver.section_hold). 회전·거리 적분은 그대로"""
+    def update(self, yaw_rate, velocity, dt, hold=False, advance=False):
+        """hold: 이번 주기 구간 전환 보류 (driver.section_hold). 회전·거리 적분은 그대로
+        advance: 회전 기준과 무관하게 지금 다음 구간으로 넘김 (driver: 라바콘이 앞 구간에서 시작됨, 11/16)"""
         self.yaw += yaw_rate*dt
         self.distance += abs(velocity)*dt
         self.turned = -math.degrees(self.yaw)-90.0*self.index
+        if advance and self.index < len(SECTION_MISSIONS)-1:
+            self.held, self.held_distance = False, 0.0
+            self.index += 1
+            self.distance = 0.0
+            self.turned -= 90.0
+            return True
         if self.turned >= 90.0-self.c['margin'] and self.index < len(SECTION_MISSIONS)-1:
             # 안전장치: 보류가 안 풀려도 기준을 넘은 채 hold_distance(m) 가면 전환 (다음 구간 미션이 영영 안 켜지는 일 방지)
             if hold and self.held_distance < self.c.get('hold_distance', 3.0):
