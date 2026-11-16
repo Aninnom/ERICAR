@@ -14,26 +14,56 @@ lane['valid'], lane['heading'], lane['error'], lane['forward'], lane['solid'], l
 import math
 import numpy as np
 
-from .lidar import body_points, clear_steering, pursuit_steering, to_body, to_road
+from .lidar import body_points, clear_steering, footprint_clearance, pursuit_steering, to_body, to_road
 
 
-def free_distances(forward, left, center, robot, config):
+def free_distances(forward, left, center, robot, config, side_ahead=None):
     """라이다 점(도로 기준)으로 지금 차로(0)·왼쪽(+1)·오른쪽(-1) 차로가 앞으로 몇 m 비어 있는지.
 
     지금 차로 = 차체가 지나갈 폭(차 기준). 옆 차로 = 차로 중앙(center ± lane_width) 기준 차폭 통로.
     차 옆이나 바로 뒤에 점이 있으면 0 → 그쪽으로 못 감. 점이 없으면 라이다 범위(3 m).
     바로 뒤 = 차체 뒤끝(뒷축 뒤 length − front_bumper_x = 7.2 cm) + side_behind_margin (소민 11/13)
     예전: 뒷축 뒤 차 길이(33 cm)까지 → 3차로 시작 지점의 가로 벽 등 이미 지나친 것까지 막힘으로 봄 (합성 시험)
+    side_ahead(m): 주면 옆 차로는 뒷축 앞 이 거리보다 먼 점만 막힘으로 봄 (표지판 요청 이동을 일찍 시작, 11/16)
     """
     c = config
     half = robot['width']/2+c['margin']
     behind = robot['length']-robot.get('front_bumper_x', robot['length'])+c.get('side_behind_margin', .05)
+    if side_ahead is not None:
+        behind = -side_ahead
     lanes = {0: 0.0, 1: center+c['lane_width'], -1: center-c['lane_width']}
     free = {}
     for direction, middle in lanes.items():
         inside = (np.abs(left-middle) < half) & (forward > (0 if direction == 0 else -behind))
         free[direction] = float(max(0.0, forward[inside].min())) if np.any(inside) else c['free_range']
     return free
+
+
+def arc_path(target, yaw0, angle, radius, margin, tail=0.0, step=0.02):
+    """원호–직선–원호 이동의 뒷축 경로 (도로 기준 x 앞·y 왼쪽·방향 + 왼쪽). arc_steering과 같은 규칙:
+    방향을 angle(rad)까지 틀어 유지 → 남은 횡거리가 복귀 원호 몫(radius·(1−cos 방향)+margin) 이하면 되돌림 → 나란해지면 끝.
+    tail(m): 도착 뒤 목적 차로를 따라 더 가는 거리(도착 직후 앞이 막혔는지 확인용). 반환 (N×3 배열, 도착까지 전진 거리)"""
+    side = 1.0 if target >= 0 else -1.0
+    x = y = 0.0
+    yaw = float(yaw0)
+    poses, back, reach = [(x, y, yaw)], False, None
+    for _ in range(int(8.0/step)):
+        if side*(target-y) <= radius*(1-math.cos(abs(yaw)))+margin:
+            back = True
+        goal = 0.0 if back else side*angle
+        turn = max(-step/radius, min(step/radius, goal-yaw))
+        yaw += turn
+        x += step*math.cos(yaw)
+        y += step*math.sin(yaw)
+        poses.append((x, y, yaw))
+        if back and abs(yaw) < 1e-3:
+            reach = x
+            break
+    if reach is None:
+        reach = x
+    for k in range(int(tail/step)):
+        poses.append((reach+(k+1)*step, y, 0.0))
+    return np.asarray(poses), float(reach)
 
 
 # 선 색 조합 (왼쪽, 오른쪽) → 차로 번호 (0=오른쪽, 1=가운데, 2=왼쪽). 노랑 = 3차선 바깥 경계, 흰 = 차로 구분 점선
@@ -55,11 +85,26 @@ class LaneChange:
         self.waiting = False
         self.seen_lane, self.seen_count, self.seen_stamp = None, 0, None
         self.fork_running = False      # 갈림길 표지판 확정 뒤 (driver가 preferred로 알려 줌)
+        self.fork_dir = 0              # 확정된 출구 방향 (+1 왼쪽, -1 오른쪽, 0 없음)
         self.walls = {}
         self.debug = {}
         self.clock, self.free_log = 0.0, []   # 좌·우 선택용 최근 빈 거리 기록 (시각, free)
         self.heading_log = []          # 최근 카메라 차선 방향 (새 프레임마다). 이동 시작 방향은 이 값들의 중앙값
         self.back = False              # 원호–직선–원호 조향: 복귀 원호(방향을 도로 방향으로 되돌림) 단계인지
+        self.back_clock = self.move_clock = -1e9   # 복귀 시작·이동 시작 시각 (짧은 S자 감속)
+        self.short = False             # 지금 이동이 짧은 S자인지 (앞 장애물 short_front 안에서 시작)
+        self.span = 1                  # 지금 이동이 건너는 차로 수 (표지판 요청으로 두 칸 떨어진 목적 차로면 2)
+        self.move_angle = None         # 지금 이동의 원호 각도(°). None이면 arc_angle·short_arc_angle
+        # 라이다 기준점 (11/16, 유경 feat/fork-double-move의 front_object를 옮김): 섬 위 표지판 기둥 = 가운데 차로 앞 좁은 물체
+        self.anchor = None             # 가운데 차로 통로의 기둥까지 앞 거리(m, 뒷축 기준). 어느 차로에서든 봄
+        self.anchor_front = None       # 지금 차로 통로 바로 앞의 기둥까지 거리(m) = 지금 가운데 차로에 있다는 근거
+        self.anchor_gone = 0.0         # 기둥을 못 본 채 간 거리(m)
+        # 도로 방향 기준 차 방향(rad, + 오른쪽)의 IMU 값: 구간 관리자가 3차선 직선 방향에서 잰 누적 회전 (driver가 매 주기 전달)
+        # 11/16 anchor_1116_2313: 코너 출구에서 카메라 차선 방향이 실제와 45° 달라 차선 변경이 반대로 감 → 방향 기준은 IMU
+        self.road_heading = None
+        self.requested_move = False    # 지금 이동이 갈림길 요청인지 (pursuit 조향의 보는 거리)
+        self.hold_steering = 0.0       # 짧은 S자 중 마지막 안전 조향 (위험해 멈출 때 바퀴 고정)
+        self.engaged, self.clear_since = False, None   # 앞 장애물 회피 판단 중인지, 앞이 빈 채 지난 시각 (front_clear_hold)
         self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
 
     def trusted_colors(self, lane):
@@ -69,6 +114,14 @@ class LaneChange:
         교통섬 노란 선 = 분기 입구 앞쪽 멀리서 시작하거나(가까운 끝이 yellow_near_max m보다 멂) 비스듬함
         → 이런 노란 선은 'island'로 바꿔 차로 번호·노란 경계 판단에 안 씀. 차선 따라가기(lane_vision)는 그대로"""
         colors = dict(lane.get('colors', {}))
+        if self.fork_dir:
+            # 표지판 확정 뒤(분기까지): 방향 규칙 (소민 11/15). 분기 근처에서 옆으로 옮기는 중에는 교통섬 선과 바깥선이
+            # 둘 다 화면 아래까지 들어오고 차가 비스듬해 거리·각도로는 못 가름. 교통섬은 항상 출구 반대쪽(안쪽)에 있으므로
+            # 출구 쪽 노란 선 = 바깥선(믿음), 반대쪽 노란 선 = 교통섬. 차로 번호와 상관없어 이동 중에도 그대로 적용
+            exit_side = 'left' if self.fork_dir > 0 else 'right'
+            return {side: ('island' if color == 'yellow' and side != exit_side else color)
+                    for side, color in colors.items()}
+        # 표지판 전(보조 기준): 멀리 보이는 교통섬 선을 거리·각도로 거름
         near_ends, headings = lane.get('near_ends', {}), lane.get('line_headings', {})
         for side, color in colors.items():
             if color != 'yellow':
@@ -99,17 +152,48 @@ class LaneChange:
         seen = LANE_BY_COLORS.get((colors.get('left'), colors.get('right')))
         if seen is None or seen >= self.c['lane_count']:
             return
-        if self.fork_running and seen == self.c['lane_count']//2:
-            # 갈림길 표지판 확정 뒤 '가운데'(흰/흰) 판정은 안 믿음: 분기 앞 끝 차로에서 바깥선이 흰색처럼 보이거나
-            # 교통섬 선이 빠져 흰/흰으로 보여 번호가 2 → 1로 바뀌고 다시 이동 (run_1114_2330 39.1 s). 끝 차로 판정은 그대로
-            return
         if seen == self.seen_lane:
             self.seen_count += 1
         else:
             self.seen_lane, self.seen_count = seen, 1
+        # 갈림길 표지판 확정 뒤 '가운데'(흰/흰) 판정은 index_confirm_frames_fork 프레임 연속일 때만 인정 (소민 11/15)
+        # 분기 앞 끝 차로에서 바깥선이 흰색처럼 보이거나 빠지면 잠깐 흰/흰 → 번호 2 → 1 → 다시 이동 (run_1114_2330 39.1 s)
+        # 완전히 무시하면 번호가 잘못 끝 차로로 돼 있을 때 못 고침 → 오래 이어질 때만 고침. 끝 차로 판정은 그대로
+        need = self.c['index_confirm_frames']
+        if self.fork_running and seen == self.c['lane_count']//2:
+            need = self.c.get('index_confirm_frames_fork', 20)
         # 차선 변경 중에는 index 그대로 (끝날 때 direction만큼 바꿈). 본 차로는 카메라 종료 판단에만 씀
-        if not self.active and self.seen_count >= self.c['index_confirm_frames']:
+        if not self.active and self.seen_count >= need:
             self.index = seen
+
+    def narrow_object(self, forward, left, middle, around=0.2, min_points=2):
+        """차로 통로(중앙 middle m, 차 기준 왼쪽 +) 앞에서 가장 가까운 물체가 좁으면 (앞 거리, 크기), 아니면 None
+        크기 = 가장 가까운 점에서 around(m) 안 점들의 좌우·앞뒤 폭 중 큰 값. anchor_width(m) 이하만 기둥으로 봄
+        (섬 표지판 기둥 실측 약 0.05~0.07 m, 11/16 plan_1116_1902 155 s 앞 1.9 m. 장애물 차는 0.22 × 0.32 m)"""
+        if len(forward) == 0:
+            return None
+        front = self.robot.get('front_bumper_x', self.robot['length'])
+        inside = (np.abs(left-middle) < self.c['lane_width']/2) & (forward > front) & (forward < self.c['free_range'])
+        if not np.any(inside):
+            return None
+        nearest = int(np.flatnonzero(inside)[np.argmin(forward[inside])])
+        group = np.hypot(forward-forward[nearest], left-left[nearest]) < around
+        size = float(max(np.ptp(left[group]), np.ptp(forward[group])))
+        if np.count_nonzero(group) < min_points or size > self.c.get('anchor_width', .15):
+            return None
+        return float(forward[nearest]), size
+
+    def observe_anchor(self, forward, left, center):
+        """섬 표지판 기둥 추적. 가운데 차로 통로(어느 차로에서든)와 지금 차로 통로를 따로 봄. 못 보면 주행 거리만큼 줄여 유지"""
+        middle = center+(self.c['lane_count']//2-self.index)*self.c['lane_width']
+        seen = self.narrow_object(forward, left, middle)
+        if seen is not None:
+            self.anchor, self.anchor_gone = seen[0], 0.0
+        own = self.narrow_object(forward, left, center)
+        if own is not None and self.index == self.c['lane_count']//2:
+            self.anchor_front = own[0]
+        self.debug['anchor'] = None if self.anchor is None else round(self.anchor, 2)
+        self.debug['anchor_front'] = None if self.anchor_front is None else round(self.anchor_front, 2)
 
     def choose_direction(self, free, lane, requested=0, preferred=0):
         """왼쪽(+1)·오른쪽(-1) 중 갈 차로. 없으면 0
@@ -130,10 +214,15 @@ class LaneChange:
                 rejected[side] = 'outside_lane_count'
                 continue
             # YOLO 요청도 노란 바깥선·교통섬 경계 횡단 금지. 점선 차로에서 정렬 필요
-            if self.trusted_colors(lane).get(side) == 'yellow':
+            # 기둥이 지금 차로 바로 앞에 보이면 가운데 차로가 확실 → 표지판 요청 방향은 옆 선이 노랑으로 읽혀도 넘음
+            # (11/16 sominc_1116_1804·plan_1116_1902: 가운데 차로 도착 뒤 오른쪽 선이 노랑으로 읽혀 요청 거부 → 반대쪽으로 회피)
+            anchored = self.anchor_front is not None and c.get('anchor_enabled', True)
+            if self.trusted_colors(lane).get(side) == 'yellow' and not (requested and anchored):
                 rejected[side] = 'yellow_boundary'
                 continue
-            if not requested and lane.get('solid', {}).get(side, False):
+            # 일반 회피의 실선 금지: 차선 변경은 3차선(S2)·갈림길에서만 켜지고 차로 사이는 점선. 점선을 실선으로 오판해
+            # 빈 쪽을 막음 (소민 11/15 run_1115_2123 124.4 s) → 기본 끔. 바깥 경계는 노란 선 검사가 따로 막음
+            if not requested and c.get('solid_blocks_avoid', False) and lane.get('solid', {}).get(side, False):
                 rejected[side] = 'solid_boundary'
                 continue
             enough = free[direction] >= c['min_free_distance']
@@ -195,18 +284,41 @@ class LaneChange:
         """한 차로 이동 중: 목표 횡이동(target)까지 pure pursuit, 막히면 가까운 안전 조향"""
         c = self.c
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
-        points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction)
+        points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction*self.span)
         error = self.target-self.offset
-        if c.get('steer_mode', 'arc') == 'arc':
+        if self.short or c.get('steer_mode', 'arc') == 'arc':
+            # 짧은 S자(앞 장애물 short_front 안)도 원호–직선–원호로, 각도만 short_arc_angle로 크게 (소민 11/16)
             desired = self.arc_steering(error)
         else:
-            x, y = to_body(c.get('request_lookahead', c['lookahead']) if getattr(self, 'requested_move', False) else c['lookahead'], error, self.heading)
+            # 보는 거리: 시작은 lookahead(표지판 이동은 request_lookahead)로 세게, 목표에 가까워질수록 lookahead_end까지 늘려
+            # 도착 전에 미리 핸들을 풂 (소민 11/15 실차: 고정 0.40이면 비스듬히 들어가 반대로 크게 꺾으며 정렬, 앞으로 많이 감)
+            start = c.get('request_lookahead', c['lookahead']) if self.requested_move else c['lookahead']
+            progress = min(1.0, abs(self.offset)/max(abs(self.target), 1e-6))
+            lookahead = start+(max(start, c.get('lookahead_end', start))-start)*progress
+            x, y = to_body(lookahead, error, self.heading)
             desired = pursuit_steering(x, y, self.robot)
         steering, safe = clear_steering(points, desired, self.robot, c['safety_horizon'], c['margin'])
         self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
-        self.debug['reason'] = 'changing' if safe else 'no_safe_steering'
+        short = self.short
+        self.debug['reason'] = ('changing_short' if short else 'changing') if safe else 'no_safe_steering'
+        if short:
+            if safe:
+                self.hold_steering = steering
+            else:
+                # 짧은 S자 중 안전한 조향이 없어 멈출 때는 바퀴를 직전 값에 고정 (소민 11/16 run_1116_1347:
+                # 멈춘 채 대체 조향이 프레임마다 좌우로 바뀌어 핸들만 왔다갔다)
+                steering = self.hold_steering
         # 안전한 조향이 하나도 없을 때만 그 자리에서 기다린다 (정적 장애물은 비켜 갈 길이 생기지 않으면 실패)
-        return (c['speed'] if safe else 0.0), steering
+        speed = c.get('short_speed', c['speed']) if short else c['speed']
+        if short:
+            # 조향이 크게 바뀌는 순간(시작 꺾기·복귀 반대 꺾기) short_flip_seconds(s) 동안 short_flip_speed로 감속:
+            # 바퀴가 넘어가는 동안 덜 가서 계산한 S자에 가깝게 (소민 11/16)
+            flip = c.get('short_flip_seconds', 0.0)
+            since = min(self.clock-self.move_clock,
+                        self.clock-self.back_clock if self.back else 1e9)
+            if since < flip:
+                speed = min(speed, c.get('short_flip_speed', speed))
+        return (speed if safe else 0.0), steering
 
     def arc_steering(self, error):
         """원호–직선–원호 (11/15): 차 방향을 도로 방향에서 arc_angle(°)까지 틀어 유지하다가, 남은 횡오차가
@@ -220,10 +332,19 @@ class LaneChange:
         yaw = -self.heading                                   # 도로 방향 기준 차 방향 (+ 왼쪽)
         radius = self.robot['wheelbase']/math.tan(self.robot['max_steering'])
         # 지금 방향을 0으로 되돌리는 동안 더 가는 횡거리 + 조향 지연 여유
-        need = radius*(1-math.cos(abs(yaw)))+c.get('arc_margin', .03)
+        short = self.short
+        # 짧은 S자는 자기 여유(short_arc_margin)를 씀. 보통 회피(혁준님 원호)는 arc_margin 그대로 (소민 11/16)
+        margin = c.get('short_arc_margin', c.get('arc_margin', .03)) if short else c.get('arc_margin', .03)
+        need = radius*(1-math.cos(abs(yaw)))+margin
         if side*error <= need:
+            if not self.back:
+                self.back_clock = self.clock     # 복귀(반대 조향) 시작 시각: 짧은 S자 감속용
             self.back = True
-        goal = 0.0 if self.back else side*math.radians(c.get('arc_angle', 30.0))
+        # 짧은 S자: 앞 장애물이 가까워 시작한 이동은 더 크게 틀어 짧게 옮김 (소민 11/16, 장애물 사이 약 1 m에서 복귀)
+        angle = c.get('short_arc_angle', 45.0) if self.short else c.get('arc_angle', 30.0)
+        if self.move_angle is not None:
+            angle = self.move_angle       # 표지판 요청 이동: 시작 때 고른 각도 (plan_request)
+        goal = 0.0 if self.back else side*math.radians(angle)
         limit = self.robot['max_steering']
         return float(max(-limit, min(limit, c.get('arc_gain', 2.5)*(goal-yaw))))
 
@@ -234,16 +355,29 @@ class LaneChange:
           (11/15 fix2_1115_2017 156.9 s: 0→1 이동 직후 1→2 이동이 카메라 한 프레임 방향 −0.48 rad로 시작, 실제 차는 직진 자세
            → 횡이동 과대 추정 + 복귀 조향 0.48 rad 과다 → 도로보다 오른쪽 13~16°로 끝나 교통섬 직진·표지판 추돌)
         - 그 외에는 최근 heading_frames 프레임 카메라 방향의 중앙값 (한 프레임 튐 제외)"""
+        if self.road_heading is not None:
+            return self.road_heading      # IMU 기준이 있으면 그 값 (카메라 한 프레임·이어받은 값보다 우선)
         if self.clock-self.ended_clock <= self.c.get('chain_seconds', 2.0):
             return self.heading
         log = sorted(self.heading_log)
         return log[len(log)//2] if log else camera
 
+    def camera_trusted(self, lane):
+        """카메라의 차로 판정을 믿어도 되는 자세인지 (11/16 anchor_1116_2313 188.6 s: 34° 틀어진 채 흰/흰을 가운데 차로로 보고
+        횡이동 −0.11 → −0.54 m·방향 34 → 8°로 덮어써 복귀 원호 없이 종료, 실제는 오른쪽 38°로 대각선 주행)
+        IMU로 적분한 방향이 camera_trust_heading(rad) 안이고, 카메라 차선 방향과 camera_agree_heading(rad) 안에서 맞을 때만"""
+        c = self.c
+        if not c.get('camera_guard', True):
+            return True
+        return (abs(self.heading) < c.get('camera_trust_heading', .26) and
+                abs(lane.get('heading', 0.0)-self.heading) < c.get('camera_agree_heading', .175))
+
     def camera_finished(self, lane):
         """카메라로 차선 변경 끝 판단 (소민): 반 넘게 옮겼고, 선 색이 목적 차로 + 차로 중앙 근처·나란함
         추측 항법(odom 적분)은 회전 오차(11/9 실측 1.07배)로 덜·더 감 → 카메라가 확인되면 바로 차선 주행에 넘김"""
         c = self.c
-        return (self.seen_lane == self.index+self.direction and self.seen_count >= 2 and lane.get('valid') and
+        return (self.seen_lane == self.index+self.direction*self.span and self.seen_count >= 2 and lane.get('valid') and
+                self.camera_trusted(lane) and
                 abs(self.offset) > c['lane_width']*c.get('camera_finish_progress', .6) and
                 abs(lane['error']) < c.get('camera_finish_error', .06) and
                 abs(lane['heading']) < c.get('camera_finish_heading', .12))
@@ -254,23 +388,39 @@ class LaneChange:
         → 두 번 연속 변경(0→1→2)에서 오차가 쌓여 노란 바깥선 이탈 (11/12 실차)
         조건: 선 색이 목적 차로를 camera_fix_frames번 연속 + 그 차로 중앙이 차 기준 반 차로 안 (걸쳐 있을 때 오인 방지)"""
         c = self.c
-        if not (lane.get('valid') and self.seen_lane == self.index+self.direction and
-                self.seen_count >= c.get('camera_fix_frames', 2)):
+        if not (lane.get('valid') and self.seen_lane == self.index+self.direction*self.span and
+                self.seen_count >= c.get('camera_fix_frames', 2) and self.camera_trusted(lane)):
             return False
         heading = lane['heading']
         center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
         if abs(center) > c['lane_width']*c.get('camera_fix_range', .5):
             return False
-        self.offset, self.heading = self.target-center, heading
+        self.offset = self.target-center
+        if self.road_heading is None:
+            self.heading = heading     # IMU 기준이 없을 때만 방향도 카메라 값으로
         self.debug['camera_fix'] = round(center, 3)
         return True
 
-    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0, avoid_only=False):
+    def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0, avoid_only=False,
+               request_lanes=1, request_limit=None, request_only=False, road_heading=None):
         self.waiting = False
         self.clock += dt
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
-        self.fork_running = bool(preferred)
+        self.road_heading = road_heading if self.c.get('imu_heading', True) else None
+        if self.active and self.road_heading is not None:
+            self.heading = self.road_heading    # 이동 중 방향도 IMU 기준 그대로 (시작 값 오차가 남지 않게)
+        self.fork_running, self.fork_dir = bool(preferred), int(preferred)
+        if self.anchor is not None or self.anchor_front is not None:
+            # 기둥 거리: 못 본 주기에는 주행 거리만큼 줄임. anchor_memory(m) 넘게 못 보거나 지나치면 버림
+            step = abs(velocity)*dt
+            self.anchor_gone += step
+            self.anchor = None if self.anchor is None else self.anchor-step
+            self.anchor_front = None if self.anchor_front is None else self.anchor_front-step
+            if self.anchor_gone > self.c.get('anchor_memory', .5) or (self.anchor is not None and self.anchor < 0):
+                self.anchor = None
+            if self.anchor_gone > self.c.get('anchor_memory', .5) or (self.anchor_front is not None and self.anchor_front < 0):
+                self.anchor_front = None
         self.observe_lane(lane)
         if self.active:
             # lateral_scale: 추측 항법이 실제 횡이동보다 덜 셈 (11/15 fix3_1115_2113: 두 번 모두 0.09~0.20 m 더 감, 11/12 소민 13~19 cm)
@@ -288,9 +438,10 @@ class LaneChange:
             done = done or abs(self.offset) > abs(self.target)+self.c.get('overshoot', .08)
             if done or self.travel >= self.c['max_distance']:
                 # 이동 거리 초과: 영구 정지 대신 차선 주행으로 돌아간다. 반 차로 넘게 갔으면 옮긴 것으로 본다.
-                moved = done or abs(self.offset) > self.c['lane_width']/2
+                # 두 칸 이동이 거리 초과로 끝나면 실제로 넘어간 칸 수만 반영
+                lanes = self.span if done else min(self.span, int(abs(self.offset)/self.c['lane_width']+0.5))
                 self.active = False
-                self.index += self.direction if moved else 0
+                self.index += self.direction*lanes
                 self.seen_lane, self.seen_count = None, 0   # 이동 중 본 차로 기억은 다음 판단에 안 씀
                 self.ended_clock = self.clock
                 return None
@@ -306,30 +457,87 @@ class LaneChange:
             requested = 0
         # 넓은 군집 분류가 빠져도 실제 주행 통로의 라이다 점으로 회피 판단 필요
         # 새 이동의 방향은 최신 카메라 기준. 이전 코너부터 누적된 heading 사용 금지
+        # 도로 방향: 카메라 차선 방향과 IMU 값이 heading_disagree(rad) 넘게 다르면 IMU 값 (코너 출구·비스듬한 자세에서 카메라 오차)
         heading = lane['heading']
+        if self.road_heading is not None and abs(heading-self.road_heading) > self.c.get('heading_disagree', .2):
+            heading = self.road_heading
         camera_center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
         points = self.drop_walls(points, heading, camera_center, self.index, self.trusted_colors(lane))
         forward, left = to_road(points, heading)
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
         center = 0.0 if requested else camera_center
-        free = free_distances(forward, left, center, self.robot, self.c)
+        anchor_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, camera_center))
+        # 표지판 요청 이동: 옆 장애물이 뒷축 앞 request_side_ahead(m) 안까지 빠졌으면 시작 (조향해도 옆 차로에 들어가기까지 약 0.5 m 더 감)
+        # 11/16 somin_1116_1714: 확정 뒤 옆 장애물 앞면이 뒷축 뒤로 빠질 때까지 0.90 m 대기 → 둘째 이동 거리 부족
+        # 일반 회피도 같은 기준(avoid_side_ahead)으로 일찍 시작. 대신 출발 전에 경로를 그려 옆·앞 장애물과 겹치지 않는지 확인 (아래)
+        # 11/16 imu_1116_2348 93.8~99.0 s: 옆 장애물이 뒷축 뒤로 다 빠질 때까지 기다려 앞 장애물 0.57 m 앞에서야 시작
+        ahead = self.c.get('request_side_ahead') if requested else self.c.get('avoid_side_ahead')
+        free = free_distances(forward, left, center, self.robot, self.c, side_ahead=ahead)
         # 옆 차로는 최근 choice_window 동안의 최솟값 사용: 가는 물체(의자 다리 등)가 한 스캔 빠지면 빈 차로로 보임 (11/14 lap3)
         window = self.c.get('choice_window', 0.0)
-        self.free_log = [(t, f) for t, f in self.free_log if self.clock-t <= window]+[(self.clock, dict(free))]
+        # 기록에 옆 막힘 기준(ahead)을 같이 둠: 요청용(뒷축 앞 request_side_ahead)과 일반 회피용 값이 섞이면
+        # 같은 주기의 일반 회피 재판단 값(옛 기준)이 최솟값을 차지해 요청 이동이 일찍 시작하지 못함 (11/16 sominb_1116_1753)
+        self.free_log = [(t, f, a) for t, f, a in self.free_log if self.clock-t <= window]+[(self.clock, dict(free), ahead)]
         for side in (1, -1):
-            free[side] = min(f[side] for _, f in self.free_log)
+            free[side] = min(f[side] for _, f, a in self.free_log if a == ahead)
         self.debug = dict(free=free, index=self.index, walls=self.walls)
+        if self.c.get('anchor_enabled', True):
+            self.observe_anchor(forward, left, anchor_center)
         # 차체가 진행할 통로 안의 전방 장애물만 확인한다.
         if free[0] >= self.c['trigger_distance'] and not requested:
-            self.debug['reason'] = 'front_clear'
-            return None
+            # 회피 판단 중 앞이 비어 보여도 front_clear_hold(s) 동안 계속 비어야 판단을 놓음 (소민 11/16: 라이다 점이
+            # 한두 스캔 빠지면 front_clear ↔ 대기 사이를 오가며 속도·조향이 출렁임)
+            if self.clear_since is None:
+                self.clear_since = self.clock
+            if not self.engaged or self.clock-self.clear_since >= self.c.get('front_clear_hold', 0.0):
+                self.engaged, self.clear_since = False, None
+                self.debug['reason'] = 'front_clear'
+                return None
+        else:
+            self.clear_since = None
+        if not requested:
+            self.engaged = True
         direction = self.choose_direction(free, lane, requested, preferred)
+        if direction and not requested and self.c.get('avoid_plan', False):
+            # 일반 회피 경로 확인: 이 이동이 쓸 각도(앞이 short_front 안이면 short_arc_angle)로 경로를 그려 여유가 모자라면 아직 출발 안 함
+            short = free[0] < self.c.get('short_front', 1.0)
+            angle = self.c.get('short_arc_angle', 45.0) if short else self.c.get('arc_angle', 30.0)
+            plan_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
+            gap = self.path_gap(forward, left, direction*self.c['lane_width']+plan_center, angle,
+                                -self.start_heading(heading), self.c.get('avoid_plan_tail', .2))
+            self.debug['avoid_gap'] = round(min(gap, 9.9), 3)
+            if gap < self.c.get('avoid_plan_margin', .04):
+                self.debug['rejected']['left' if direction > 0 else 'right'] = 'path_blocked'
+                direction = 0
         self.debug['choice'] = direction
         if direction == 0 and not requested and all(
                 self.debug['rejected'].get(side) in ('outside_lane_count', 'yellow_boundary') for side in ('left', 'right')):
             # 양쪽 다 차로 자체가 없음 (갈림길 뒤 일반 차로·코너): 차선 변경으로 풀 수 없는 장애물 → 차선 주행·코너 유지에 맡김
             # 예전: 저속 접근 모드가 3번 코너 조향을 대신해 덜 돌고 바깥 라바콘에 닿음 (11/14 lap3 264~273 s)
             self.debug['reason'] = 'no_side_lane'
+            if not (self.c.get('no_side_wait', False) and not self.fork_running and not avoid_only):
+                return None
+            # 갈림길 표지판 확정 전 3차선 안(no_side_wait): 차로 판단이 한 프레임 틀려 양쪽이 '차로 없음'이 돼도
+            # 회피 판단을 놓지 않고 아래 '갈 차로 없음'과 같이 천천히 다가가며 다시 판단 (소민 11/16: 그 프레임만 차선 주행
+            # 조향이 끼어 핸들이 왔다갔다). 갈림길 뒤·코너는 예전처럼 차선 주행에 맡김
+        if direction == 0 and requested and request_only:
+            # 늦은 지점 요청: 목적 쪽 이동만 허용된 상태 → 일반 회피로 넘기지 않음.
+            # 단 기둥이 anchor_escape(m) 안까지 왔는데도 목적 쪽이 막혀 있으면 반대쪽이라도 피함
+            # (기둥 앞 정지 = 15초 규정으로 이후 미션까지 잃음. 반대 길은 갈림길 점수만 잃음)
+            escape = self.anchor_front is not None and self.anchor_front <= self.c.get('anchor_escape', 0.0)
+            if not escape:
+                self.debug['reason'] = 'late_request_blocked'
+                return None
+            rejected = dict(self.debug['rejected'])
+            result = self.update(lane, scan, 0.0, 0.0, dt, enabled, preferred=preferred)
+            self.debug['request_rejected'], self.debug['escape'] = rejected, True
+            return result
+        if (direction == 0 and requested and self.fork_running and self.c.get('anchor_enabled', True)
+                and self.anchor_front is not None and self.anchor_front > self.c.get('anchor_escape', 0.0)):
+            # 표지판 확정 + 섬 기둥이 지금 차로 앞: 목적 쪽이 잠깐 막혀도 반대쪽 회피로 넘기지 않고 차로 유지하며 다시 계획
+            # (11/16 imu_1116_2348 112.4 s: 가운데 차로에서 오른쪽이 0.3 m쯤 뒤 열릴 상황인데 왼쪽으로 회피 → 반대 길).
+            # 기둥이 anchor_escape 안까지 와도 막혀 있으면 아래 일반 회피로 (기둥 앞 정지 방지)
+            self.debug['reason'] = 'request_wait_anchor'
             return None
         if direction == 0 and requested:
             # 목표 쪽 막힘: 목표는 유지하고 일반 장애물 회피로 우회 가능
@@ -349,7 +557,14 @@ class LaneChange:
         if direction == 0:
             # 정적 장애물은 기다려도 비지 않음 → 앞 장애물 stop_distance 전까지는 지금 차로를 천천히 따라가며 다시 판단
             # (옆 차로를 막은 차를 지나치면 그쪽이 열림). 임의 배치 시험에서 옆 차 옆에 선 채 영구 정지하던 문제
-            if not requested and free[0] > self.c['stop_distance']:
+            # 옆 차로가 차 바로 옆·코앞 물체(빈 거리 < beside_free) 때문에만 막혔으면 앞 장애물에 stop_distance_beside까지
+            # 더 다가감: 방금 지나친 장애물이 차 뒤로 빠지면 그쪽이 열림 (소민 11/15 run_1115_2123: 오른쪽으로 피한 뒤
+            # 가운데 장애물이 옆에 남은 채 0.6 m에서 정지 → 75초 끼임)
+            stop = self.c['stop_distance']
+            if any(self.debug['rejected'].get(side) == 'insufficient_free_distance' and
+                   free[direction_] < self.c.get('beside_free', .3) for direction_, side in ((1, 'left'), (-1, 'right'))):
+                stop = min(stop, self.c.get('stop_distance_beside', .45))
+            if not requested and free[0] > stop:
                 desired = pursuit_steering(lane.get('forward', .65), lane['error'], self.robot)
                 steering, safe = clear_steering(points, desired, self.robot,
                                                 self.c['safety_horizon'], self.c['margin'])
@@ -360,14 +575,121 @@ class LaneChange:
             self.waiting = True
             self.debug['reason'] = 'no_available_lane'
             return 0.0, 0.0  # 더 다가가도 차선 변경 불가한 거리 → 정지
+        # 정렬 조건 (11/16): 차가 도로 방향에서 start_align(rad) 넘게 틀어져 있으면 새 이동을 시작하지 않고 차선 주행으로 먼저 정렬
+        # (코너 출구 직후 등. 틀어진 자세에서는 옆 차로 빈 거리·목표 횡거리 계산도 어긋남). 앞 장애물이 stop_distance 안이면 예외
+        if (self.road_heading is not None and abs(self.road_heading) > self.c.get('start_align', .21)
+                and free[0] > self.c['stop_distance']):
+            self.debug['reason'] = 'not_aligned'
+            return None
+        # 표지판 요청 이동: 출발 전에 경로를 계획. 어느 각도로도 라이다 점과 겹치면 출발하지 않고 차로 유지 → 다음 주기에 다시 계획
+        # (예전: 계획 없이 출발 → 가운데 차로 0.8 m 앞 장애물로 꺾어 들어가 정지·접촉, 합성 시험 11/16)
+        plan = None
+        if requested and self.c.get('request_plan', False):
+            plan_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
+            plan = self.plan_request(forward, left, direction, plan_center, min(2, max(1, int(request_lanes))),
+                                     request_limit, -self.start_heading(heading))
+            if plan is None:
+                self.debug['reason'] = 'request_path_blocked'
+                return None
+            if plan.get('wait'):
+                # 두 칸 경로가 지금은 막혔지만 조금 더 가서 꺾으면 열림 → 한 칸으로 내려가지 않고 차로 유지하며 다시 계획
+                self.debug['reason'], self.debug['plan'] = 'request_wait_gap', plan
+                return None
         self.active, self.direction = True, direction; self.requested_move = bool(requested)
+        # 앞 장애물이 short_front(m)보다 가까우면 짧은 S자 (arc_steering 각도 short_arc_angle). 끄려면 short_front: 0
+        # short_on_request: 표지판 요청 이동도 짧은 S자로 (한 칸 이동 거리 단축, 11/16)
+        self.short = free[0] < self.c.get('short_front', 1.0) or bool(requested and self.c.get('short_on_request', False))
         # 이전에 본 차로 기억 비움 (11/15 main_1115_1904 180.07 s: 0→1 이동 중 비스듬히 본 '2번 차로' 기억이 남아
         # 1→2 이동이 시작한 주기에 camera_correct → overshoot 종료, 가운데 차로인데 index 2 → 교통섬 직진·표지판 추돌)
         self.seen_lane, self.seen_count = None, 0
         # 코너 출구에서도 차량 방향이 아닌 도로 방향으로 한 차로 이동한다.
         self.heading, self.offset, self.travel = self.start_heading(heading), 0.0, 0.0
         self.back = False
+        self.move_clock, self.hold_steering = self.clock, 0.0
+        self.engaged, self.clear_since = False, None
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
-        self.target = direction*self.c['lane_width']+center
+        self.span, self.move_angle = 1, None
+        if plan is not None:
+            self.span, self.move_angle = plan['span'], plan['angle']
+            self.short = False     # 고른 각도·보통 속도로 (짧은 S자 감속 안 씀)
+            self.debug['plan'] = plan
+        self.plan = plan
+        self.target = direction*self.span*self.c['lane_width']+center
         return self.update(lane, scan, 0.0, 0.0, dt, enabled)
+
+    def path_gap(self, forward, left, target, angle, yaw0, tail):
+        """원호–직선–원호 경로(목표 횡거리 target m, 각도 angle °)를 따라갈 때 차체와 라이다 점 사이 최소 여유(m)"""
+        robot = self.robot
+        points = np.column_stack((forward, left)) if len(forward) else np.zeros((0, 2))
+        radius = robot['wheelbase']/math.tan(robot['max_steering'])
+        path, _ = arc_path(target, yaw0, math.radians(angle), radius, self.c.get('arc_margin', .03), tail=tail)
+        body = path.copy()
+        body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
+        body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
+        return footprint_clearance(points, body, robot)
+
+    def plan_request(self, forward, left, direction, center, lanes, limit, yaw0):
+        """표지판 요청 이동의 칸 수·원호 각도 선택 (11/16). 장애물 배치가 매번 달라 각도를 고정하지 않음
+
+        후보 각도마다 원호–직선–원호 경로(arc_path)를 그려 라이다 점(도로 기준)과 차체 여유를 봄.
+        - 두 칸 떨어진 목적 차로면 두 칸을 한 번에 건너는 경로부터, 안 되면 한 칸
+        - 여유가 request_plan_margin(m) 이상인 각도 중, 실차 보정(request_plan_stretch배)한 전진 거리가
+          남은 거리 limit(갈림길 입구까지, 모르면 None) 안에 드는 가장 완만한 각도 (완만할수록 횡이동 추정 오차·쏠림이 작음)
+        - limit 안에 드는 각도가 없으면 여유 있는 각도 중 가장 가파른 것(가장 짧음)
+        - 여유 있는 경로가 하나도 없으면 None → 출발 안 함 (차로 유지하며 다음 주기에 다시 계획)
+        - 출발 지연 (유경 11/16, run_1116_2037·2039): 두 칸 경로가 지금은 막혔어도 request_delay_max(m)까지
+          request_delay_step씩 더 직진한 뒤 꺾는 경로가 열리면 한 칸으로 내려가지 않고 기다림 (반환 wait=True → 출발 안 함).
+          실차: 목적 차로 0.6~1.0 m 앞 상자 때문에 두 칸이 막혀 한 칸만 이동 → 섬 표지판 앞 가운데 차로에서 반대쪽으로 회피.
+          0.3 m쯤 더 가서 꺾으면 상자 뒤로 한 번에 건널 수 있었음. 끄기: request_delay_max 0
+        yaw0: 도로 방향 기준 차 방향(rad, + 왼쪽)
+        경로는 뒷축 기준, 차체 중심은 wheelbase/2 앞. 라이다에 가려 안 보이는 곳은 이동 중 clear_steering이 계속 확인"""
+        c, robot = self.c, self.robot
+        points = np.column_stack((forward, left)) if len(forward) else np.zeros((0, 2))
+        radius = robot['wheelbase']/math.tan(robot['max_steering'])
+        stretch = c.get('request_plan_stretch', 1.1)
+        tried = []
+        for span in range(lanes, 0, -1):
+            target = direction*span*c['lane_width']+center
+            clear = []
+            for angle in sorted(c.get('request_angles', [36.0])):
+                path, reach = arc_path(target, yaw0, math.radians(angle), radius, c.get('arc_margin', .03),
+                                       tail=c.get('request_plan_tail', .3))
+                body = path.copy()
+                body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
+                body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
+                gap = footprint_clearance(points, body, robot)
+                tried.append((span, angle, round(reach*stretch, 2), round(min(gap, 9.9), 3)))
+                if gap >= c.get('request_plan_margin', .04):
+                    clear.append((angle, reach*stretch))
+            if not clear and span > 1:
+                step = c.get('request_delay_step', .1)
+                for k in range(1, int(round(c.get('request_delay_max', 0.)/step))+1):
+                    delay = k*step
+                    for angle in sorted(c.get('request_angles', [36.0])):
+                        # 11/16 혁준: 지연 뒤 이동이 갈림길 입구(limit)를 넘으면 기다려도 못 건넘 → 대기 후보에서 제외
+                        # 꺾기 전 직진 구간은 차로 유지(도로 방향)라 방향 0 그대로 계산
+                        path, reach = arc_path(target, 0.0, math.radians(angle), radius, c.get('arc_margin', .03),
+                                               tail=c.get('request_plan_tail', .3))
+                        if limit is not None and delay+reach*stretch > limit:
+                            continue
+                        count = int(round(delay/.02))      # 꺾기 전 직진 구간 (2 cm 간격)
+                        lead = np.column_stack((np.arange(count)*.02, np.zeros(count), np.zeros(count)))
+                        path = np.vstack((lead, path+[delay, 0.0, 0.0]))
+                        body = path.copy()
+                        body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
+                        body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
+                        gap = footprint_clearance(points, body, robot)
+                        if gap >= c.get('request_plan_margin', .04):
+                            tried.append((span, angle, round(delay+reach*stretch, 2), round(min(gap, 9.9), 3)))
+                            return dict(wait=True, span=span, angle=float(angle), delay=round(delay, 2),
+                                        length=round(float(delay+reach*stretch), 2),
+                                        limit=None if limit is None else round(float(limit), 2), tried=tried)
+            if not clear:
+                continue
+            fits = [item for item in clear if limit is None or item[1] <= limit]
+            angle, length = fits[0] if fits else clear[-1]
+            return dict(span=span, angle=float(angle), length=round(float(length), 2),
+                        limit=None if limit is None else round(float(limit), 2), fits=bool(fits), tried=tried)
+        self.debug['plan_tried'] = tried
+        return None

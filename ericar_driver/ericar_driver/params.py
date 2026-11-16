@@ -43,6 +43,8 @@ ANSWER_CONFIG = {
                  'hold_distance': 3.0, 'off': [],
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
                  'cone_early_turn': 20.0,
+                 # S2에서 라바콘 모드가 실제로 시작되면 회전 기준(65°)을 기다리지 않고 S3로 전환 (11/16). 끄기 False
+                 'cone_advance': True,
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤(= 3번 코너)와 코너 유지 중에는 새 차선 변경 시작 안 함 (11/14 lap4)
                  'lane_change_max_turn': 15.0,
                  # S2에서 차가 직선 방향보다 왼쪽으로 이만큼(°) 넘게 틀어져 있으면 코너 유지 시작 안 함 (갈림길 뒤 S자, 11/14 lap5)
@@ -269,6 +271,10 @@ ANSWER_CONFIG = {
         # 분기 입구 1순위 = 표지판 통과: 화살표를 면적 fork_sign_pass_area 이상으로 본 뒤 fork_sign_pass_distance(m)·
         # fork_sign_pass_seconds(s) 넘게 안 보이면 입구 (두 녹화에서 사라지기 직전 면적 0.009~0.08)
         'fork_sign_pass_area': 0.006, 'fork_sign_pass_distance': 0.15, 'fork_sign_pass_seconds': 0.5,
+        # 안전장치 (유경 11/16 run_1116_2113, 실차 전): 목적 차로 도착 뒤 입구 판정이 안 나도 S2 주행 거리가 이 값(m)이면 입구로 처리
+        # (그 녹화: follow가 끝까지 유지돼 fork_remaining 2.5 → 라바콘 모드 차단, 콘 앞 정지). 11/16 녹화의 입구 5.2~5.6 m
+        # None이면 끔. 합성 시험 장면은 3차선이 더 길어 끔 (three_lane.py, lane_change_max_distance와 같은 이유)
+        'fork_enter_distance': 5.4,
         # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
         'fork_wrong_lane_distance': 0.4,
         # 분기 입구 뒤 이 거리(m)까지만 바깥선 하나 추종 (교통섬 앞머리의 비스듬한 선 구간). 뒤에는 두 선 모두 사용
@@ -337,7 +343,10 @@ ANSWER_CONFIG = {
     'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
-        'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.15,
+        # 11/15 소민: trigger_distance 1.15 → 1.4 (가까워진 뒤 시작하면 조향 공간 없음 no_safe_steering, 다음 장애물 늦게 봄)
+        'lane_count': 3, 'initial_lane': 1, 'lane_width': 0.52, 'trigger_distance': 1.4,
+        # 보는 거리: 이동 시작 lookahead(표지판 이동 request_lookahead) → 도착할수록 lookahead_end까지 늘림 (11/15 소민)
+        'lookahead_end': 0.70,
         'lookahead': 0.40, 'request_lookahead': 0.40, 'speed': 0.18, 'margin': 0.035, 'safety_horizon': 0.3,
         # 11/14: 0.025·0.035 → 0.05·0.15. lap3에서 세 번 모두 조건 미달로 max_distance(3 m, 16 s)까지 끌림
         # (목표 도달 뒤 방향 추정 오차 약 5°, 횡 오차 0.04). 남은 오차는 차선 주행이 처리
@@ -347,7 +356,66 @@ ANSWER_CONFIG = {
         'max_distance': 3.0,         # 한 차로 이동 최대 주행 거리(m). 넘으면 차선 주행으로 복귀
         # 좌·우 선택 (라이다): 옆 차로가 min_free_distance 이상, 지금 차로보다 free_gain 이상 더 비어 있어야 이동.
         # 둘 다 되면 더 멀리 비어 있는 쪽. 점이 없으면 free_range로 봄 (= lidar planning_point_range)
-        'min_free_distance': 1.0, 'free_gain': 0.3, 'free_range': 3.0,
+        # 11/15 소민: 1.0/0.3 → 0.8/0.1 (지그재그 장애물에서 양쪽 다 탈락해 정지). 0.8보다 낮추면 옮긴 직후 앞 장애물에 닿을 위험
+        'min_free_distance': 0.8, 'free_gain': 0.1, 'free_range': 3.0,
+        # 옆 차로가 차 바로 옆 물체(빈 거리 < beside_free m) 때문에만 막혔으면 앞 장애물에 stop_distance_beside(m, 뒷축)까지 접근
+        # 일반 회피에서 실선을 막힘으로 볼지 (False: 3차선 차로 사이는 점선, 점선 오판 방지)
+        'beside_free': 0.3, 'stop_distance_beside': 0.6, 'solid_blocks_avoid': False,
+        # 짧은 S자 (11/16 소민): 이동 시작 때 앞 장애물이 short_front(m, 뒷축)보다 가까우면 원호–직선–원호를 short_arc_angle(°)로
+        # 크게 틀어 짧게 옮김 (보통 arc_angle). 속도 short_speed. 끄기: short_front 0
+        # short_arc_margin: 짧은 S자 복귀 여유(m, 보통 회피는 arc_margin). 큰 각도일수록 실차가 더 밀려 일찍 되돌림
+        # short_flip_seconds(s) 동안 short_flip_speed: 시작 꺾기·복귀 반대 꺾기 순간 감속 (바퀴가 넘어가는 동안 덜 감)
+        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.06,
+        'short_flip_seconds': 0.3, 'short_flip_speed': 0.05,
+        # 11/16 혁준(실차 전): 표지판 요청 이동은 옆 차로 점을 뒷축 앞 request_side_ahead(m)부터만 막힘으로 보고, 짧은 S자로 옮김
+        # 끄기: request_side_ahead None, short_on_request False
+        # short_on_request: 11/16 sominb_1116_1753에서 한 칸 1.00 m(보통 1.06 m)·0.10 m/s라 10.7 s → 거리 단축 거의 없어 끔
+        'request_side_ahead': 0.45, 'short_on_request': False,   # 11/17: 0.2 → 0.45 (출발 전 경로 확인이 실제 여유를 봄)
+        # 표지판 요청 이동 경로 계획 (lane_change.plan_request, 11/16 혁준, 실차 전). 끄기: request_plan False
+        # request_angles(°): 후보 원호 각도. request_plan_margin: 경로와 라이다 점 사이 최소 여유(m)
+        # request_plan_stretch: 실차 이동이 계산보다 긴 비율 (한 칸 계산 1.01 m, 실측 1.06~1.14 m)
+        # request_plan_tail: 도착 뒤 목적 차로 앞이 비어 있어야 하는 거리(m)
+        # request_entrance_distance: 갈림길 입구(점선 끝)의 S2 주행 거리(m). 11/16 녹화에서 5.4~5.6 m부터 차선 변경 꺼짐 → 여유 두고 5.2
+        # 각도 비교(합성, sessions/tools/lc_random_eval.py, 통과 가능한 임의 배치 7대 × 50): 한 칸씩 39 / 36° 41 / 45° 43(충돌·이탈 0) / 54° 43(충돌 1)
+        # / 30~54° 중 선택 42(충돌 3: 가파르면 접촉, 완만하면 두 칸에서 바깥선 넘음) / 40·45·50° 43(이탈 1) → 45° 하나로
+        'request_plan': True, 'request_angles': [45.0],
+        'request_plan_margin': 0.04, 'request_plan_stretch': 1.1, 'request_plan_tail': 0.3,
+        'request_entrance_distance': 5.2,
+        # 출발 지연 (유경 11/16, 합성 시험만·실차 전. lane_change.plan_request): 두 칸 경로가 지금 막혀 있어도
+        # request_delay_max(m)까지 request_delay_step(m)씩 더 직진한 뒤 꺾는 경로가 열리면 한 칸으로 내려가지 않고 기다림
+        # 끄기: request_delay_max 0 (11/16 팀장 동작 그대로)
+        'request_delay_max': 0.6, 'request_delay_step': 0.1,
+        # 라이다 기준점 (11/16 혁준, 유경 feat/fork-double-move의 기준점을 옮김, 합성 시험만·실차 전). 끄기: anchor_enabled False
+        # 가운데 차로 앞 통로에서 크기 anchor_width(m) 이하인 물체 = 섬 위 표지판 기둥. anchor_memory(m)까지는 못 봐도 거리 유지
+        # 쓰는 곳: ① 요청 이동이 끝나야 하는 남은 거리(driver.request_limit, 기둥 거리 + anchor_limit_offset)
+        #         ② 기둥이 지금 차로 바로 앞이면(가운데 차로 확실) 요청 방향은 옆 선이 노랑으로 읽혀도 넘음
+        #         ③ 늦은 지점에서 목적 쪽이 끝내 막혀 있고 기둥이 anchor_escape(m) 안이면 반대쪽으로라도 피함 (기둥 앞 정지 방지)
+        # anchor_limit_offset: 이동이 기둥 옆을 이만큼(m) 지나서 끝나도 됨 (끝 구간은 이미 목적 차로 쪽, 기둥과의 간격은 경로 확인이 봄)
+        'anchor_enabled': True, 'anchor_width': 0.15, 'anchor_memory': 0.5, 'anchor_limit_offset': 0.4, 'anchor_escape': 1.0,
+        # request_late: 늦은 지점(점선 끝이 보임)에서도 경로가 확인되면 목적 쪽 이동 허용. 끄기 False (예전: 새 이동 금지)
+        'request_late': True,
+        # 방향 기준 (11/16 혁준, anchor_1116_2313 대응, 합성 시험만·실차 전)
+        # imu_heading: 도로 방향 기준 차 방향을 구간 관리자의 IMU 누적 회전으로 (끄면 예전처럼 카메라·이어받기)
+        # heading_disagree(rad): 카메라 차선 방향이 IMU 값과 이만큼 넘게 다르면 IMU 값 사용
+        # start_align(rad): 이보다 더 틀어져 있으면 새 차선 변경 시작 안 함 (차선 주행으로 먼저 정렬)
+        # camera_guard: 카메라 종료·보정은 방향이 camera_trust_heading 안이고 카메라와 camera_agree_heading 안에서 맞을 때만
+        'imu_heading': True, 'heading_disagree': 0.2, 'start_align': 0.21,
+        # 누적 회전 치우침 보정 (11/17 혁준, early_1117_0015 대응, driver.observe_heading_bias). 끄기: heading_bias False
+        # 직진(카메라 방향 heading_bias_camera° 안, 조향 heading_bias_steering rad 안, 두 선 보임) 중 (누적 회전 − 카메라 방향)을
+        # heading_bias_seconds(s) 시정수로 평균. 차이가 heading_bias_max(°) 넘으면 표본에서 뺌
+        'heading_bias': True, 'heading_bias_seconds': 2.0, 'heading_bias_camera': 12.0,
+        'heading_bias_steering': 0.08, 'heading_bias_max': 25.0,
+        'camera_guard': True, 'camera_trust_heading': 0.26, 'camera_agree_heading': 0.175,
+        # 일반 회피 일찍 시작 (11/16 혁준, imu_1116_2348 대응, 합성 시험만·실차 전). 끄기: avoid_side_ahead None, avoid_plan False
+        # avoid_side_ahead(m): 옆 차로 점은 뒷축 앞 이 거리보다 먼 것만 막힘 (예전: 뒷축보다 앞이면 전부)
+        # avoid_plan: 출발 전에 실제 쓸 각도로 경로를 그려 라이다 점과 여유 avoid_plan_margin(m) 미만이면 아직 출발 안 함
+        # avoid_plan_tail(m): 도착 뒤 목적 차로 앞이 비어 있어야 하는 거리
+        # 0.45: 45° 원호로 꺾으면 앞 오른쪽 모서리가 옆 차로 장애물 선에 닿기까지 뒷축이 약 0.45 m 감. 합성(지그재그, 앞 장애물까지
+        # 간격 0.58 m): 예전 기준·0.2는 앞 0.45 m에서 시작해 충돌·정지, 0.45는 앞 0.71 m에서 시작해 통과
+        'avoid_side_ahead': 0.45, 'avoid_plan': True, 'avoid_plan_margin': 0.04, 'avoid_plan_tail': 0.2,
+        # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
+        # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
+        'front_clear_hold': 0.5, 'no_side_wait': True,
         # 갈 차로가 없을 때: 앞 장애물까지 stop_distance(m, 뒷축 기준) 넘게 남았으면 approach_speed로 지금 차로 계속 주행,
         # 그 안이면 정지. 0.6 = 한 차로 비켜 가는 데 필요한 최소 앞 거리 근사 (R 0.45, 횡 0.25 m). 실차 조정 필요
         'stop_distance': 0.6, 'approach_speed': 0.15,
@@ -364,8 +432,17 @@ ANSWER_CONFIG = {
         # 자전거 모델 계산(추측 항법 0.8배, 조향 지연 0.15 s): pursuit 1.35 m·최대 42°·끝 8.6°·차선 오차 0.21 m
         #   → arc + 1.2배 1.26 m·30°·2.8°·0.04 m. 두 값(arc_angle, lateral_scale)은 실차 조정 필요
         # 11/16 main_1116_fix1: 30°에서 직선 구간 2.5~3.1 s(실제 최대 33~38°)로 김 → 36 (계산상 직선 약 1.8 s, 최대 약 42°). 실차 34~38에서 조정
-        'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.03, 'arc_finish_heading': 0.05,
-        'lateral_scale': 1.2,
+        # 11/17 bias_1117_0036: 방향 기준이 맞게 된 뒤 lateral_scale 1.2가 과보정(두 칸 추정 1.11 m·실제 약 0.88 m → 0.16 m 모자라 경계선 밟음)
+        # → 1.0. arc_margin 0.03 → 0.08: 복귀 원호를 시작한 뒤 조향이 넘어가는 동안 계산(0.09 m)보다 약 0.05 m 더 감 (실차 전)
+        'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.08, 'arc_finish_heading': 0.05,
+        'lateral_scale': 1.0,
+        # 교통섬 노란 선 구분 (소민 11/15, lane_change.trusted_colors)
+        # 표지판 확정 뒤: 출구 쪽 노란 선만 바깥선, 반대쪽 노란 선은 교통섬 (숫자 없음)
+        # 표지판 전: 노란 선 가까운 끝이 yellow_near_max(m, 뒷축 앞 거리. BEV 맨 아래 0.6 m)보다 멀거나
+        #   차선 방향과 yellow_heading_max(rad) 넘게 비스듬하면 교통섬
+        'yellow_near_max': 0.9, 'yellow_heading_max': 0.25,
+        # 표지판 확정 뒤 '가운데'(흰/흰) 판정으로 차로 번호를 고치려면 이 프레임 수 연속 필요 (평소 index_confirm_frames)
+        'index_confirm_frames_fork': 20,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
@@ -381,7 +458,9 @@ ANSWER_CONFIG = {
         # 11/14: 맞춘 선이 바깥선보다 이만큼(m) 넘게 안쪽이면 벽 아님 (바깥선 쪽으로 붙은 장애물 차 줄 오인 방지)
         'wall_inside': 0.08,
         # 옆 차로 '차 옆·바로 뒤' 검사 범위: 차체 뒤끝(뒷축 뒤 7.2 cm) + 이만큼(m). 예전 차 길이(33 cm)
-        'side_behind_margin': 0.05,
+        # 11/16 소민: 0.05 → -0.072 = 뒷축보다 앞에 있는 점만 '옆 막힘' (좌회전 때 뒤 오버행은 반대쪽으로 빠짐).
+        # 지나친 장애물 옆에서 바로 돌아오도록 (run_1115_2152: 옆 장애물이 차 뒤끝까지 빠지길 기다리다 앞 장애물에 너무 붙음)
+        'side_behind_margin': -0.072,
     },
 }
 

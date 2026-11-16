@@ -54,6 +54,8 @@ class Driver:
         # 구간 관리자: 미션 사슬 대체. 표지판을 놓쳐도 코너를 돌면 다음 구간 미션이 켜짐 (section.py)
         # 재출발: 심사위원이 차를 미션 시작 지점으로 옮긴 경우 그 미션의 구간부터 시작 (node.py --start-stage)
         self.sections = SectionManager(self.c['sections'], START_SECTION[self.c['missions'].get('start_stage') or 'slow'])
+        self.heading_bias = 0.0            # 누적 회전의 치우침 추정(°). observe_heading_bias
+        self.heading_bias_samples = 0
         self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
         if self.c['missions'].get('start_stage') == 'parking':
             self.done.add('traffic')  # 주차 지점 재출발: 신호등은 이미 지난 것으로 봄
@@ -91,6 +93,64 @@ class Driver:
         limit = s.get('lane_change_max_distance')
         return bool(s['enabled'] and limit is not None and self.sections.index == START_SECTION['lane_change'] and
                     self.sections.distance >= limit)
+
+    def road_heading(self):
+        """3차선 직선 방향 기준 차 방향(rad, + 오른쪽). S2(3차선·갈림길 구간)에서만, 그 밖은 None
+        구간 관리자의 누적 회전(IMU, 없으면 odom 보정값). 갈림길 입구를 지난 뒤는 길이 직선이 아니라 안 씀"""
+        s = self.c['sections']
+        if not s['enabled'] or self.sections.index != START_SECTION['lane_change'] or self.fork.entered:
+            return None
+        # 누적 회전의 치우침(자이로 누적 오차)을 뺀 값. 치우침은 observe_heading_bias가 직진 구간의 카메라 차선 방향으로 추정
+        turned = self.sections.turned-self.heading_bias
+        # 직선 방향에서 60° 넘게 벗어난 값은 기준으로 안 씀 (3번 코너 안, 또는 구간 번호와 누적 회전이 안 맞는 상태)
+        if abs(turned) > self.c['lane_change'].get('imu_heading_max', 60.0):
+            return None
+        return math.radians(turned)
+
+    def observe_heading_bias(self, lane, velocity, dt):
+        """누적 회전(sections.turned)의 치우침(°) 추정: 직진 중이고 두 선이 다 보일 때 (누적 회전 − 카메라 차선 방향)의 느린 평균
+        11/17 early_1117_0015: 노드를 켜고 63 s 정지 뒤 출발 → 자이로 누적으로 3차선에서 +9.6° 치우침 →
+        왼쪽 이동은 36° 대신 46°(바깥선 넘음), 두 칸 이동은 45° 대신 37°(0.2 m 모자람). 직진 중 카메라 방향은 믿을 만하고
+        짧은 회전은 IMU가 정확 → 느린 성분만 카메라에 맞춤. 구간이 바뀌어도 값은 이어 씀 (녹화: S1 +8.4~10.1°, S2 +9.6°)"""
+        c = self.c['lane_change']
+        if not (c.get('heading_bias', True) and self.c['sections']['enabled'] and lane.get('valid')):
+            return
+        colors = lane.get('colors') or {}
+        heading = math.degrees(lane.get('heading', 0.0))
+        straight = (abs(heading) < c.get('heading_bias_camera', 12.0)
+                    and abs(self.debug.get('steering', 0.0) or 0.0) < c.get('heading_bias_steering', 0.08)
+                    and abs(velocity) > 0.1 and 'left' in colors and 'right' in colors)
+        if not straight or self.lane_driver.hold is not None or self.lane_change.active or self.cones.active:
+            return
+        difference = self.sections.turned-heading
+        if abs(difference) > c.get('heading_bias_max', 25.0):
+            return       # 코너 안·구간 번호 어긋남 등: 치우침으로 보지 않음
+        self.heading_bias += (difference-self.heading_bias)*min(1.0, dt/c.get('heading_bias_seconds', 2.0))
+        self.heading_bias_samples += 1
+
+    def request_lanes(self, requested=None):
+        """표지판 목적 차로까지 칸 수 (요청 이동이 두 칸을 한 번에 건널지 판단용)"""
+        destination = getattr(self.fork, 'destination', None)
+        if not (self.fork_request if requested is None else requested) or destination is None:
+            return 1
+        return abs(int(destination)-self.lane_change.index)
+
+    def request_limit(self):
+        """요청 이동을 끝내야 하는 남은 거리(m). 모르면 None. 정확한 것부터 하나만 씀
+        1) 섬 표지판 기둥이 라이다에 잡히면 그 거리 + anchor_limit_offset (뒷축이 기둥 옆에 올 때까지 목적 차로 쪽에 들어가 있어야 함)
+        2) 점선 끝이 화면 안에 들어왔으면(fork.late) fork.dash_left. 그 전의 dash_left는 '보이는 가장 먼 점선'이라 입구 거리가 아님
+        3) S2 주행 거리 기준 lane_change.request_entrance_distance(실측 고정값) − 지금 거리
+        (11/16: 예전에는 셋 중 최솟값 → 고정값이 틀리면 한계가 0이 돼 출발 지연이 막힘)"""
+        lc = self.c['lane_change']
+        anchor = getattr(self.lane_change, 'anchor', None)
+        if anchor is not None and lc.get('anchor_enabled', True):
+            return max(0.0, float(anchor)+lc.get('anchor_limit_offset', 0.0))
+        if self.fork.late:
+            return max(0.0, float(self.fork.dash_left))
+        entrance = lc.get('request_entrance_distance')
+        if entrance is not None and self.sections.index == START_SECTION['lane_change']:
+            return max(0.0, float(entrance)-self.sections.distance)
+        return None
 
     def corner3(self):
         """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
@@ -134,7 +194,7 @@ class Driver:
         change = self.lane_change
         if not (self.sections.allows('lane_change') or self.fork_remaining > 0):
             return None
-        lane = change.index + (change.direction if change.active else 0)
+        lane = change.index + (change.direction*getattr(change, 'span', 1) if change.active else 0)
         last = change.c['lane_count'] - 1
         return 'left' if lane == last else 'right' if lane == 0 else None
 
@@ -232,14 +292,14 @@ class Driver:
         return bool(s['enabled'] and self.sections.index == START_SECTION['fork'] and
                     abs(self.sections.turned) > self.c['missions'].get('fork_sign_max_turn', 20.0))
 
-    def arrow_filter(self, detections):
+    def arrow_filter(self, detections, any_axis=False):
         """갈림길 화살표 박스 선별 (11/15 fix_1115_1949 168.3 s: 장애물 회피로 오른쪽 34° 틀어진 동안 트랙 밖 파란 천막을
         right로 3프레임 검출 → 방향 확정, 뒤의 진짜 left 51회는 무시됨)
         - 박스 가로:세로(화소)가 fork_sign_aspect 밖이면 버림 (천막 2.45, 진짜 표지판 0.87~1.11)
         - S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어져 있으면 버림 (표지판은 교통섬 = 도로 방향 앞에 있음)"""
         m = self.c['missions']
         low, high = m.get('fork_sign_aspect', (.6, 1.6))
-        off_axis = self.arrow_off_axis()
+        off_axis = self.arrow_off_axis() and not any_axis   # any_axis: 틀어진 자세 박스도 남김 (확정 뒤 '크게 봤음' 기록용)
         kept = []
         for d in detections:
             if d['name'] in ('left', 'right'):
@@ -327,7 +387,8 @@ class Driver:
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
-        detections = self.arrow_filter(self.traffic_filter(detections))
+        raw = self.traffic_filter(detections)
+        detections = self.arrow_filter(raw)
         names = self.confirmed(detections, detection_stamp)
         if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
@@ -355,6 +416,18 @@ class Driver:
         arrows = [d['area'] for d in detections if d['name'] in ('left', 'right')]
         self.fork.see_sign(max(arrows) if arrows else None, self.lane_change.index, self.lane_change.active,
                            velocity, dt, fresh=self.signs_fresh and not self.arrow_off_axis())
+        # 유경 11/16 run_1116_2113: 두 칸을 45°로 건너는 동안 표지판이 커졌는데(면적 0.006~0.0115) 틀어진 자세(20° 초과)라
+        # 박스가 버려져 '크게 봤음'이 한 번도 기록 안 됨 → 표지판 통과(입구) 판정 없음 → follow가 끝나지 않아 라바콘 모드가 안 켜짐
+        # → 방향 확정 뒤에는 확정된 화살표를 틀어진 자세에서 봐도 '크게 봤음'만 기록 (방향 확정·교체에는 여전히 안 씀)
+        if self.fork.running and self.fork.sign:
+            near = [d['area'] for d in self.arrow_filter(raw, any_axis=True) if d['name'] == self.fork.sign]
+            self.fork.note_near(max(near) if near else None)
+        # 안전장치: 목적 차로를 따라가는데(follow) 입구 판정이 끝내 안 나면 S2 주행 거리 fork_enter_distance(m)에서 입구로 처리
+        enter_at = m.get('fork_enter_distance')
+        if (enter_at is not None and self.fork.phase == 'follow' and not self.lane_change.active
+                and c['sections']['enabled'] and self.sections.index == START_SECTION['fork']
+                and self.sections.distance >= enter_at):
+            self.fork.enter(self.lane_change.index)
         self.sync_fork()
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):
@@ -539,7 +612,11 @@ class Driver:
         # 구간·차선 변경·라바콘 방향 추적은 실측 회전(IMU). odom 회전은 조향 명령으로 계산한 값 (실측 = 0.93 × odom, 11/9)
         # 코너 유지(lane_driving)는 odom 그대로: angle 65°가 odom 기준으로 맞춰져 있음 (11/10 판단, IMU로는 58°)
         turn_rate = angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate
-        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold)
+        # 라바콘이 앞 구간(S2)에서 시작됐으면 보류하지 않고 라바콘 구간(S3)으로 넘김 (11/16 anchor_1116_2313: 3번 코너 유지가
+        # 누적 회전 59~63°에서 끝나(전환 기준 65°) 라바콘 내내 S2로 남음 → 라바콘 뒤 4번 코너 유지가 S2 상한 70°에 걸려 0.68 s 만에 종료)
+        cone_ahead = (self.c['sections'].get('cone_advance', True) and self.cones.active
+                      and self.sections.index == START_SECTION['cones']-1)
+        self.sections.update(turn_rate, velocity, dt, hold=self.section_hold, advance=cone_ahead)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.signs_fresh = signs_ok
         self.update_stop_line(lane, velocity, now, dt)
@@ -617,7 +694,16 @@ class Driver:
             self.sync_fork()
         if self.state == 'lane':
             # 최종 목적지 우선 검사. 이동 중인 제어기는 완료 전 새 목표로 전환 금지
+            self.observe_heading_bias(lane, velocity, dt)
             requested = self.fork_request
+            # 늦은 지점 요청 (11/16): 점선 끝이 보여 '늦음'이어도 경로 계획이 확인해 주면 목적 쪽 이동만 허용
+            # 예전: 가운데 차로에 도착한 뒤 새 이동이 금지돼 섬 표지판 기둥 앞까지 직진·정지 (합성 시험)
+            late_request = 0
+            lc = self.c['lane_change']
+            if (not requested and lc.get('request_plan', False) and lc.get('request_late', False)
+                    and self.fork.running and not self.fork.entered):
+                late_request = self.fork.request(self.lane_change.index, self.lane_change.active, ignore_late=True)
+                requested = late_request
             if self.sections.allows('lane_change') and not requested and self.c['missions'].get('fork_center_align', True):
                 requested = self.fork.center_request(self.lane_change.index, self.lane_change.active, lane)
             preferred = self.fork.direction if self.fork.running else 0
@@ -632,9 +718,11 @@ class Driver:
             in_corner = self.lane_driver.hold is not None or self.corner3()
             change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
                                             (self.sections.allows('lane_change') or self.fork.running)
-                                            and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner
-                                            and not self.three_lane_over(),
-                                            requested, preferred, avoid_only=self.lane_change_off > 0)
+                                            and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
+                                            and not cone_first and not in_corner and not self.three_lane_over(),
+                                            requested, preferred, avoid_only=self.lane_change_off > 0,
+                                            request_lanes=self.request_lanes(requested), request_limit=self.request_limit(),
+                                            request_only=bool(late_request), road_heading=self.road_heading())
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt,
                 (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,
@@ -695,6 +783,7 @@ class Driver:
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_debug=dict(self.lane_change.debug),
                           lane_change_offset=self.lane_change.offset, lane_change_heading=self.lane_change.heading,
+                          heading_bias=round(self.heading_bias, 2), heading_bias_samples=self.heading_bias_samples,
                           line_distance=self.line_distance, fork_pending=self.fork_pending,
                           fork_phase=self.fork.phase, fork_destination=self.fork.destination,
                           fork_dash_left=self.fork.dash_left, fork_late=self.fork.late,

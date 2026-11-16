@@ -56,18 +56,22 @@ class TrafficTest(unittest.TestCase):
     def test_stop_then_green_crossing(self):
         self.green()
         d = self.driver
-        d.line_distance = d.c['missions']['stop_offset']
+        d.line_distance = d.c['missions'].get('traffic_stop_offset', d.c['missions']['stop_offset'])   # 신호등 정지 위치 (11/14 소민)
         d.line_kind = 'crosswalk'   # 신호등은 횡단보도 바로 앞 선에만 정지 (11/12)
         self.assertEqual(d.stop_missions(.4, 0.0, True, 1.0), 0.0)
         self.assertEqual(d.state, 'traffic_hold')
         d.stop_missions(.4, 0.0, False, 1.5)
         self.assertEqual(d.state, 'traffic_hold')
+        # 녹색은 traffic_green_hold(1 s) 끊김 없이 보여야 출발 (11/14 소민: 빨강 대기 중 녹색 오검출 1~2프레임에 출발)
         d.stop_missions(.4, 0.0, True, 1.6)
+        self.assertEqual(d.state, 'traffic_hold')
+        d.line_distance = 0.0   # 앞축이 선 위 (traffic_stop_offset −0.045면 이미 선을 지난 것으로 봐 바로 끝남)
+        d.stop_missions(.4, 0.0, True, 2.7)
         self.assertEqual(d.state, 'traffic_approach')
-        self.assertGreater(d.stop_missions(.4, 0.0, True, 1.65), 0.0)
+        self.assertGreater(d.stop_missions(.4, 0.0, True, 2.75), 0.0)
         self.assertNotIn('traffic', d.done)
         d.line_distance = -.1
-        d.stop_missions(.4, .13, True, 1.7)
+        d.stop_missions(.4, .13, True, 2.8)
         self.assertIn('traffic', d.done)
 
 
