@@ -33,6 +33,7 @@ DT = 0.05
 THREE_LANE = (4.5, 10.8)
 # 이 장면의 3차선은 S2 시작(3.5) 뒤 7.3 m까지 → 실제 트랙용 거리 기준(lane_change_max_distance)은 끔
 ANSWER_CONFIG['sections']['lane_change_max_distance'] = None
+ANSWER_CONFIG['missions']['fork_enter_distance'] = None   # 같은 이유: 입구 거리 안전장치도 끔
 # 주행 시간(s): S2 방향 확정 전 속도 상한(fork_prepare_speed 0.18, PR #37)으로 주차 완료가 약 111 s → 기본 110 s로는 모자람
 DURATION = 130.0
 

@@ -152,6 +152,12 @@ class ForkMission:
                                       and self.sign_gone >= self.wrong_lane_distance):
             self.enter(index)
 
+    def note_near(self, area):
+        """확정된 화살표를 틀어진 자세(차선 변경 중 등)에서 본 면적. '크게 봤음'(sign_near)만 기록 (유경 11/16)
+        see_sign은 틀어진 자세의 박스를 못 받음(오검출 방지로 버림) → 두 칸을 비스듬히 건너면 가까이서 본 기록이 빠짐"""
+        if self.running and not self.entered and area is not None and area >= self.pass_area:
+            self.sign_near = True
+
     def relock(self, signs, stamp):
         """확정 뒤 반대 화살표가 다시 확정되면 목적지 교체. 입구를 지난 뒤(exit·manual)에는 안 바꿈"""
         arrows = set(signs) & {'left', 'right'}

@@ -251,14 +251,14 @@ class Driver:
         return bool(s['enabled'] and self.sections.index == START_SECTION['fork'] and
                     abs(self.sections.turned) > self.c['missions'].get('fork_sign_max_turn', 20.0))
 
-    def arrow_filter(self, detections):
+    def arrow_filter(self, detections, any_axis=False):
         """갈림길 화살표 박스 선별 (11/15 fix_1115_1949 168.3 s: 장애물 회피로 오른쪽 34° 틀어진 동안 트랙 밖 파란 천막을
         right로 3프레임 검출 → 방향 확정, 뒤의 진짜 left 51회는 무시됨)
         - 박스 가로:세로(화소)가 fork_sign_aspect 밖이면 버림 (천막 2.45, 진짜 표지판 0.87~1.11)
         - S2 직선 방향에서 fork_sign_max_turn(°) 넘게 틀어져 있으면 버림 (표지판은 교통섬 = 도로 방향 앞에 있음)"""
         m = self.c['missions']
         low, high = m.get('fork_sign_aspect', (.6, 1.6))
-        off_axis = self.arrow_off_axis()
+        off_axis = self.arrow_off_axis() and not any_axis   # any_axis: 틀어진 자세 박스도 남김 (확정 뒤 '크게 봤음' 기록용)
         kept = []
         for d in detections:
             if d['name'] in ('left', 'right'):
@@ -346,7 +346,8 @@ class Driver:
 
     def update_signs(self, scan, detections, detection_stamp, velocity, now, dt):
         c, m = self.c, self.c['missions']
-        detections = self.arrow_filter(self.traffic_filter(detections))
+        raw = self.traffic_filter(detections)
+        detections = self.arrow_filter(raw)
         names = self.confirmed(detections, detection_stamp)
         if c['parking'].get('test_wait_for_sign',False):names&={'parking'}
         ready = {name for name in names if now >= self.cooldowns.get(name, 0)}
@@ -374,6 +375,18 @@ class Driver:
         arrows = [d['area'] for d in detections if d['name'] in ('left', 'right')]
         self.fork.see_sign(max(arrows) if arrows else None, self.lane_change.index, self.lane_change.active,
                            velocity, dt, fresh=self.signs_fresh and not self.arrow_off_axis())
+        # 유경 11/16 run_1116_2113: 두 칸을 45°로 건너는 동안 표지판이 커졌는데(면적 0.006~0.0115) 틀어진 자세(20° 초과)라
+        # 박스가 버려져 '크게 봤음'이 한 번도 기록 안 됨 → 표지판 통과(입구) 판정 없음 → follow가 끝나지 않아 라바콘 모드가 안 켜짐
+        # → 방향 확정 뒤에는 확정된 화살표를 틀어진 자세에서 봐도 '크게 봤음'만 기록 (방향 확정·교체에는 여전히 안 씀)
+        if self.fork.running and self.fork.sign:
+            near = [d['area'] for d in self.arrow_filter(raw, any_axis=True) if d['name'] == self.fork.sign]
+            self.fork.note_near(max(near) if near else None)
+        # 안전장치: 목적 차로를 따라가는데(follow) 입구 판정이 끝내 안 나면 S2 주행 거리 fork_enter_distance(m)에서 입구로 처리
+        enter_at = m.get('fork_enter_distance')
+        if (enter_at is not None and self.fork.phase == 'follow' and not self.lane_change.active
+                and c['sections']['enabled'] and self.sections.index == START_SECTION['fork']
+                and self.sections.distance >= enter_at):
+            self.fork.enter(self.lane_change.index)
         self.sync_fork()
         if self.state == 'lane':
             if ('traffic_red' in ready or 'traffic_yellow' in ready) and self.allowed('traffic'):

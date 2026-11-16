@@ -263,6 +263,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     from ericar_driver import node as node_module, params
     params.ANSWER_CONFIG['missions']['start_stage'] = 'fork'   # S2에서 출발
     params.ANSWER_CONFIG['sections']['lane_change_max_distance'] = None   # 합성 장면은 3차선이 실제(약 5 m)보다 김
+    params.ANSWER_CONFIG['missions']['fork_enter_distance'] = None       # 같은 이유: 입구 거리 안전장치도 끔
     if os.environ.get('LC_LOOKAHEAD'):   # 값 비교 실험용
         params.ANSWER_CONFIG['lane_change']['lookahead'] = float(os.environ['LC_LOOKAHEAD'])
     sys.argv = [sys.argv[0]]

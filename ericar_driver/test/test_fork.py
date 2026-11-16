@@ -154,6 +154,57 @@ def test_blocked_target_keeps_avoidance():
     assert result is not None
 
 
+def arrive_after_diagonal(d, area):
+    """right 확정(왼쪽 끝 차로) → 두 칸을 비스듬히 건너는 동안(40° 틀어짐) 표지판을 area로 봄 → 오른쪽 끝 차로 도착"""
+    d.lane_change.index = 2
+    for t in (0., .1, .2):     # 멀리서 작게 보고 확정 (실차 확정 때 면적 0.002)
+        d.update_signs({'wide_objects': 1}, [dict(name='right', area=.002)], t, .2, t, .05)
+    assert d.fork.sign == 'right'
+    d.lane_change.active = True
+    d.sections.turned = 40.0
+    for i in range(10):
+        d.update_signs({'wide_objects': 0}, [dict(name='right', area=area)], .3+i*.05, .2, .3+i*.05, .05)
+    d.lane_change.active, d.lane_change.index, d.sections.turned = False, 0, 0.0
+
+
+def test_sign_near_recorded_off_axis():
+    """11/16 run_1116_2113: 두 칸 이동 중 틀어진 자세에서만 표지판이 커짐 → 도착 뒤 표지판이 안 보이면 입구(exit)로 넘어가야 함"""
+    d = driver()
+    d.c['missions']['fork_enter_distance'] = None
+    arrive_after_diagonal(d, .01)
+    for i in range(30):
+        signs(d, [], 1.+i*.05)
+    assert d.fork.phase == 'exit', '틀어진 자세에서 크게 본 표지판이 통과 판정에 안 쓰임: %s' % d.fork.phase
+    # 작게만 봤으면(멀리서) 통과 판정 안 함
+    d = driver()
+    d.c['missions']['fork_enter_distance'] = None
+    arrive_after_diagonal(d, .003)
+    for i in range(30):
+        signs(d, [], 1.+i*.05)
+    assert d.fork.phase == 'follow', d.fork.phase
+    # 틀어진 자세의 반대 화살표는 방향 교체에 안 씀
+    d = driver()
+    arrive_after_diagonal(d, .01)
+    assert d.fork.sign == 'right'
+    d.lane_change.active, d.sections.turned = True, 40.0
+    for i in range(10):
+        d.update_signs({'wide_objects': 0}, [dict(name='left', area=.02)], 2.+i*.05, .2, 2.+i*.05, .05)
+    assert d.fork.sign == 'right', '틀어진 자세의 화살표로 방향이 바뀜'
+
+
+def test_follow_enter_distance():
+    """입구 판정이 끝내 안 나도 S2 주행 거리 fork_enter_distance에서 입구로 처리 (follow가 구간 끝까지 남아 라바콘을 막던 문제)"""
+    d = driver()
+    arrive_after_diagonal(d, .003)
+    d.sections.distance = 4.0
+    for i in range(10):
+        signs(d, [], 1.+i*.05)
+    assert d.fork.phase == 'follow', d.fork.phase
+    d.sections.distance = d.c['missions']['fork_enter_distance']+.01
+    signs(d, [], 2.)
+    assert d.fork.phase == 'exit' and d.fork.passed, d.fork.phase
+
+
 if __name__ == '__main__':
     test_conflicting_arrows()
     test_both_directions()
@@ -162,4 +213,6 @@ if __name__ == '__main__':
     test_requested_uses_current_heading()
     test_fork_keeps_tracked_inner_boundary()
     test_blocked_target_keeps_avoidance()
+    test_sign_near_recorded_off_axis()
+    test_follow_enter_distance()
     print('YOLO 좌·우 분기 상태 시험 통과')
