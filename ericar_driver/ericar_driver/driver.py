@@ -6,7 +6,7 @@ import math
 from .common import clip
 from .cones import ConeDriving
 from .fork import ForkMission
-from .lane_change import LaneChange
+from .lane_change import BackUp, LaneChange
 from .lane_driving import LaneDriving
 from .lidar import body_points, clear_steering
 from .parking import Parking
@@ -26,6 +26,8 @@ class Driver:
         self.c, self.robot = config['answer'], config['robot']
         self.lane_driver = LaneDriving(self.c, self.robot)
         self.lane_change = LaneChange(self.c, self.robot)
+        self.backup = BackUp(self.c, self.robot)      # 3차선: 앞이 막혀 선 뒤 후진 재시도
+        self.was_blocked = False
         self.parking = Parking(config)
         self.cones = ConeDriving(self.c, self.robot)
         self.pid = self.lane_driver.pid
@@ -122,11 +124,41 @@ class Driver:
                     and abs(velocity) > 0.1 and 'left' in colors and 'right' in colors)
         if not straight or self.lane_driver.hold is not None or self.lane_change.active or self.cones.active:
             return
+        if self.sections.distance < c.get('heading_bias_min_distance', 1.0):
+            # 구간 전환 직후 = 코너 출구: 곡선이 덜 끝나 차선 방향이 구간 직선 방향과 다름 → 치우침으로 배우면 안 됨
+            # (11/17 arrow_1117_0322 38.5~39.4 s: 누적 −23°·카메라 −2~−8°를 1 s 만에 −7.0° 치우침으로 학습)
+            return
         difference = self.sections.turned-heading
         if abs(difference) > c.get('heading_bias_max', 25.0):
             return       # 코너 안·구간 번호 어긋남 등: 치우침으로 보지 않음
         self.heading_bias += (difference-self.heading_bias)*min(1.0, dt/c.get('heading_bias_seconds', 2.0))
         self.heading_bias_samples += 1
+
+    def entry_align(self, steering):
+        """3차선 진입 정렬: 코너를 덜 돈 채(구간 직선 방향보다 왼쪽) 들어왔으면 오른쪽 조향으로 마저 돎. 반환 (조향, 적용 여부)
+        11/17 arrow_1117_0322 38.5~43 s: 코너 유지가 54.7°에서 풀림 → 3차선 왼쪽 차로의 선(왼 노랑·오른 흰)을 잡은 차선 주행이
+        왼쪽으로 조향(+0.06~+0.11) → 구간 방향 대비 −22 → −30°로 벌어져 왼쪽 차로 장애물 앞까지 대각선으로 감.
+        3차선은 직선이고 방향은 IMU 누적 회전으로 알므로, 진입 뒤 entry_align_distance(m) 안에서 entry_align_angle(°) 넘게
+        왼쪽으로 틀어져 있으면 차선 주행 조향 대신 오른쪽 조향(entry_align_gain × 틀어짐, 최대 조향까지). 오른쪽으로 틀어진 경우와
+        3번 코너 쪽은 건드리지 않음. 차선 변경·라바콘·코너 유지 중에는 호출 안 함"""
+        lc = self.c['lane_change']
+        heading = self.road_heading()          # rad, + 오른쪽. S2 밖·갈림길 입구 뒤는 None
+        if (not lc.get('entry_align', False) or heading is None
+                or self.sections.distance > lc.get('entry_align_distance', 1.5)
+                or heading > -math.radians(lc.get('entry_align_angle', 12.0))):
+            return steering, False
+        want = max(-self.robot['max_steering'], lc.get('entry_align_gain', 1.5)*heading)
+        return min(steering, want), True
+
+    def fork_lanes(self):
+        """지금 차로에서 표지판 목적 차로까지 칸 수(부호: + 왼쪽). 방향 확정 뒤·입구 전에만, 그 밖은 None
+        진행 중인 이동을 두 칸으로 넓히거나(lane_change.try_extend) 목적 차로 쪽으로 되돌릴지(try_reverse) 판단용
+        0 = 목적 차로가 이동을 시작한 차로 (모름과 구분하려고 None을 따로 둠)"""
+        f = self.fork
+        destination = getattr(f, 'destination', None)
+        if not f.running or destination is None or f.entered or f.phase not in ('locked', 'align'):
+            return None
+        return int(destination)-self.lane_change.index
 
     def request_lanes(self, requested=None):
         """표지판 목적 차로까지 칸 수 (요청 이동이 두 칸을 한 번에 건널지 판단용)"""
@@ -292,6 +324,29 @@ class Driver:
         return bool(s['enabled'] and self.sections.index == START_SECTION['fork'] and
                     abs(self.sections.turned) > self.c['missions'].get('fork_sign_max_turn', 20.0))
 
+    def arrow_on_island(self, box):
+        """틀어진 자세에서 본 화살표 박스가 교통섬 표지판 방향에 있는지 (11/17 bend_1117_0311: 넷째 이동 내내 45° 틀어진 채
+        left를 71.9 s부터 신뢰도 0.85~0.98로 봤는데 틀어짐 규칙으로 전부 버림 → 79.7 s(0.67 m 뒤) 확정, 두 칸 넓히기 시점을 놓침)
+        박스 중심의 도로 기준 방위(° + 왼쪽) = 화면 방위 − 차 방향. 표지판은 가운데 차로(섬) 위 → 차가 섬보다 오른쪽이면
+        왼쪽(−5~+40°), 왼쪽이면 오른쪽(−40~+5°), 가운데 근처면 ±15° 안. 11/15 천막(차 +34°·도로 방위 −25.6°·표지판 예상 왼쪽)은 탈락
+        지난 녹화 19개에 적용: 확정 방향이 바뀐 것 없음, 확정이 최대 1.7 m 앞당겨짐"""
+        m = self.c['missions']
+        if not m.get('fork_sign_bearing', True) or not box or box[2] <= box[0]:
+            return False
+        half = math.radians(m.get('fork_sign_fov', 71.0)/2)
+        camera = -math.degrees(math.atan(((box[0]+box[2])/2-.5)*2*math.tan(half)))
+        bearing = camera-(self.sections.turned-self.heading_bias)
+        change = self.lane_change
+        width = self.c['lane_change']['lane_width']
+        # 표지판(가운데 차로 중앙)이 차 기준 왼쪽 몇 m인지: 차로 번호 + 진행 중인 이동의 횡이동
+        island = (self.c['lane_change']['lane_count']//2-change.index)*width-(change.offset if change.active else 0.0)
+        wide, narrow, back = m.get('fork_sign_bearing_wide', 40.0), m.get('fork_sign_bearing_narrow', 15.0), 5.0
+        if island > .15:
+            return -back <= bearing <= wide
+        if island < -.15:
+            return -wide <= bearing <= back
+        return abs(bearing) <= narrow
+
     def arrow_filter(self, detections, any_axis=False):
         """갈림길 화살표 박스 선별 (11/15 fix_1115_1949 168.3 s: 장애물 회피로 오른쪽 34° 틀어진 동안 트랙 밖 파란 천막을
         right로 3프레임 검출 → 방향 확정, 뒤의 진짜 left 51회는 무시됨)
@@ -304,7 +359,7 @@ class Driver:
         for d in detections:
             if d['name'] in ('left', 'right'):
                 box = d.get('bbox')
-                if off_axis:
+                if off_axis and not self.arrow_on_island(box):
                     continue
                 if box and box[3] > box[1]:
                     aspect = (box[2]-box[0])*m.get('fork_sign_image_aspect', 4/3)/(box[3]-box[1])
@@ -716,13 +771,30 @@ class Driver:
             # 코너에서는 새 차선 변경 안 함 (11/14 lap4 169~175 s: 3번 코너 유지 중 벽·콘을 앞 장애물로 보고 조향을 가로챔 → 왼쪽으로 차선 변경 → 콘 추돌)
             # 코너 유지 중이거나 S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 뒤. 진행 중인 차선 변경은 그대로 끝냄
             in_corner = self.lane_driver.hold is not None or self.corner3()
-            change = self.lane_change.update(lane, scan, velocity, turn_rate, dt,
-                                            (self.sections.allows('lane_change') or self.fork.running)
-                                            and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
-                                            and not cone_first and not in_corner and not self.three_lane_over(),
-                                            requested, preferred, avoid_only=self.lane_change_off > 0,
-                                            request_lanes=self.request_lanes(requested), request_limit=self.request_limit(),
-                                            request_only=bool(late_request), road_heading=self.road_heading())
+            # 후진 재시도 (11/17): 후진 중에는 차선 변경 판단을 쉬고 지나온 경로를 되짚음. 끝나면 이번 주기부터 다시 판단
+            self.backup.record(velocity, turn_rate, dt)
+            was_backing = self.backup.active
+            change = self.backup.step(velocity, dt, self.road_heading()) if was_backing else None
+            change_enabled = ((self.sections.allows('lane_change') or self.fork.running)
+                              and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
+                              and not cone_first and not in_corner and not self.three_lane_over())
+            if change is not None:
+                # 구간 거리는 절댓값으로 쌓임 → 후진한 만큼(이미 더해진 것 포함 2배) 되돌림
+                self.sections.distance = max(0.0, self.sections.distance-2*abs(velocity)*dt)
+            else:
+                if was_backing:
+                    # 후진이 방금 끝남: 차선이 바로 안 잡혀도 판단을 이어 가게 함 (lane_change.lane_memory)
+                    self.lane_change.ended_clock = self.lane_change.clock
+                change = self.lane_change.update(lane, scan, velocity, turn_rate, dt, change_enabled,
+                                                requested, preferred, avoid_only=self.lane_change_off > 0,
+                                                request_lanes=self.request_lanes(requested), request_limit=self.request_limit(),
+                                                request_only=bool(late_request), road_heading=self.road_heading(),
+                                                fork_lanes=self.fork_lanes())
+                retreat = self.backup.observe(change, self.lane_change, body_points(scan, self.robot), velocity, dt,
+                                              blocked=self.was_blocked, enabled=change_enabled,
+                                              heading=self.road_heading())
+                if retreat is not None:
+                    change = retreat
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt,
                 (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,
@@ -731,7 +803,8 @@ class Driver:
             if change is not None:
                 stuck_change = self.lane_change.active and change[0] == 0.0
                 speed, steering = change
-                mode = 'lane_change' if self.lane_change.active else 'lane_change: waiting for clear lane'
+                mode = ('lane_change: backing up' if self.backup.active else
+                        'lane_change' if self.lane_change.active else 'lane_change: waiting for clear lane')
             elif cone is not None:
                 speed, steering = cone
                 mode = 'cones'
@@ -740,6 +813,9 @@ class Driver:
                 # 라바콘 직후: 콘 통과 방향이 틀어진 채 4번 코너에 들어감 → 코너 유지 뒤 0.37 ↔ 0.23 m/s로 출렁임 (lap4 214~216 s)
                 self.cone_exit_left -= abs(velocity)*dt
                 speed = min(speed, self.c['lidar'].get('cone_exit_slow_speed', 0.22))
+            self.entry_aligning = False
+            if change is None and cone is None and not self.cones.active and self.lane_driver.hold is None:
+                steering, self.entry_aligning = self.entry_align(steering)
         if self.state != 'lane':
             # 라바콘 뒤 거리(한 선 이름 힌트·저속 구간)는 상태와 무관하게 셈. 예전: lane 상태에서만 줄어 정지 접근에 들어가면 멈춤 →
             # 힌트가 접근 내내 켜져 오른쪽 선을 왼쪽으로 이름 → 우회전·신호등 추돌 (11/16 main_1116_fix1 218~225 s, 라바콘 뒤 1.49 m에서 멈춤)
@@ -752,7 +828,10 @@ class Driver:
             speed=min(speed,self.c['parking']['scan_speed'])
         # 일반 주행의 섹터 비상 정지는 기존 기준 유지
         clearance = scan['front'] if speed >= 0 else scan['rear']
-        blocked = scan['valid_fraction'] < .5 or clearance < self.c['lidar']['emergency_distance']
+        # 후진 재시도 중에는 뒤 섹터 검사 제외: 라이다가 뒤를 못 봐 rear가 항상 0(막힘). 지나온 경로를 되짚으므로 생략
+        backing = self.backup.active and speed < 0
+        blocked = scan['valid_fraction'] < .5 or (not backing and clearance < self.c['lidar']['emergency_distance'])
+        self.was_blocked = bool(blocked and speed >= 0)
         speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0
@@ -815,4 +894,9 @@ class Driver:
                           cones=self.cones.debug,
                           lane_change=dict(self.lane_change.debug, active=self.lane_change.active,
                                            waiting=self.lane_change.waiting, direction=self.lane_change.direction))
+        if getattr(self, 'entry_aligning', False):
+            self.debug['entry_align'] = True     # 3차선 진입 정렬 중일 때만 표시
+        if self.backup.active or self.backup.stuck > 0:
+            # 후진 재시도: 서 있거나 후진 중일 때만 표시 (평소 디버그 내용은 그대로)
+            self.debug['backup'] = dict(self.backup.debug, active=self.backup.active, stuck=round(self.backup.stuck, 2))
         return float(speed), clip(steering, -self.robot['max_steering'], self.robot['max_steering']), mode if self.state == 'lane' else self.state

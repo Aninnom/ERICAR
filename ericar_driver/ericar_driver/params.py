@@ -86,7 +86,10 @@ ANSWER_CONFIG = {
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
             'parking': 0.002, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
-            'traffic_green': 0.003, 'left': 0.0015, 'right': 0.0015, 'slow': 0.004,
+            # 11/17 혁준: left·right 0.0015 → 0.003. 멀리서(면적 0.3% 미만) 방향을 틀리게 읽음: 녹화 22개 화살표 562건에서
+            # 틀림 0.2% 미만 9%·0.2~0.3% 5%·0.3~1% 3~4%·1% 이상 0~1% (전부 left를 right로). entry_1117_0342 74.3 s:
+            # 기둥 3.5 m 전 면적 0.16%에서 right 4연속 → 확정 → 직진 코스에서 오른쪽 차선 변경. 0.3%면 기둥 약 1.6~2.6 m 전 확정
+            'traffic_green': 0.003, 'left': 0.003, 'right': 0.003, 'slow': 0.004,
         },
         'cpu_threads': 2, 'edge_margin': 0.01,
         # 신호등 박스 안 켜진 램프 위치로 색 재확인 (traffic_lamp.py, 11/14). 밝기·채도 하한, 칸 화소 비율 하한, 둘째 칸 대비 배수
@@ -281,6 +284,9 @@ ANSWER_CONFIG = {
         'fork_outer_distance': 0.8,
         # 화살표 박스 선별 (driver.arrow_filter): 가로:세로 범위, S2 직선 방향에서 허용 틀어짐(°), 영상 가로/세로 비
         'fork_sign_aspect': (0.6, 1.6), 'fork_sign_max_turn': 20.0, 'fork_sign_image_aspect': 4/3,
+        # fork_sign_bearing (11/17): 틀어진 자세(fork_sign_max_turn 초과)여도 박스의 도로 기준 방위가 섬 표지판 쪽이면 인정
+        # (driver.arrow_on_island). 차가 섬 옆 차로면 섬 쪽으로 −5~wide(°), 가운데 근처면 ±narrow(°). 끄기: False
+        'fork_sign_bearing': True, 'fork_sign_fov': 71.0, 'fork_sign_bearing_wide': 40.0, 'fork_sign_bearing_narrow': 15.0,
         # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
         'fork_relock_frames': 5,
         # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
@@ -365,7 +371,10 @@ ANSWER_CONFIG = {
         # 크게 틀어 짧게 옮김 (보통 arc_angle). 속도 short_speed. 끄기: short_front 0
         # short_arc_margin: 짧은 S자 복귀 여유(m, 보통 회피는 arc_margin). 큰 각도일수록 실차가 더 밀려 일찍 되돌림
         # short_flip_seconds(s) 동안 short_flip_speed: 시작 꺾기·복귀 반대 꺾기 순간 감속 (바퀴가 넘어가는 동안 덜 감)
-        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.06,
+        # 11/17 혁준: short_arc_margin 0.06 → 0.10 → 0.08. 실차 도착 오차: 0.06은 0.10~0.13 m 지나침(2회, back_1117_0249·
+        # rev_1117_0212), 0.10은 0.05~0.13 m 못 미침(4회, bend·tight_0405·hard_0409: 못 미친 채 시작한 두 칸 요청 이동이
+        # 오른쪽 노란 선을 넘음). 보통 이동(arc_margin 0.08)은 ±0.04 m 안(8회) → 같은 0.08로 맞춤
+        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.08,
         'short_flip_seconds': 0.3, 'short_flip_speed': 0.05,
         # 11/16 혁준(실차 전): 표지판 요청 이동은 옆 차로 점을 뒷축 앞 request_side_ahead(m)부터만 막힘으로 보고, 짧은 S자로 옮김
         # 끄기: request_side_ahead None, short_on_request False
@@ -394,6 +403,33 @@ ANSWER_CONFIG = {
         'anchor_enabled': True, 'anchor_width': 0.15, 'anchor_memory': 0.5, 'anchor_limit_offset': 0.4, 'anchor_escape': 1.0,
         # request_late: 늦은 지점(점선 끝이 보임)에서도 경로가 확인되면 목적 쪽 이동 허용. 끄기 False (예전: 새 이동 금지)
         'request_late': True,
+        # request_extend: 진행 중인 한 칸 이동과 같은 방향으로 목적 차로가 두 칸이면(이동 시작 뒤 표지판 확정) 경로 확인 뒤 두 칸으로 넓힘 (11/17)
+        'request_extend': True,
+        # request_reverse: 진행 중인 이동의 도착 차로가 목적 차로 반대쪽이면(이동 시작 뒤 표지판 확정) 경로가 비는 순간 목적 차로 쪽으로 되돌림 (11/17)
+        #   request_reverse_tail: 되돌아간 차로가 도착 뒤 비어 있어야 하는 거리(m). 방금 피한 장애물 차로로 돌아가 회피를 반복하지 않게
+        #   trigger_distance(1.4, 뒷축) − 뒷축~차체 앞(0.26) 정도
+        # request_blocked_escape: 요청 방향은 열렸는데 경로만 막히고 기둥이 anchor_escape 안이면 일반 회피로 넘김 (11/17)
+        # 11/17 05:50 정리: 실차 근거가 없는 것은 끔 (오늘 추가한 규칙끼리 충돌 사례 5건, 사용자 결정). 코드는 유지, 현장에서 하나씩 비교
+        #   끔: request_reverse·request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
+        #   켬: request_extend(실차 2회 성공)·short_arc_margin 0.10·entry_align·heading_bias_min_distance·fork_sign_bearing·화살표 최소 면적
+        'request_reverse': False, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
+        # safe_flip_block: 이동 시작 직후(safe_flip_travel m 안) 안전 조향이 목표 반대쪽이고 차이가 safe_flip_max(rad) 넘으면 따르지 않고 정지 (11/17)
+        'safe_flip_block': False, 'safe_flip_max': 0.4, 'safe_flip_travel': 0.15, 'safe_flip_offset': 0.08,
+        'request_extend_slack': 0.5,   # 넓히기: 기둥을 못 본 채 어림한 한계는 이만큼(m) 넘어도 허용
+        # back_end: 복귀 원호 중 횡이동이 목표에서 back_end_error(m) 안까지 왔는데 안전 조향이 원하는 조향보다 이동 방향(바깥)으로
+        #   back_end_deviation(rad) 넘게 벗어나면 이동 종료 (그대로 따르면 바깥으로 밀려남, 11/17)
+        # lane_memory: 이동·후진이 끝난 뒤 lane_memory_seconds(s) 안에 차선이 안 잡히면 '차로 중앙·IMU 방향'으로 보고 판단 유지 (11/17)
+        'back_end': False, 'back_end_error': 0.02, 'back_end_deviation': 0.15,
+        'lane_memory': False, 'lane_memory_seconds': 3.0,
+        # 후진 재시도 (lane_change.BackUp, 11/17): 앞 장애물 backup_front(m, 뒷축) 안에서 backup_wait(s) 넘게 서 있으면
+        # 지나온 경로를 backup_distance(m) 되짚어 후진한 뒤 다시 판단. 한 자리 backup_max번. 실차 값 확인 전. 끄기: backup False
+        # 11/17 04:50 끔: 실차 2회 발동, 2회 모두 구조 실패 (back_1117_0249 차로 밖에서 발동, arrow_1117_0322 틀린 차로 번호 위에서
+        # 발동해 바깥쪽 이동으로 이어짐). 규정도 회색(부칙 가·나). 코드는 남겨 둠
+        'backup': False, 'backup_wait': 1.0, 'backup_front': 0.9, 'backup_distance': 0.3, 'backup_speed': 0.10,
+        'backup_max': 2, 'backup_seconds': 6.0, 'backup_side': 0.15, 'backup_reset_distance': 1.0,
+        # backup_align: 차로 안에 선 경우 도로 방향으로 정렬하며 후진 (끄면 항상 지나온 경로 되짚기). backup_known_offset: 차선 변경으로
+        #   들어온 차로에서 '뒤가 빈 것을 아는 거리' = 그 이동 거리 − 이 값 (출발 때 옆 차로를 뒷축 앞 0.45 m부터 확인 + 차 뒤끝 0.07)
+        'backup_align': True, 'backup_align_gain': 2.5, 'backup_known_offset': 0.52, 'backup_mid_travel': 0.15,
         # 방향 기준 (11/16 혁준, anchor_1116_2313 대응, 합성 시험만·실차 전)
         # imu_heading: 도로 방향 기준 차 방향을 구간 관리자의 IMU 누적 회전으로 (끄면 예전처럼 카메라·이어받기)
         # heading_disagree(rad): 카메라 차선 방향이 IMU 값과 이만큼 넘게 다르면 IMU 값 사용
@@ -403,6 +439,11 @@ ANSWER_CONFIG = {
         # 누적 회전 치우침 보정 (11/17 혁준, early_1117_0015 대응, driver.observe_heading_bias). 끄기: heading_bias False
         # 직진(카메라 방향 heading_bias_camera° 안, 조향 heading_bias_steering rad 안, 두 선 보임) 중 (누적 회전 − 카메라 방향)을
         # heading_bias_seconds(s) 시정수로 평균. 차이가 heading_bias_max(°) 넘으면 표본에서 뺌
+        # heading_bias_min_distance: 구간 전환 뒤 이 거리(m) 안에서는 치우침을 배우지 않음 (코너 출구, 11/17)
+        # entry_align: 3차선 진입 뒤 entry_align_distance(m) 안에서 구간 방향보다 왼쪽으로 entry_align_angle(°) 넘게 틀어져 있으면
+        #   오른쪽 조향으로 코너를 마저 돎 (driver.entry_align, 11/17)
+        'heading_bias_min_distance': 1.0,
+        'entry_align': True, 'entry_align_distance': 1.5, 'entry_align_angle': 12.0, 'entry_align_gain': 1.5,
         'heading_bias': True, 'heading_bias_seconds': 2.0, 'heading_bias_camera': 12.0,
         'heading_bias_steering': 0.08, 'heading_bias_max': 25.0,
         'camera_guard': True, 'camera_trust_heading': 0.26, 'camera_agree_heading': 0.175,
@@ -445,7 +486,11 @@ ANSWER_CONFIG = {
         'index_confirm_frames_fork': 20,
         # 소민 11/12 (three_lane 합성 시험 기준, 실차 확인 전)
         # 카메라 종료: 한 차로 폭 × progress 넘게 옮겼고 선 색이 목적 차로 + 중앙 오차(m)·방향(rad)이 이 안이면 종료
+        # camera_finish_center (11/17): 중앙 판정을 원 차선 오차 대신 방향을 보정한 차로 중앙값으로 (틀어진 채 일찍 끝나는 것 방지)
+        #   기본 끔: 실차 cfc_1117_0428 한 번 시험, 그 주행에서는 판정이 갈리는 상황이 안 생겨 효과 확인 못 함 (사용자 결정: 효과 없으면 되돌림)
+        #   근거 사례는 m08_1117_0417 31.7 s (오차 −0.03인데 실제 중앙에서 0.10 m 못 미친 채 종료)
         'camera_finish_progress': 0.6, 'camera_finish_error': 0.06, 'camera_finish_heading': 0.12,
+        'camera_finish_center': False,
         'overshoot': 0.08,   # 목표 횡이동보다 이만큼(m) 더 가면 바로 종료 (바깥 노란 선 넘음 방지)
         # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
         # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)

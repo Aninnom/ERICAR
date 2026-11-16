@@ -256,7 +256,23 @@ def test_arrow_filter():
     other = dict(name='slow', area=.01, bbox=[.1, .3, .5, .4])
     assert d.arrow_filter([tarp, sign, other]) == [sign, other]
     d.sections.turned = 34.0
-    assert d.arrow_filter([tarp, sign, other]) == [other]
+    # 11/17: 틀어진 자세여도 박스의 도로 기준 방위가 섬 표지판 쪽이면 인정 (driver.arrow_on_island).
+    # sign: 화면 방위 +26° − 차 34° = 도로 −8° (가운데 차로 ±15° 안) → 인정. 천막은 비율로 탈락
+    assert d.arrow_filter([tarp, sign, other]) == [sign, other]
+    # 비율이 맞아도 도로 기준 방위가 섬 쪽이 아니면 탈락: 화면 오른쪽(방위 −24°) − 34° = −58°
+    side = dict(name='right', area=.008, bbox=[.8, .348, .877, .452])
+    assert d.arrow_filter([side, other]) == [other]
+    # 차가 오른쪽 차로(섬이 왼쪽)인데 오른쪽 방위(−25.6°)에 보이는 박스: 탈락 (천막 위치, 비율이 정상이어도)
+    d.lane_change.index = 0
+    tarp_ok = dict(name='right', area=.0184, bbox=[.36, .373, .43, .473])
+    assert d.arrow_filter([tarp_ok, other]) == [other]
+    # 왼쪽으로 46° 틀어진 채 오른쪽 차로에서 본 진짜 표지판 (bend_1117_0311 73 s: 화면 −24°, 도로 +22°): 인정
+    d.sections.turned = -46.0
+    real = dict(name='left', area=.0106, bbox=[.775, .348, .852, .452])
+    assert d.arrow_filter([real, other]) == [real, other]
+    # 끄면 예전 동작 (틀어지면 전부 버림)
+    d.c['missions']['fork_sign_bearing'] = False
+    assert d.arrow_filter([real, sign, other]) == [other]
 
 
 def test_corner_hold_after_destination():
@@ -395,7 +411,50 @@ def test_hold_extra_after_cones():
         assert d.lane_driver.hold_start_ok, (stage, tilt)
 
 
+def test_entry_align():
+    """3차선 진입 정렬·치우침 추정 보호 (11/17 arrow_1117_0322 38.5~43 s: 코너를 덜 돈 채 진입, 차선 주행이 왼쪽으로 조향)"""
+    import copy
+    import math
+    import yaml
+    from ericar_driver.driver import Driver
+    from ericar_driver.params import ANSWER_CONFIG
+    robot = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
+    c = copy.deepcopy(ANSWER_CONFIG)
+    c['missions']['start_stage'] = 'fork'
+    d = Driver({'answer': c, 'robot': robot})
+    # 구간 방향보다 왼쪽 23.5°, 진입 0.1 m: 차선 주행이 왼쪽(+0.11)을 원해도 오른쪽 최대 조향
+    d.sections.turned, d.sections.distance = -23.5, 0.1
+    steering, applied = d.entry_align(0.11)
+    assert applied and abs(steering+robot['max_steering']) < 1e-6, steering
+    # 13° 남음: 비례 조향 (1.5 × 0.227 rad), 차선 주행이 더 오른쪽이면 그 값
+    d.sections.turned = -13.0
+    steering, applied = d.entry_align(0.0)
+    assert applied and abs(steering+1.5*math.radians(13.0)) < 1e-6, steering
+    assert d.entry_align(-0.4)[0] == -0.4
+    # 12° 안, 오른쪽으로 틀어짐, 진입 1.5 m 뒤, 다른 구간: 그대로
+    for turned, distance in ((-8.0, 0.1), (20.0, 0.1), (-23.5, 1.6)):
+        d.sections.turned, d.sections.distance = turned, distance
+        assert d.entry_align(0.11) == (0.11, False), (turned, distance)
+    d.sections.turned, d.sections.distance, d.sections.index = -23.5, 0.1, 1
+    assert d.entry_align(0.11) == (0.11, False)
+    d.sections.index = 2
+    d.c['lane_change']['entry_align'] = False
+    assert d.entry_align(0.11) == (0.11, False)
+    # 치우침 추정: 구간 전환 뒤 1 m 안에서는 배우지 않음
+    lane = dict(valid=True, heading=math.radians(-2.0), colors={'left': 'yellow', 'right': 'white'})
+    d.debug = dict(steering=0.0)
+    d.sections.turned, d.sections.distance = -23.0, 0.5
+    for _ in range(20):
+        d.observe_heading_bias(lane, 0.18, 0.05)
+    assert d.heading_bias == 0.0, d.heading_bias
+    d.sections.distance = 1.2
+    for _ in range(20):
+        d.observe_heading_bias(lane, 0.18, 0.05)
+    assert d.heading_bias < -1.0, d.heading_bias
+
+
 if __name__ == '__main__':
+    test_entry_align()
     test_gaps_not_late()
     test_early_and_late()
     test_wrong_lane_stops()

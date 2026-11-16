@@ -75,6 +75,20 @@ CASES = {
     # 치우침 보정 없으면 왼쪽 이동이 46°로 틀어져 바깥선 쪽으로 넘고, 오른쪽 이동은 모자람
     'bias_plus': dict(signs={'right': (6.6, 7.4)}, obstacles=[(5.0, 0.0)], heading_bias_deg=10.0),
     'bias_minus': dict(signs={'left': (6.6, 7.4)}, obstacles=[(5.0, 0.0), (5.6, 0.52)], heading_bias_deg=-10.0),
+    # 11/17 fork_1117_0119 재현: 왼쪽 차로에서 앞 장애물을 오른쪽으로 피하기 시작한 직후 오른쪽 표지판 확정, 섬 기둥이 가까움
+    # 한 칸으로 끝나면 가운데 차로 도착 뒤 기둥까지 거리가 모자람 → 진행 중인 이동을 두 칸으로 넓혀야 통과 (request_extend)
+    'extend_right': dict(signs={'right': (5.9, 8.5)}, post=(7.3, 0.0), obstacles=[(5.0, 0.0), (7.2, 0.52)]),
+    # 11/17 ext_1117_0144 재현(좌우 반대): 가운데 차로에서 섬 기둥을 앞 장애물로 보고 왼쪽으로 피하기 시작한 직후 오른쪽 표지판 확정
+    # 예전: 왼쪽 끝 차로까지 다 간 뒤 두 칸을 돌아와야 해 기둥 앞에서 거리 부족. 지금: 진행 중인 이동을 오른쪽으로 되돌림 (request_reverse)
+    # request_reverse는 11/17 정리로 기본값에서 끔 → 이 사례만 켜고 확인 (lane_change 덮어쓰기)
+    'reverse_right': dict(signs={'right': (6.0, 8.5)}, post=(7.3, 0.0), obstacles=[], lane_change={'request_reverse': True}),
+    # 11/17 ext_1117_0135 재현: 왼쪽 끝 차로 앞 장애물을 오른쪽으로 피하는 중 왼쪽 표지판 확정(목적 = 떠난 차로), 기둥이 가까움
+    # 가운데 차로 중앙까지 다 간 뒤 돌아오면 기둥 앞에서 거리 부족 → 장애물을 지나친 순간 바로 돌아와야 함
+    'return_left': dict(signs={'left': (4.3, 8.5)}, post=(6.75, 0.0), obstacles=[(5.3, 0.52)], start_y=0.52, start_zone=True),
+    # 11/17 rev_1117_0212 77.7~98 s 재현: 가운데 차로 장애물 0.7 m 앞에서 오른쪽으로 짧게 피해 도착하니 오른쪽 차로 장애물이 0.6 m 앞
+    # (줄 간격 1.1 m, 실차는 이동 시작 때 그 장애물이 스캔에 없었음). 실차: 왼쪽으로 꺾을 거리가 없어 정지 → 수동 후진 뒤 통과
+    # 합성 시뮬은 차가 실차보다 짧게 돌아(도착 때 0.8 m 남음) 후진 없이 통과함 → 배치 회귀 확인용. 후진 동작은 단위 시험 test_backup
+    'backup_tight': dict(signs={}, start_s=4.0, obstacles=[(4.86, 0.0), (4.1, 0.52), (5.7, 0.52), (5.97, -0.52)]),
     'slalom_left': dict(signs={'left': (6.0, 8.5)}, post=(8.76, 0.0),
                         obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, 0.52),
                                    (7.60, 0.52), (7.72, 0.52)]),
@@ -270,6 +284,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     fake_ros.install(spin)
     from ericar_driver import node as node_module, params
     params.ANSWER_CONFIG['missions']['start_stage'] = 'fork'   # S2에서 출발
+    params.ANSWER_CONFIG['lane_change'].update(case.get('lane_change', {}))   # 사례별 설정 덮어쓰기
     params.ANSWER_CONFIG['sections']['lane_change_max_distance'] = None   # 합성 장면은 3차선이 실제(약 5 m)보다 김
     params.ANSWER_CONFIG['missions']['fork_enter_distance'] = None       # 같은 이유: 입구 거리 안전장치도 끔
     if os.environ.get('LC_LOOKAHEAD'):   # 값 비교 실험용
