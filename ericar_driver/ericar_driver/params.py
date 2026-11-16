@@ -301,7 +301,8 @@ ANSWER_CONFIG = {
         'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
         'sign_gone_frames': 3, 'sign_gone_seconds': .35,
         'cruise_reaction_time': .25, 'cruise_braking_acceleration': .30, 'cruise_slow_buffer': .10,
-        'turn_entry_max_speed': .16,
+        'turn_entry_max_speed': .135, 'turn_entry_speed_tolerance': .015,
+        'turn_entry_settle_seconds': .25, 'turn_entry_settle_distance': .05,
         # 원호 유지 후 정렬로 전환. 선이 순간적으로 맞아 보여도 회전각·입구 진입 확인 필요
         'arc_min_angle': 1.134, 'arc_align_heading': .35, 'arc_align_lateral': .18,
         'arc_entry_tolerance': .05, 'arc_align_frames': 3,
