@@ -43,6 +43,8 @@ source /opt/ros/humble/setup.bash && source ~/wego_ws/install/setup.bash && sour
 ros2 launch ericar_driver bringup.launch.py record:=true
 ```
 
+- 터미널을 열면 뜨는 환경 선택에서 **3 (dl_env)**. YOLO GPU 추론용 패키지(torch·ultralytics)가 `dl_env`에만 있음. 확인: `python3 -c "import torch; print(torch.cuda.is_available())"` → `True`
+- 환경이 안 맞으면 노드는 안 죽고 로그에 `YOLO failed`가 찍히며 표지판 미션만 꺼짐 (차선 주행은 계속) → 디버그 화면에 표지판 상자가 뜨는지 확인
 - 바퀴·라이다·카메라(노출 600)·주행 노드(YOLO 포함)·디버그 화면을 한 줄로 실행. `record:=true`를 빼면 녹화 안 함
 - 조종기 SWB 아래(수동)로 두고 실행 → 로그에 `lane`이 뜨면 차를 차로와 나란히 놓고 SWB 위(자동)
 - 재출발은 `start_stage:=<구간>` (`slow`·`pedestrian`·`fork`·`cones`·`traffic`·`parking`). 인자 표·구간 설명은 [`ericar_driver/README.md`](ericar_driver/README.md)

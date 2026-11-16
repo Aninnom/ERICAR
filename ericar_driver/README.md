@@ -123,6 +123,13 @@ source /opt/ros/humble/setup.bash && source ~/wego_ws/install/setup.bash && sour
 
 `params.py`를 바꾸면 다시 빌드해야 반영됨.
 
+### 터미널 환경과 GPU
+
+- 터미널을 열면 뜨는 환경 선택에서 **3 (dl_env)**. YOLO GPU 추론용 패키지(torch·ultralytics)가 `dl_env`에만 있음. 확인: `python3 -c "import torch; print(torch.cuda.is_available())"` → `True`
+- 환경이 안 맞으면 노드는 안 죽고 로그에 `YOLO failed`가 찍히며 표지판 미션만 꺼짐 (차선 주행은 계속) → 디버그 화면에 표지판 상자가 뜨는지 확인
+- GPU 설정은 실행 인자가 아니라 `params.py` `detector.device` (0 = Jetson GPU, `'cpu'` = CPU). `bringup`만 실행하면 GPU로 동작
+- 원격에서 `ssh wego@<차> '<명령>'` 한 줄로 실행하면 `~/.bashrc`가 적용되지 않음 → `ROS_LOCALHOST_ONLY=1`, `PYTHONPATH`에 `~/miniconda3/envs/dl_env/lib/python3.10/site-packages`와 `/usr/lib/python3.10/dist-packages`를 직접 넣어야 함
+
 ### 한 번에 실행 (권장): `bringup.launch.py`
 
 바퀴(`limo_base_ackerman`)·라이다·카메라(노출 600 자동 설정)·주행 노드(YOLO 포함, GPU)·디버그 화면을 한 줄로 실행. 종료는 Ctrl+C 한 번. 녹화는 `record:=true`를 붙여야 남음.
