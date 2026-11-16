@@ -480,6 +480,10 @@ class LaneChange:
             if plan is None:
                 self.debug['reason'] = 'request_path_blocked'
                 return None
+            if plan.get('wait'):
+                # 두 칸 경로가 지금은 막혔지만 조금 더 가서 꺾으면 열림 → 한 칸으로 내려가지 않고 차로 유지하며 다시 계획
+                self.debug['reason'], self.debug['plan'] = 'request_wait_gap', plan
+                return None
         self.active, self.direction = True, direction; self.requested_move = bool(requested)
         # 앞 장애물이 short_front(m)보다 가까우면 짧은 S자 (arc_steering 각도 short_arc_angle). 끄려면 short_front: 0
         # short_on_request: 표지판 요청 이동도 짧은 S자로 (한 칸 이동 거리 단축, 11/16)
@@ -512,6 +516,10 @@ class LaneChange:
           남은 거리 limit(갈림길 입구까지, 모르면 None) 안에 드는 가장 완만한 각도 (완만할수록 횡이동 추정 오차·쏠림이 작음)
         - limit 안에 드는 각도가 없으면 여유 있는 각도 중 가장 가파른 것(가장 짧음)
         - 여유 있는 경로가 하나도 없으면 None → 출발 안 함 (차로 유지하며 다음 주기에 다시 계획)
+        - 출발 지연 (유경 11/16, run_1116_2037·2039): 두 칸 경로가 지금은 막혔어도 request_delay_max(m)까지
+          request_delay_step씩 더 직진한 뒤 꺾는 경로가 열리면 한 칸으로 내려가지 않고 기다림 (반환 wait=True → 출발 안 함).
+          실차: 목적 차로 0.6~1.0 m 앞 상자 때문에 두 칸이 막혀 한 칸만 이동 → 섬 표지판 앞 가운데 차로에서 반대쪽으로 회피.
+          0.3 m쯤 더 가서 꺾으면 상자 뒤로 한 번에 건널 수 있었음. 끄기: request_delay_max 0
         yaw0: 도로 방향 기준 차 방향(rad, + 왼쪽)
         경로는 뒷축 기준, 차체 중심은 wheelbase/2 앞. 라이다에 가려 안 보이는 곳은 이동 중 clear_steering이 계속 확인"""
         c, robot = self.c, self.robot
@@ -532,6 +540,25 @@ class LaneChange:
                 tried.append((span, angle, round(reach*stretch, 2), round(min(gap, 9.9), 3)))
                 if gap >= c.get('request_plan_margin', .04):
                     clear.append((angle, reach*stretch))
+            if not clear and span > 1:
+                step = c.get('request_delay_step', .1)
+                for k in range(1, int(round(c.get('request_delay_max', 0.)/step))+1):
+                    delay = k*step
+                    for angle in sorted(c.get('request_angles', [36.0])):
+                        path, reach = arc_path(target, 0.0, math.radians(angle), radius, c.get('arc_margin', .03),
+                                               tail=c.get('request_plan_tail', .3))
+                        count = int(round(delay/.02))      # 꺾기 전 직진 구간 (2 cm 간격)
+                        lead = np.column_stack((np.arange(count)*.02, np.zeros(count), np.zeros(count)))
+                        path = np.vstack((lead, path+[delay, 0.0, 0.0]))
+                        body = path.copy()
+                        body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
+                        body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
+                        gap = footprint_clearance(points, body, robot)
+                        if gap >= c.get('request_plan_margin', .04):
+                            tried.append((span, angle, round(delay+reach*stretch, 2), round(min(gap, 9.9), 3)))
+                            return dict(wait=True, span=span, angle=float(angle), delay=round(delay, 2),
+                                        length=round(float(delay+reach*stretch), 2),
+                                        limit=None if limit is None else round(float(limit), 2), tried=tried)
             if not clear:
                 continue
             fits = [item for item in clear if limit is None or item[1] <= limit]

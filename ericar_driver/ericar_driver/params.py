@@ -374,6 +374,10 @@ ANSWER_CONFIG = {
         'request_plan': True, 'request_angles': [45.0],
         'request_plan_margin': 0.04, 'request_plan_stretch': 1.1, 'request_plan_tail': 0.3,
         'request_entrance_distance': 5.2,
+        # 출발 지연 (유경 11/16, 합성 시험만·실차 전. lane_change.plan_request): 두 칸 경로가 지금 막혀 있어도
+        # request_delay_max(m)까지 request_delay_step(m)씩 더 직진한 뒤 꺾는 경로가 열리면 한 칸으로 내려가지 않고 기다림
+        # 끄기: request_delay_max 0 (11/16 팀장 동작 그대로)
+        'request_delay_max': 0.6, 'request_delay_step': 0.1,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,

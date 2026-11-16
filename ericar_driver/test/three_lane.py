@@ -58,7 +58,24 @@ CASES = {
     'no_imu': dict(signs={}, obstacles=[(5.0, 0.0), (6.9, 0.52)], imu=False),
     # 벽 없음 + 왼쪽 차로에 바깥선 쪽으로 붙은 차 3대 줄: 줄을 벽으로 보고 지우면 막힌 왼쪽으로 변경 → 정지 (11/14)
     'obstacle_row': dict(signs={}, obstacles=[(5.0, 0.0), (5.2, 0.65), (6.0, 0.65), (6.8, 0.65)]),
+    # 11/16 run_1116_1922 재현 (유경): 가운데 차로에 상자 줄(끝 6.96) → 반대쪽으로 피한 뒤 표지판 확정, 상자를 지나면
+    # 섬 기둥(post)까지 약 1.8 m에서 두 차로를 건너야 함. 실차: 한 차로만 옮겨 섬(기둥)으로 진입 → 수동 개입
+    # 옆 차로 상자 하나는 피하는 방향을 반대쪽으로 정하기 위한 것. 표지판은 기둥 바로 앞까지 보임
+    'two_lane_right': dict(signs={'right': (6.2, 8.6)}, post=(8.8, 0.0),
+                           obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, -0.52)]),
+    'two_lane_left': dict(signs={'left': (6.2, 8.6)}, post=(8.8, 0.0),
+                          obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, 0.52)]),
+    # 11/16 run_1116_2037·2039 재현 (유경): 위 배치 + 목적 차로(끝 차로)에 상자 하나 더 (실차: 뒷축 앞 0.6~1.0 m, 기둥 1.9 m)
+    # 팀장 경로 계획(지금 출발하는 45° 한 가지)은 두 칸 경로가 그 상자와 겹쳐 한 칸만 이동 → 가운데 차로에서 섬 표지판을
+    # 앞 장애물로 보고 반대쪽으로 다시 피함 → 반대 길로 나감. 0.3 m쯤 더 가서 꺾으면 상자 뒤로 한 번에 건널 수 있는 배치
+    'slalom_right': dict(signs={'right': (6.0, 8.5)}, post=(8.76, 0.0),
+                         obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, -0.52),
+                                    (7.60, -0.52), (7.72, -0.52)]),
+    'slalom_left': dict(signs={'left': (6.0, 8.5)}, post=(8.76, 0.0),
+                        obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, 0.52),
+                                   (7.60, 0.52), (7.72, 0.52)]),
 }
+POST = 0.06
 
 
 def paint_lines(ws, wl, finite):
@@ -117,6 +134,8 @@ def walls():
 def boxes(case):
     """장애물 차 (s, y) + 벽 → (s, y, 길이, 폭)"""
     out = [(os_, oy, CAR_L, CAR_W) for os_, oy in case['obstacles']]
+    if case.get('post'):     # 섬 위 표지판 기둥 (s, y), 한 변 POST m 상자. 닿으면 충돌
+        out.append((case['post'][0], case['post'][1], POST, POST))
     return out + (walls() if case.get('walls') else [])
 
 
@@ -213,6 +232,16 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                 out['max_y_signed'] = max(out.get('max_y_signed', 0.0), sim['y'], key=abs)
             if collides(sim['s'], sim['y'], sim['psi'], obstacles):
                 out['collision'] = True
+            if case.get('post'):
+                # 기둥(중심)과 차체 사각형 사이 최소 거리, 기둥을 지나칠 때 옆 거리 (섬 침범 정도 비교용)
+                px, py = case['post'][0]-sim['s'], case['post'][1]-sim['y']
+                ahead = px*math.cos(sim['psi'])+py*math.sin(sim['psi'])
+                side = -px*math.sin(sim['psi'])+py*math.cos(sim['psi'])
+                gap = math.hypot(max(-0.286-ahead, ahead-0.044, 0.0), max(abs(side)-CAR_W/2, 0.0))
+                out['post_clear'] = min(out.get('post_clear', 9.9), gap)
+                if abs(px) < 0.05:
+                    out['post_side'] = abs(py)
+                    out['post_y'] = -py          # 기둥을 지날 때 차 위치 (기둥 기준, + 왼쪽)
             if abs(sim['v']) < 0.01 and t > 2:
                 zero_since = t if zero_since is None else zero_since
                 out['stuck'] = max(out['stuck'], t - zero_since)
@@ -220,8 +249,11 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                 zero_since = None
             if t - last_print >= 0.5:
                 last_print = t
-                out['timeline'].append('%5.1f s=%5.2f y=%+.2f psi=%+.2f v=%.2f idx=%s stage=%s front=%.2f lane=%s mode=%s' % (
-                    t, sim['s'], sim['y'], sim['psi'], sim['v'], d.get('lane_index'), d.get('stage'), d.get('front', -1) or -1, d.get('lane_valid'), mode))
+                change = d.get('lane_change_debug') or {}
+                span = (change.get('plan') or {}).get('span', change.get('span'))   # 두 차로 한 번에 이동이면 2
+                out['timeline'].append('%5.1f s=%5.2f y=%+.2f psi=%+.2f v=%.2f idx=%s stage=%s front=%.2f lane=%s mode=%s lc=%s span=%s' % (
+                    t, sim['s'], sim['y'], sim['psi'], sim['v'], d.get('lane_index'), d.get('stage'), d.get('front', -1) or -1, d.get('lane_valid'), mode,
+                    change.get('reason'), span))
             if sim['s'] > ZONE_END + 0.5:
                 break
         out['final'] = (round(sim['s'], 2), round(sim['y'], 2))
@@ -251,8 +283,18 @@ def judge(case_name, r):
     want = 2 if 'left' in fork else 0 if 'right' in fork else None
     fork_ok = want is None or r['end_lane'] == want
     ok = reached and not off and not r['collision'] and fork_ok
-    return ok, dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
-                    끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2))
+    info = dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
+                끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2))
+    if 'post_clear' in r:
+        # 섬(도면 길이 0.48 m, 폭은 가운데 차로 폭쯤)은 그리지 않음 → 기둥과의 거리로 침범 정도만 표시 (판정에는 안 씀)
+        info['기둥최소거리'] = round(r['post_clear'], 2)
+        info['기둥옆거리'] = round(r.get('post_side', -1.0), 2)
+        if want is not None:
+            # 기둥(섬)을 지날 때 목적 쪽 길에 있어야 통과 (합성 장면은 섬 뒤에도 3차로가 이어져 나중에 옮겨도 끝 차로는 맞음)
+            side_ok = r.get('post_y', 0.0)*(1 if want == 2 else -1) > 0.2
+            info['기둥통과쪽'] = side_ok
+            ok = ok and side_ok
+    return ok, info
 
 
 if __name__ == '__main__':
