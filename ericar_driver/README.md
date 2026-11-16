@@ -12,9 +12,12 @@
 | `lane_vision.py` | 차선 인식 (BEV + sliding window, 좌우 판단, 중앙선 목표점) | 혁준, 소민 |
 | `lane_driving.py` | 목표점 pure pursuit (목표점 없을 때 PID) | 혁준, 소민 |
 | `parking.py` | FREE 1회·고정 우회전·흰 선 소실 정지 | 정윤 |
-| `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유) | 유경 |
-| `cones.py` | 라바콘 | 유경 |
-| `lane_change.py` | 3차선 정적 장애물 (라이다 감지 후 차선 변경) | 유경 |
+| `parking_control.py`·`parking_gap.py`·`parking_sign.py`·`parking_white.py` | 주차 보조: 흰 경계선 PD, 라이다 빈칸 입구 추정, 표지판 통과 관측, 흰 도색 선 정렬 | 정윤 |
+| `lidar.py` | 라이다 공통 (차체 기준 점, 경로 여유, 섹터 거리) | 유경 |
+| `cones.py` | 라바콘: 좌·우 콘 쌍(문) 사이로 조향 | 유경 |
+| `lane_change.py` | 3차선 정적 장애물: 라이다 감지 → 좌·우 판단 → 원호–직선–원호 이동, 표지판 요청 이동 경로 계획 | 유경, 소민, 혁준 |
+| `fork.py` | 갈림길 상태: 방향 기억, 목표 차로, 입구 판단 | 소민, 혁준 |
+| `traffic_lamp.py` | 신호등 박스 안 램프 위치로 색 재확인 | 혁준 |
 | `node.py` | ROS 입출력: 센서 수신, YOLO, `/limo/ack_cmd` 발행 | 공통 |
 | `loop.py` | 제어 주기 1회 계산 (센서 상태 → 차선 → 판단), 설정 검사. ROS 의존 없음 | 공통 |
 | `driver.py` | 표지판·정지선 상태, 멈춤 방지, 최종 결정 | 공통 |
@@ -26,7 +29,7 @@
 
 공통 파일은 수정 전 팀 공유.
 
-지그재그(서행 유도선)·보행자·신호등·서행·갈림길은 `driver.py`와 `lane_vision.py` 안에 있음.
+지그재그(서행 유도선)·보행자·신호등 정지는 `driver.py`와 `lane_vision.py` 안에 있음. 서행은 `slow_zone.py`, 갈림길은 `fork.py`.
 
 ## 실차 개발 도구 (`tools/`)
 
@@ -37,6 +40,9 @@
 | `bag_timeline.py` | 녹화 주행 구간 시계열 (거리·방향·조향·오차·검출 선) | `python3 tools/bag_timeline.py ~/bags/<이름>` |
 | `bag_frames.py` | 녹화 지정 시각 카메라 + BEV 창·곡선·목표점 한 장 | `python3 tools/bag_frames.py ~/bags/<이름> 29.0,30.6` → `/tmp/frames.jpg` |
 | `replay_bag.py` | 녹화 영상을 지금 코드에 다시 넣어 결과 CSV (수정 전후 비교) | `python3 tools/replay_bag.py ~/bags/<이름> > after.csv` |
+| `bag_video.py` | 녹화 → 카메라 영상 mp4 (상태·조향·붉은 비율 글자 포함), 작아서 노트북으로 복사 가능 | `/usr/bin/python3 tools/bag_video.py ~/bags/<이름>` |
+| `red_check.py` | 라바콘 붉은색 판정 확인 (비율·색 분포, 판정 사진 저장) | `bringup` `driver:=false` 상태에서 `/usr/bin/python3 tools/red_check.py` |
+| `lc_random_eval.py` | 3차선 임의 배치(장애물 7대) + 갈림길 합성 평가 (맥, ROS 불필요) | `LC_ONLY=fix45 python3 tools/lc_random_eval.py "$PWD" 50 8` |
 | `corn_test.py` | 라바콘 단독 실차 시험 (차선·표지판·구간 없이 `cones.py`만, `sections.off`와 무관). 기록 `~/bags/corn_test_<시각>.csv` | 터미널 1 `ros2 launch ericar_driver bringup.launch.py driver:=false record:=true`, 터미널 2 `python3 tools/corn_test.py` (`--dry`: 명령 없이 인식만). 접속부터 기록 복사까지 칠 명령 전체는 파일 머리말 |
 
 ### 디버그 화면 용어
@@ -76,7 +82,22 @@ ros2 launch ericar_driver bringup.launch.py yolo:=false
 python3 ericar_driver/test/test_regression.py
 ```
 
-numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록.
+numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록. 지금 기준값은 맥 생성본 (PR #67).
+
+3차선·갈림길을 바꿨으면 아래도 실행 (맥)
+
+```bash
+python3 ericar_driver/test/three_lane.py
+```
+
+```bash
+python3 ericar_driver/test/test_lane_change_heading.py
+```
+
+- `three_lane.py`: 합성 사례 21건 (실차 실패 재현 사례 포함). 11/17 기준 21/21
+- `tools/lc_random_eval.py`: 임의 배치 50건. 11/17 기준 46/50 (실패 시드 18·21·27·44)
+- 합성 시험은 '나빠지지 않음' 정도의 근거. 11/17 새벽 실차 실패 중 합성으로 재현된 것은 1건
+- 알려진 실패 2건 (기능 문제 아님, 기준 정리 필요): `test_sections.py` 주차 표지판 누락 1건, `test_lidar_missions.py` 임의 3차선
 
 ## 원본 대비 실차 수정
 
@@ -88,15 +109,23 @@ numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 
 
 그 외 로직은 원본과 동일 (분리 시 정의 17개 글자 단위 일치 확인).
 
-## 실행 (차, 터미널 환경 3 dl_env)
+## 실행 (차)
+
+작업 공간: `~/ericar_main_ws`(`main` 확정본), `~/ericar_dev_ws`(브랜치 시험). 한 터미널에는 하나만 `source`
 
 ```bash
-cd ~/autorace_ws && colcon build --packages-select ericar_driver && source install/setup.bash
+cd ~/ericar_main_ws && colcon build --base-paths src/ericar --packages-select ericar_driver
 ```
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/wego_ws/install/setup.bash && source ~/ericar_main_ws/install/setup.bash
+```
+
+`params.py`를 바꾸면 다시 빌드해야 반영됨.
 
 ### 한 번에 실행 (권장): `bringup.launch.py`
 
-바퀴(`limo_base_ackerman`)·라이다·카메라(노출 300 자동 설정)·주행 노드·디버그 화면을 한 줄로 실행. 종료는 Ctrl+C 한 번.
+바퀴(`limo_base_ackerman`)·라이다·카메라(노출 600 자동 설정)·주행 노드(YOLO 포함, GPU)·디버그 화면을 한 줄로 실행. 종료는 Ctrl+C 한 번. 녹화는 `record:=true`를 붙여야 남음.
 
 ```bash
 ros2 launch ericar_driver bringup.launch.py
@@ -108,13 +137,14 @@ ros2 launch ericar_driver bringup.launch.py
 | `driver` | `true` | `false`면 센서만 (주행 노드 없이, 녹화·보정용) |
 | `debug` | `true` | 디버그 화면 (포트 8080) |
 | `record` | `false` | `true`면 `~/bags/run_<월일_시분>` 녹화 (`bag:=` 로 경로 지정) |
-| `exposure` | `300` | 카메라 수동 노출 |
+| `exposure` | `600` | 카메라 수동 노출. 600에서 약 16.6 Hz, 300은 약 30 Hz |
+| `start_stage` | `slow` | 시작 구간 (아래 "재출발") |
 | `model`, `config` | `~/models/best.pt`, `config/robot.yaml` | 주행 노드로 전달 |
 
 예: 차선만 + 녹화 `ros2 launch ericar_driver bringup.launch.py yolo:=false record:=true`
 
 - 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`
-- 시작 로그에 `[bringup] 카메라 노출: data=300` 확인
+- 시작 로그에 `[bringup] 카메라 노출: data=600` 확인
 - 카메라 `Failed to setup devices` 오류 한 줄은 단독 실행 때도 나오는 메시지, 영상은 정상
 - wego `teleop_launch.py`와 같이 켜지 말 것 (차동 모드 드라이버라 바퀴 드라이버 중복)
 
@@ -126,7 +156,7 @@ ros2 launch ericar_driver bringup.launch.py
 ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 ```
 
-조종기 SWB 위(자동)일 때만 차가 움직임. 상태는 `ros2 topic echo /answer/status`.
+조종기 SWB 위(자동)일 때만 차가 움직임. SWB가 위에 있는 채로 노드를 켜면 켜지자마자 출발 → 아래(수동)로 두고 켠 뒤 로그에 `lane`이 뜨면 올림. 상태는 `ros2 topic echo /answer/status`.
 
 ### 구간 관리자 (미션 순서)
 
@@ -137,12 +167,12 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 | S0 | 출발 직선 | 서행 표지판 |
 | S1 | 1번 코너 뒤 | 보행자 (서행 유도선은 카메라로 상시) |
 | S2 | 2번 코너 뒤 | 3차선 차선 변경, 갈림길 |
-| S3 | 3번 코너 뒤 | 라바콘 (지금은 꺼 둠, 아래 참고) |
+| S3 | 3번 코너 뒤 | 라바콘 |
 | S4 | 4번 코너 뒤 | 신호등, 주차 |
 
-**라바콘은 실차 확인 전이라 기본값에서 꺼 둠** (`params.py` `sections.off: ['cones']`). 담당(유경)이 확인 뒤 목록에서 빼면 S3에서 켜짐. 대회 전 반드시 확인.
+라바콘은 켜져 있음 (`params.py` `sections.off: []`). 라바콘이 3번 코너 안에서 시작하면 S3로 먼저 넘김 (`sections.cone_advance`).
 
-주행 노드가 켜진 채로 차를 조종기로 몰거나 들어서 돌리면 그 회전도 누적됨 → 차를 출발 위치에 둔 뒤 노드를 켬 (연속 2바퀴째는 내내 S4).
+주행 노드가 켜진 채로 차를 조종기로 몰거나 들어서 돌리면 그 회전과 주행 거리도 누적됨 → 차를 출발 위치에 **구간 방향과 나란히** 둔 뒤 노드를 켬 (연속 2바퀴째는 내내 S4). 시작 자세가 틀어져 있으면 3차선 진입 정렬(`entry_align`)과 방향 보정이 그만큼 어긋남. 3차선에서 수동 주행이 섞이면 구간 거리가 부풀어 `lane_change_max_distance`(6.0 m)에서 차선 변경이 꺼짐.
 
 지금 구간은 `/answer/detections`의 `control.stage`·`section`·`section_distance`(구간 내 주행 거리)·`yaw_source`(`imu`/`odom`)로 확인. 구간과 무관하게 미션을 단독 시험하려면 `params.py` `sections.enabled` False.
 
@@ -151,7 +181,7 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt
 규정상 미션 실패·포기 시 차를 그 미션(또는 다음 미션) 시작 지점으로 옮김. 노드를 다시 켤 때 `start_stage`로 시작 구간을 지정 (생략 시 `slow` = 처음부터).
 
 ```bash
-ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt start_stage:=fork
+ros2 launch ericar_driver bringup.launch.py record:=true start_stage:=fork
 ```
 
 | 차를 놓는 곳 | `start_stage` | 구간 |
@@ -164,6 +194,27 @@ ros2 launch ericar_driver driver.launch.py model:=/home/wego/models/best.pt star
 | 주차 | `parking` | S4 |
 
 예전과 다른 점: 라바콘은 `traffic`이 아니라 `cones`, 서행 유도선은 `pedestrian`.
+
+### 3차선·갈림길 설정 (11/17, PR #67)
+
+차선 변경은 원호–직선–원호 이동. 표지판 방향이 확정되면 목적 차로 쪽 이동을 출발 전에 경로로 그려 라이다 점과 여유를 확인 (두 칸 떨어진 목적 차로는 45°로 한 번에). 흐름은 [`docs/three_lane.md`](../docs/three_lane.md), 주행 결과는 이슈 #68.
+
+켜 둔 것 (실차·녹화 근거 있음)
+
+| 설정 (`params.py`) | 내용 |
+|---|---|
+| `lane_change.request_extend` | 한 칸 이동 중 표지판이 확정돼 목적 차로가 두 칸이면 경로 확인 뒤 두 칸으로 넓힘 |
+| `lane_change.short_arc_margin` 0.08 | 짧은 S자 복귀 시작 여유. 0.06은 지나침, 0.10은 못 미침 |
+| `lane_change.entry_align` | 3차선 진입 뒤 1.5 m 안에서 구간 방향보다 왼쪽 12° 넘게 틀어져 있으면 오른쪽 조향 |
+| `lane_change.heading_bias_min_distance` 1.0 | 구간 전환 뒤 1 m 안(코너 출구)은 누적 회전 치우침을 배우지 않음 |
+| `missions.fork_sign_bearing` | 20° 넘게 틀어진 자세여도 화살표 박스의 도로 기준 방위가 섬 표지판 쪽이면 인정 |
+| `detector.minimum_area_by_class` left·right 0.003 | 멀리서 화살표 방향을 틀리게 읽는 것 방지. 확정은 기둥 약 1.6~2.6 m 전 |
+
+구현만 하고 꺼 둔 것 (실차 근거 없음, 이유는 `params.py` 주석. 켤 때는 실차 확인 후)
+
+`request_reverse`, `request_blocked_escape`, `safe_flip_block`, `back_end`, `lane_memory`, `backup`(후진 재시도), `camera_finish_center`
+
+현장에서 맞출 값: `sections.lane_change_max_distance` 6.0, `missions.fork_enter_distance` 5.4, `lane_change.request_entrance_distance` 5.2 (3차선 진입 ~ 갈림길 기둥 거리 기준, 연습 트랙 실측값). 한계: 차로를 바꿔야 하는 장애물 줄 간격 1.5 m 미만 (#64).
 
 ### 멈추지 않기 (규정: 15초 넘게 서면 그 미션 0점)
 
@@ -187,5 +238,5 @@ python3 ericar_driver/test/test_sections.py
 
 - YOLO 모델 클래스 8종 이름이 `params.py`의 `YOLO_CLASSES`와 정확히 같아야 실행됨
 - `config/robot.yaml`의 "실측 필요" 값 (카메라 높이·기울기는 차선 인식에 직접 영향)
-- 차선 색: `params.py`의 `yellow_min/max`는 노란색만 검출. 정지선·노면 표시(흰색)는 아직 노란 마스크 사용 (분리 작업 예정)
+- 차선 색: `params.py`의 `yellow_min/max`는 노란색(차선), `white_min/max`는 흰색(정지선·횡단보도·3차선 점선). 현장 바닥(포맥스 + 빛반사 필름)에서 두 색이 구분되는지 디버그 화면으로 확인
 - `/odom`·카메라·라이다 헤더 시간이 시스템 시계와 맞아야 함. 어긋나면 "waiting for fresh sensors"에서 정지
