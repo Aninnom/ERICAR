@@ -41,4 +41,4 @@ class SignPassage:
 def slow_distance(speed,config):
     """현재 속도에서 탐색 속도까지의 감속·반응·여유 거리 (m)"""
     speed=abs(speed);slow=config['scan_speed']
-    return speed*config['cruise_reaction_time']+max(0.,speed*speed-slow*slow)/(2*config['cruise_braking_acceleration'])+config['cruise_slow_buffer']
+    return speed*config['cruise_reaction_time']+max(0.,speed*speed-slow*slow)/(2*config['cruise_braking_acceleration'])+config['cruise_slow_buffer']+config.get('turn_entry_settle_distance',0.)
