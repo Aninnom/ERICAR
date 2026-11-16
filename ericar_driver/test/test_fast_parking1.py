@@ -42,9 +42,43 @@ def test_latched_far_target_keeps_cruise_after_sign_passage():
 
 def test_demanded_speed_triggers_braking_before_acceleration():
     c,p=setup(.3)
-    assert tick(p,c,v=0.,command=(.4,0.))[2]=='parking_approach'
+    command=tick(p,c,v=0.,command=(.4,0.))
+    assert command[2]=='parking_approach'
+    assert p.c['scan_speed']<command[0]<.4
     assert p.slow_reason=='TARGET_BRAKING_DISTANCE'
     assert p.braking_distance==pytest.approx(slow_distance(.4,p.c))
+
+
+def test_latched_free_approach_cap_only_falls_with_remaining_distance():
+    c,p=setup(.4)
+    first=tick(p,c,t=1.,v=.4,command=(.4,0.))
+    assert first[2]=='parking_approach' and first[0]>.12
+    caps=[first[0]]
+    for index in range(1,7):
+        command=tick(p,c,t=1.+index*.1,v=.25,command=(.4,0.))
+        caps.append(command[0])
+    assert all(after<=before for before,after in zip(caps,caps[1:]))
+    assert caps[-1]<caps[0]
+
+
+def test_relative_target_jitter_cannot_reaccelerate_after_braking():
+    c,p=setup(.3)
+    first=tick(p,c,t=1.,v=.3,command=(.4,0.))
+    assert first[2]=='parking_approach'
+    cap=first[0]
+    # Simulate a noisy estimate that temporarily moves the latched entrance
+    # farther away.  The target remains latched, but the cap may not rise.
+    p.selected['entrance'][0]+=.2
+    second=tick(p,c,t=1.1,v=.25,command=(.4,0.))
+    assert second[0]<=cap
+
+
+def test_unknown_fallback_keeps_original_fixed_scan_speed():
+    c,p=setup();p.sign.passed=True
+    assert tick(p,c,t=1.,v=.3,command=(.4,0.))[2]=='parking_cruise'
+    command=tick(p,c,t=2.1,v=.3,command=(.4,0.))
+    assert command==(.12,0.,'parking_scan')
+    assert p.selected is None and not p.smooth_approach
 
 
 @pytest.mark.parametrize('speed',[.2,.3,.4])

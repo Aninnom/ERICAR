@@ -28,6 +28,7 @@ class Parking:
         self.cruise_distance=0.;self.nearest_start=None;self.slow_started=0.;self.slow_reason=None
         self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
         self.no_target_since=None;self.no_target_distance=0.;self.braking_distance=0.
+        self.smooth_approach=False;self.approach_speed_cap=None;self.entry_stable_since=None
 
     def start(self,now):
         self.pd.reset();self.sign.reset();self._reset_progress()
@@ -50,17 +51,18 @@ class Parking:
         self.state='parking_cancelled';self.reason='EXTERNAL_CANCEL'
 
     def pause(self,now):
-        self.pd.pause();self.align_frames=0
+        self.pd.pause();self.align_frames=0;self.entry_stable_since=None
         self.last_tick=now;self.motion_since=None;self.reason='WAITING_FOR_FRESH_SENSORS'
 
     def _output(self,speed=0.,steering=0.):
         feedback=dict(self.pd.debug)
         if self.state in ('parked','parking_failed','parking_cancelled'):
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None,steering_rad=0.)
-        self.debug=dict(mode='fast_parking1',state=self.state,reason=self.reason,gap=self.gap_debug,
+        self.debug=dict(mode='parking_1116_2',state=self.state,reason=self.reason,gap=self.gap_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
+                        approach_speed_cap_m_s=self.approach_speed_cap,
                         no_target_age_s=0. if self.no_target_since is None else max(0.,self.last_tick-self.no_target_since),
                         turn_phase=self.turn_phase,turn_angle_deg=math.degrees(self.turn_angle),arc_released=self.arc_released,white_line=self.line_debug,line_seen=self.line_seen,
                         search_distance_m=self.search_distance,turn_distance_m=self.turn_distance,
@@ -148,17 +150,49 @@ class Parking:
             self.selected=None;self.state='parking_scan'
             self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             return None
-        self.approach_debug['waiting_for_slow_speed']=remaining<=self.c['approach_start_tolerance'] and abs(velocity)>self.c['turn_entry_max_speed']
-        if remaining<=self.c['approach_start_tolerance'] and abs(velocity)<=self.c['turn_entry_max_speed']:
+        settle=self.c['turn_entry_settle_seconds']
+        in_band=(abs(velocity-self.c['turn_speed'])<=self.c['turn_entry_speed_tolerance'] and
+                 abs(velocity)<=self.c['turn_entry_max_speed'])
+        if in_band:
+            if self.entry_stable_since is None:self.entry_stable_since=now
+        else:self.entry_stable_since=None
+        stable_age=0. if self.entry_stable_since is None else now-self.entry_stable_since
+        ready=(abs(velocity)<=self.c['turn_entry_max_speed'] if settle<=0 else in_band and stable_age>=settle)
+        self.approach_debug.update(entry_speed_m_s=velocity,entry_stable_seconds=stable_age,
+                                   entry_speed_ready=ready,waiting_for_slow_speed=remaining<=self.c['approach_start_tolerance'] and not ready)
+        if remaining<=self.c['approach_start_tolerance'] and ready:
             self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
             self.state='parking_turn';self.turn_started=now;self.turn_distance=0.
             self.line_seen=False;self.last_image=None;self.pd.reset();self.reason='ALIGNED_START_FIXED_RIGHT_TURN'
         return None
 
     def _slow(self,now,reason):
-        self.slow_started=now;self.slow_reason=reason
+        self.slow_started=now;self.slow_reason=reason;self.entry_stable_since=None
         self.state='parking_approach' if self.selected is not None else 'parking_scan'
+        # A latched FREE target reached from cruise keeps moving while its speed
+        # cap falls with remaining distance.  UNKNOWN/no-target fallback still
+        # uses the original fixed scan speed and never invents a parking target.
+        self.smooth_approach=bool(self.selected is not None and reason=='TARGET_BRAKING_DISTANCE')
+        self.approach_speed_cap=None
         if self.selected is not None:self.approach_started=now;self.approach_distance=0.
+
+    def _approach_speed(self,requested):
+        """Monotonic distance-based speed cap for a latched FREE target."""
+        if not self.smooth_approach:
+            return self.c['scan_speed']
+        remaining=max(0.,float(self.approach_debug.get('remaining_m',0.)))
+        usable=max(0.,remaining-self.c['cruise_slow_buffer']-self.c['turn_entry_settle_distance'])
+        allowed=math.sqrt(self.c['scan_speed']**2+
+                          2*self.c['cruise_braking_acceleration']*usable)
+        requested=max(0.,float(requested))
+        candidate=min(requested,self.c['cruise_max_speed'],allowed)
+        if self.approach_speed_cap is None:
+            self.approach_speed_cap=candidate
+        else:
+            # Once braking begins, noisy relative odometry cannot command a
+            # re-acceleration that would cause another visible speed surge.
+            self.approach_speed_cap=min(self.approach_speed_cap,candidate)
+        return max(self.c['scan_speed'],self.approach_speed_cap)
 
     def _find_gap(self,scan,scan_stamp,now,velocity,rate):
         if scan_stamp==self.last_scan:return False
@@ -237,7 +271,9 @@ class Parking:
             self.reason='MAIN_LANE_WITH_LIDAR_SEARCH'
         elif self.state in ('parking_scan','parking_approach'):
             steering=search_command[1] if lane and lane.get('valid') and search_command else 0.
-            speed=self.c['scan_speed']
+            requested=self.c['scan_speed'] if search_command is None else search_command[0]
+            speed=(self._approach_speed(requested) if self.state=='parking_approach'
+                   else self.c['scan_speed'])
             if self.state=='parking_approach':
                 self.reason='DECELERATING_BEFORE_TURN' if self.approach_debug.get('waiting_for_slow_speed') else 'APPROACHING_LATCHED_TURN_START'
             elif late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'

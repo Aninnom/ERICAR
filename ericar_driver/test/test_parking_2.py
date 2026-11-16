@@ -24,7 +24,7 @@ def config():
     c['answer']['lidar']['zero_is_no_return']=True
     # 이 파일·test_parking_auto1·test_parking_pd는 11/14 이전 설정 기준 시험: 계산 회전 반경, 흰 선 소실 정지, 경계선 PD
     # 11/14 기본값(실측 반경·칸 방향 정면 정지·PD 끔)은 test_parking_turn_done.py
-    p=c['answer']['parking'];p['turn_radius']=None;p['turn_done_heading']=None;p['white_stop_heading']=math.pi
+    p=c['answer']['parking'];p['turn_entry_settle_seconds']=0.;p['turn_entry_settle_distance']=0.;p['turn_entry_max_speed']=.16;p['turn_radius']=None;p['turn_done_heading']=None;p['white_stop_heading']=math.pi
     p['turn_timeout']=8.;p['turn_distance_limit']=.85;p['pd']['enabled']=True
     c['answer']['parking']['cruise_search_enabled']=False  # 기존 서행·회전 회귀 장면. 일반속도 탐색은 별도 시험
     return c
