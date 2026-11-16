@@ -92,6 +92,25 @@ class Driver:
         return bool(s['enabled'] and limit is not None and self.sections.index == START_SECTION['lane_change'] and
                     self.sections.distance >= limit)
 
+    def request_lanes(self):
+        """표지판 목적 차로까지 칸 수 (요청 이동이 두 칸을 한 번에 건널지 판단용)"""
+        destination = getattr(self.fork, 'destination', None)
+        if not self.fork_request or destination is None:
+            return 1
+        return abs(int(destination)-self.lane_change.index)
+
+    def request_limit(self):
+        """요청 이동을 끝내야 하는 남은 거리(m): 갈림길 입구(흰 점선 끝)까지. 둘 다 모르면 None
+        - 점선 끝이 화면 안에 들어왔으면(fork.late) fork.dash_left. 그 전의 dash_left는 '보이는 가장 먼 점선'이라 입구 거리가 아님
+        - S2 주행 거리 기준 lane_change.request_entrance_distance(실측) − 지금 거리"""
+        candidates = []
+        if self.fork.late:
+            candidates.append(float(self.fork.dash_left))
+        entrance = self.c['lane_change'].get('request_entrance_distance')
+        if entrance is not None and self.sections.index == START_SECTION['lane_change']:
+            candidates.append(float(entrance)-self.sections.distance)
+        return max(0.0, min(candidates)) if candidates else None
+
     def corner3(self):
         """S2에서 오른쪽으로 lane_change_max_turn(°) 넘게 돈 상태 = 3번 코너 안 (새 차선 변경 금지, 한 선 이름 코너 규칙)"""
         s = self.c['sections']
@@ -134,7 +153,7 @@ class Driver:
         change = self.lane_change
         if not (self.sections.allows('lane_change') or self.fork_remaining > 0):
             return None
-        lane = change.index + (change.direction if change.active else 0)
+        lane = change.index + (change.direction*getattr(change, 'span', 1) if change.active else 0)
         last = change.c['lane_count'] - 1
         return 'left' if lane == last else 'right' if lane == 0 else None
 
@@ -634,7 +653,8 @@ class Driver:
                                             (self.sections.allows('lane_change') or self.fork.running)
                                             and self.fork.allows_change(self.lane_change.active) and not cone_first and not in_corner
                                             and not self.three_lane_over(),
-                                            requested, preferred, avoid_only=self.lane_change_off > 0)
+                                            requested, preferred, avoid_only=self.lane_change_off > 0,
+                                            request_lanes=self.request_lanes(), request_limit=self.request_limit())
             cone = None if change is not None else self.cones.update(
                 lane, scan, velocity, turn_rate, dt,
                 (self.sections.allows('cones') or cone_early) and self.fork_remaining <= 0,

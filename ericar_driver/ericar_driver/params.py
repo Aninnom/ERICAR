@@ -289,8 +289,9 @@ ANSWER_CONFIG = {
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
-        # 최초 표지판은 탐색만 시작. 가까운 표지판 통과 또는 목표 감속 거리에서 서행 전환
+        # 최초 표지판부터 탐색. 목표 감속 거리에서 서행, 표지판 통과만으로 감속 제외
         'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
+        'slow_on_sign_passed': False, 'no_target_cruise_seconds': 1.0, 'no_target_cruise_distance': .35,
         'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
         'sign_gone_frames': 3, 'sign_gone_seconds': .35,
         'cruise_reaction_time': .25, 'cruise_braking_acceleration': .30, 'cruise_slow_buffer': .10,
@@ -359,6 +360,20 @@ ANSWER_CONFIG = {
         # short_flip_seconds(s) 동안 short_flip_speed: 시작 꺾기·복귀 반대 꺾기 순간 감속 (바퀴가 넘어가는 동안 덜 감)
         'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.06,
         'short_flip_seconds': 0.3, 'short_flip_speed': 0.05,
+        # 11/16 혁준(실차 전): 표지판 요청 이동은 옆 차로 점을 뒷축 앞 request_side_ahead(m)부터만 막힘으로 보고, 짧은 S자로 옮김
+        # 끄기: request_side_ahead None, short_on_request False
+        # short_on_request: 11/16 sominb_1116_1753에서 한 칸 1.00 m(보통 1.06 m)·0.10 m/s라 10.7 s → 거리 단축 거의 없어 끔
+        'request_side_ahead': 0.2, 'short_on_request': False,
+        # 표지판 요청 이동 경로 계획 (lane_change.plan_request, 11/16 혁준, 실차 전). 끄기: request_plan False
+        # request_angles(°): 후보 원호 각도. request_plan_margin: 경로와 라이다 점 사이 최소 여유(m)
+        # request_plan_stretch: 실차 이동이 계산보다 긴 비율 (한 칸 계산 1.01 m, 실측 1.06~1.14 m)
+        # request_plan_tail: 도착 뒤 목적 차로 앞이 비어 있어야 하는 거리(m)
+        # request_entrance_distance: 갈림길 입구(점선 끝)의 S2 주행 거리(m). 11/16 녹화에서 5.4~5.6 m부터 차선 변경 꺼짐 → 여유 두고 5.2
+        # 각도 비교(합성, sessions/tools/lc_random_eval.py, 통과 가능한 임의 배치 7대 × 50): 한 칸씩 39 / 36° 41 / 45° 43(충돌·이탈 0) / 54° 43(충돌 1)
+        # / 30~54° 중 선택 42(충돌 3: 가파르면 접촉, 완만하면 두 칸에서 바깥선 넘음) / 40·45·50° 43(이탈 1) → 45° 하나로
+        'request_plan': True, 'request_angles': [45.0],
+        'request_plan_margin': 0.04, 'request_plan_stretch': 1.1, 'request_plan_tail': 0.3,
+        'request_entrance_distance': 5.2,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,
