@@ -28,6 +28,7 @@ class Parking:
         self.cruise_distance=0.;self.nearest_start=None;self.slow_started=0.;self.slow_reason=None
         self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
         self.no_target_since=None;self.no_target_distance=0.;self.braking_distance=0.
+        self.smooth_approach=False;self.approach_speed_cap=None
 
     def start(self,now):
         self.pd.reset();self.sign.reset();self._reset_progress()
@@ -61,6 +62,7 @@ class Parking:
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
+                        approach_speed_cap_m_s=self.approach_speed_cap,
                         no_target_age_s=0. if self.no_target_since is None else max(0.,self.last_tick-self.no_target_since),
                         turn_phase=self.turn_phase,turn_angle_deg=math.degrees(self.turn_angle),arc_released=self.arc_released,white_line=self.line_debug,line_seen=self.line_seen,
                         search_distance_m=self.search_distance,turn_distance_m=self.turn_distance,
@@ -158,7 +160,30 @@ class Parking:
     def _slow(self,now,reason):
         self.slow_started=now;self.slow_reason=reason
         self.state='parking_approach' if self.selected is not None else 'parking_scan'
+        # A latched FREE target reached from cruise keeps moving while its speed
+        # cap falls with remaining distance.  UNKNOWN/no-target fallback still
+        # uses the original fixed scan speed and never invents a parking target.
+        self.smooth_approach=bool(self.selected is not None and reason=='TARGET_BRAKING_DISTANCE')
+        self.approach_speed_cap=None
         if self.selected is not None:self.approach_started=now;self.approach_distance=0.
+
+    def _approach_speed(self,requested):
+        """Monotonic distance-based speed cap for a latched FREE target."""
+        if not self.smooth_approach:
+            return self.c['scan_speed']
+        remaining=max(0.,float(self.approach_debug.get('remaining_m',0.)))
+        usable=max(0.,remaining-self.c['cruise_slow_buffer'])
+        allowed=math.sqrt(self.c['scan_speed']**2+
+                          2*self.c['cruise_braking_acceleration']*usable)
+        requested=max(0.,float(requested))
+        candidate=min(requested,self.c['cruise_max_speed'],allowed)
+        if self.approach_speed_cap is None:
+            self.approach_speed_cap=candidate
+        else:
+            # Once braking begins, noisy relative odometry cannot command a
+            # re-acceleration that would cause another visible speed surge.
+            self.approach_speed_cap=min(self.approach_speed_cap,candidate)
+        return max(self.c['scan_speed'],self.approach_speed_cap)
 
     def _find_gap(self,scan,scan_stamp,now,velocity,rate):
         if scan_stamp==self.last_scan:return False
@@ -237,7 +262,9 @@ class Parking:
             self.reason='MAIN_LANE_WITH_LIDAR_SEARCH'
         elif self.state in ('parking_scan','parking_approach'):
             steering=search_command[1] if lane and lane.get('valid') and search_command else 0.
-            speed=self.c['scan_speed']
+            requested=self.c['scan_speed'] if search_command is None else search_command[0]
+            speed=(self._approach_speed(requested) if self.state=='parking_approach'
+                   else self.c['scan_speed'])
             if self.state=='parking_approach':
                 self.reason='DECELERATING_BEFORE_TURN' if self.approach_debug.get('waiting_for_slow_speed') else 'APPROACHING_LATCHED_TURN_START'
             elif late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
