@@ -38,6 +38,7 @@ AutoRace 2026 본선용 LIMO 주행 코드. 팀원 모두 이 레포에서 Claud
 - wego `teleop_launch.py` 사용 금지 (차동 모드라 아커만 odom 미계산, 바퀴 드라이버 중복)
 - 카메라 노출 수동 600 (자동 노출은 노란 선 색이 날아감). bringup이 자동 설정, 600에서 카메라 약 16.6 Hz(300은 약 30 Hz). 현장 밝기에 따라 `exposure:=`로 조정
 - YOLO는 켜고 GPU 추론이 기본 (`detector.device` 0). 모델은 차 `~/models/best.pt`
+- 차 터미널 환경 선택은 **3 (dl_env)**: GPU용 torch·ultralytics가 `dl_env`에만 있음. 환경이 안 맞으면 로그에 `YOLO failed`, 표지판 미션만 꺼짐. ssh 한 줄 실행은 `~/.bashrc` 미적용 → `ROS_LOCALHOST_ONLY=1`·`PYTHONPATH`(dl_env site-packages) 직접 설정
 - 배터리 11 V 미만이면 충전 후 시험 (`/limo_status`의 `battery_voltage`)
 - 녹화는 차 `~/bags/`. 와이파이로 큰 bag 복사 금지 (망 포화) → 분석은 차에서
 - ssh로 백그라운드 실행한 노드는 SIGINT 무시 → 종료는 SIGTERM. `pkill -f` 패턴이 ssh 명령 자체와 겹치면 셸이 끊김 → PID로 종료
