@@ -4,6 +4,7 @@ import numpy as np
 from .common import clip
 from .lidar import body_points
 from .parking_gap import gap_candidates,classify_gap
+from .parking_grid import parking_grid_candidates
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
 from .parking_sign import SignPassage,slow_distance
@@ -20,6 +21,7 @@ class Parking:
         if not 0<=self.c['approach_start_tolerance']<=self.c['approach_passed_tolerance']:raise ValueError('invalid approach tolerances')
         self.state='idle';self.reason='WAITING_FOR_PARKING_SIGN';self.debug={};self.stable_since=None
         self.selected=None;self.gap_debug={};self.line_debug={};self.last_scan=None
+        self.grid_debug={};self.grid_tracks=[];self.last_grid_image=None
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -39,6 +41,7 @@ class Parking:
         self.last_scan=self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=self.turn_distance=0.;self.motion_since=None
         self.gap_debug={};self.line_debug={}
+        self.grid_debug={};self.grid_tracks=[];self.last_grid_image=None
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -58,7 +61,8 @@ class Parking:
         feedback=dict(self.pd.debug)
         if self.state in ('parked','parking_failed','parking_cancelled'):
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None,steering_rad=0.)
-        self.debug=dict(mode='parking_1116_2',state=self.state,reason=self.reason,gap=self.gap_debug,
+        self.debug=dict(mode='parking_real2',state=self.state,reason=self.reason,gap=self.gap_debug,
+                        parking_grid=self.grid_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
@@ -215,6 +219,64 @@ class Parking:
         if free:self.selected=min(free,key=lambda b:b['entrance'][0])
         return late_seen
 
+    def _observe_grid(self,image,image_stamp,scan,scan_stamp,now,velocity,rate):
+        """Observe painted cells and LiDAR occupancy without changing control.
+
+        Camera geometry proposes cells; the existing ray-coverage classifier
+        decides FREE/OCCUPIED/UNKNOWN.  The default configuration is strictly
+        observe-only, so neither a one-frame FREE result nor a stable result can
+        replace the existing obstacle-gap target.
+        """
+        if (not self.c.get('grid_enabled',False) or image_stamp==self.last_grid_image or
+                self.state not in ('parking_cruise','parking_scan','parking_approach')):return
+        previous_stamp=self.last_grid_image
+        self.last_grid_image=image_stamp
+        try:
+            candidates,details=parking_grid_candidates(image,self.robot,self.c)
+        # An experimental observer must never interrupt the proven controller.
+        except Exception as error:
+            self.grid_tracks=[]
+            self.grid_debug=dict(stamp=float(image_stamp),reason='GRID_DETECTOR_ERROR',error=type(error).__name__,
+                                 observe_only=True,enable_actuation=False,evaluations=[])
+            return
+        elapsed=0. if previous_stamp is None else max(0.,min(.5,image_stamp-previous_stamp))
+        for track in self.grid_tracks:self._move_target(track['target'],elapsed,velocity,rate)
+        evaluations=[];new_tracks=[]
+        for source in candidates:
+            candidate=dict(source)
+            # Express the camera candidate at the LiDAR timestamp for occupancy,
+            # then at now for diagnostics.  This remains relative-odometry only.
+            self._move_target(candidate,scan_stamp-image_stamp,velocity,rate)
+            status,evidence=classify_gap(candidate,scan,self.robot,self.c)
+            displayed=dict(candidate);self._move_target(displayed,now-scan_stamp,velocity,rate)
+            match=None
+            for track in self.grid_tracks:
+                distance=float(np.linalg.norm(np.asarray(track['target']['entrance'])-np.asarray(displayed['entrance'])))
+                alignment=float(np.dot(track['target']['normal'],displayed['normal']))
+                if distance<=self.c.get('grid_track_distance',.15) and alignment>=self.c.get('grid_track_alignment',.9):
+                    match=track;break
+            count=1 if match is None else match['count']+1
+            track=dict(target=displayed,count=count,state=status)
+            new_tracks.append(track)
+            stable=count>=self.c.get('grid_stable_frames',3)
+            evaluations.append(dict(state=status,evidence=evidence,stable=stable,observations=count,
+                                    entrance=displayed['entrance'],polygon=displayed['polygon'],
+                                    source='painted_grid',control_applied=False))
+        self.grid_tracks=new_tracks
+        observe_only=bool(self.c.get('grid_observe_only',True))
+        enabled=bool(self.c.get('grid_enable_actuation',False))
+        # Deliberate double gate for a later, separately approved integration.
+        # parking_real2 keeps both defaults safe and never enters this branch.
+        if enabled and not observe_only and self.selected is None:
+            usable=[(track,evaluation) for track,evaluation in zip(new_tracks,evaluations)
+                    if evaluation['stable'] and evaluation['state']=='FREE']
+            if usable:self.selected=min(usable,key=lambda item:item[0]['target']['entrance'][0])[0]['target']
+        self.grid_debug=dict(stamp=float(image_stamp),scan_stamp=float(scan_stamp),reason=details.get('reason'),
+                             observe_only=observe_only,enable_actuation=enabled,
+                             control_applied=bool(enabled and not observe_only),
+                             segments_px=details.get('segments_px',[]),
+                             segments_ground=details.get('segments_ground',[]),evaluations=evaluations)
+
     def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,
              camera_info=None,search_command=None,angular_velocity=0.,detections=(),detection_stamp=-1e9,
              measured_turn_rate=None):
@@ -227,6 +289,7 @@ class Parking:
         if image is None or not 0<=now-image_stamp<self.c['sensor_timeout']:
             self.pause(now);return self._output()
         self.sign.observe(detections,detection_stamp,now)
+        self._observe_grid(image,image_stamp,scan,scan_stamp,now,velocity,rate)
         late=False
         if self.state=='parking_cruise':
             self.cruise_distance+=abs(velocity)*dt
