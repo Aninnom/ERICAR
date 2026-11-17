@@ -85,7 +85,7 @@ ANSWER_CONFIG = {
         'confirm_frames_by_class': {'left': 3, 'right': 3, 'traffic_red': 1, 'traffic_yellow': 1},
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
-            'parking': 0.002, 'pedestrian': 0.012, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
+            'parking': 0.002, 'pedestrian': 0.004, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
             # 11/17 혁준: left·right 0.0015 → 0.003. 멀리서(면적 0.3% 미만) 방향을 틀리게 읽음: 녹화 22개 화살표 562건에서
             # 틀림 0.2% 미만 9%·0.2~0.3% 5%·0.3~1% 3~4%·1% 이상 0~1% (전부 left를 right로). entry_1117_0342 74.3 s:
             # 기둥 3.5 m 전 면적 0.16%에서 right 4연속 → 확정 → 직진 코스에서 오른쪽 차선 변경. 0.3%면 기둥 약 1.6~2.6 m 전 확정
@@ -299,6 +299,10 @@ ANSWER_CONFIG = {
         # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)
         'fork_dash_gap': 0.45, 'fork_entrance_confirm': 0.3,
         'pedestrian_require_line': True,
+        # 11/17 현장: 보행자 표지판이 횡단보도 뒷선 쪽에 있음 → 앞선 0.24 m 전에야 면적 1.2 % → 앞선 통과 뒤 확정 → 뒷선 정지
+        # 확정 면적 0.012 → 0.004(앞선 약 0.7 m 전), 접근 시작은 횡단보도 앞 선(line_kind crosswalk)에서만.
+        # 표지판이 pedestrian_near_area 이상으로 크게 보이면 줄무늬 판정 없이도 접근 (예전 동작)
+        'pedestrian_crosswalk_only': True, 'pedestrian_near_area': 0.012,
         'trigger_line_max_distance': 1.5, 'trigger_line_freshness': 0.4,
     },
     'parking': {
@@ -468,7 +472,8 @@ ANSWER_CONFIG = {
         # 이동 중 재판단 (11/18 혁준, lane_change.redecide, 합성 시험만·실차 전). 끄기: redecide False
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
-        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
+        'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,

@@ -494,7 +494,11 @@ class Driver:
             elif 'pedestrian' in ready and self.allowed('pedestrian'):
                 fresh_line = (self.line_distance is not None and m['stop_offset'] < self.line_distance < m.get('trigger_line_max_distance', 1.5) and
                               now - self.line_seen < m.get('trigger_line_freshness', .4))
-                if fresh_line or not m.get('pedestrian_require_line', True):
+                # 횡단보도 앞 선에서만 접근 시작: 표지판이 횡단보도 뒷선 쪽에 서 있으면 확정이 늦어 뒷선에 서던 문제 (11/17 venue_1117_01)
+                # 줄무늬 판정이 안 될 때 대비: 표지판이 크게(pedestrian_near_area 이상) 보이면 예전처럼 가까운 선에도 접근
+                near_sign = max([d['area'] for d in detections if d['name'] == 'pedestrian'] or [0.0]) >= m.get('pedestrian_near_area', .012)
+                front_line = (not m.get('pedestrian_crosswalk_only', True)) or self.line_kind == 'crosswalk' or near_sign
+                if (fresh_line and front_line) or not m.get('pedestrian_require_line', True):
                     self.transition('pedestrian_approach', now)
             elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking') and self.parking_ready():
                 self.transition('parking_scan', now)
