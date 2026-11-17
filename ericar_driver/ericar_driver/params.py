@@ -298,9 +298,9 @@ ANSWER_CONFIG = {
     },
     'parking': {
         'enabled': True, 'test_wait_for_sign': False, 'test_drive_until_sign': False,
-        # parking_real2: 카메라는 도색 칸 후보만 만들고 LiDAR가 점유를 판정한다.
-        # 실차 데이터 검증 전에는 이 결과가 selected/조향을 절대 바꾸지 않도록 이중 잠금.
-        'grid_enabled': True, 'grid_observe_only': True, 'grid_enable_actuation': False,
+        # parking_real2: 카메라로 도색 칸을 만들고 LiDAR FREE가 확인되면 기존 조향 목표로 고정.
+        # 두 설정이 모두 아래 값일 때만 실제 selected에 연결된다.
+        'grid_enabled': True, 'grid_observe_only': False, 'grid_enable_actuation': True,
         'grid_slot_width': .50, 'grid_slot_depth': .59, 'grid_size_tolerance': .12,
         'grid_roi_top': .42, 'grid_hough_votes': 18, 'grid_min_length_fraction': .08,
         'grid_stable_frames': 3, 'grid_track_distance': .15, 'grid_track_alignment': .90,

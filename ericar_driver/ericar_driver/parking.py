@@ -220,15 +220,15 @@ class Parking:
         return late_seen
 
     def _observe_grid(self,image,image_stamp,scan,scan_stamp,now,velocity,rate):
-        """Observe painted cells and LiDAR occupancy without changing control.
+        """Fuse painted cells with LiDAR occupancy and optionally latch a target.
 
         Camera geometry proposes cells; the existing ray-coverage classifier
-        decides FREE/OCCUPIED/UNKNOWN.  The default configuration is strictly
-        observe-only, so neither a one-frame FREE result nor a stable result can
-        replace the existing obstacle-gap target.
+        decides FREE/OCCUPIED/UNKNOWN. Geometry must remain stable across
+        frames, while the first qualified FREE result keeps the original
+        one-shot latch behavior.
         """
         if (not self.c.get('grid_enabled',False) or image_stamp==self.last_grid_image or
-                self.state not in ('parking_cruise','parking_scan','parking_approach')):return
+                self.state not in ('parking_cruise','parking_scan','parking_approach')):return False
         previous_stamp=self.last_grid_image
         self.last_grid_image=image_stamp
         try:
@@ -236,9 +236,12 @@ class Parking:
         # An experimental observer must never interrupt the proven controller.
         except Exception as error:
             self.grid_tracks=[]
+            observe_only=bool(self.c.get('grid_observe_only',True))
+            enabled=bool(self.c.get('grid_enable_actuation',False))
             self.grid_debug=dict(stamp=float(image_stamp),reason='GRID_DETECTOR_ERROR',error=type(error).__name__,
-                                 observe_only=True,enable_actuation=False,evaluations=[])
-            return
+                                 observe_only=observe_only,enable_actuation=enabled,
+                                 control_applied=False,evaluations=[])
+            return False
         elapsed=0. if previous_stamp is None else max(0.,min(.5,image_stamp-previous_stamp))
         for track in self.grid_tracks:self._move_target(track['target'],elapsed,velocity,rate)
         evaluations=[];new_tracks=[]
@@ -259,23 +262,31 @@ class Parking:
             track=dict(target=displayed,count=count,state=status)
             new_tracks.append(track)
             stable=count>=self.c.get('grid_stable_frames',3)
+            remaining=float(displayed['entrance'][0]-self._turn_lead())
+            late=remaining < -self.c['approach_passed_tolerance']
             evaluations.append(dict(state=status,evidence=evidence,stable=stable,observations=count,
                                     entrance=displayed['entrance'],polygon=displayed['polygon'],
+                                    turn_start_remaining_m=remaining,
+                                    rejection='TURN_START_ALREADY_PASSED' if late and status=='FREE' else None,
                                     source='painted_grid',control_applied=False))
         self.grid_tracks=new_tracks
         observe_only=bool(self.c.get('grid_observe_only',True))
         enabled=bool(self.c.get('grid_enable_actuation',False))
-        # Deliberate double gate for a later, separately approved integration.
-        # parking_real2 keeps both defaults safe and never enters this branch.
+        selected_now=False
         if enabled and not observe_only and self.selected is None:
-            usable=[(track,evaluation) for track,evaluation in zip(new_tracks,evaluations)
-                    if evaluation['stable'] and evaluation['state']=='FREE']
-            if usable:self.selected=min(usable,key=lambda item:item[0]['target']['entrance'][0])[0]['target']
+            usable=[index for index,evaluation in enumerate(evaluations)
+                    if evaluation['stable'] and evaluation['state']=='FREE' and evaluation['rejection'] is None]
+            if usable:
+                chosen=min(usable,key=lambda index:new_tracks[index]['target']['entrance'][0])
+                self.selected=dict(new_tracks[chosen]['target'])
+                evaluations[chosen]['control_applied']=True
+                selected_now=True
         self.grid_debug=dict(stamp=float(image_stamp),scan_stamp=float(scan_stamp),reason=details.get('reason'),
                              observe_only=observe_only,enable_actuation=enabled,
-                             control_applied=bool(enabled and not observe_only),
+                             control_applied=selected_now,
                              segments_px=details.get('segments_px',[]),
                              segments_ground=details.get('segments_ground',[]),evaluations=evaluations)
+        return selected_now
 
     def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,
              camera_info=None,search_command=None,angular_velocity=0.,detections=(),detection_stamp=-1e9,
@@ -289,14 +300,16 @@ class Parking:
         if image is None or not 0<=now-image_stamp<self.c['sensor_timeout']:
             self.pause(now);return self._output()
         self.sign.observe(detections,detection_stamp,now)
-        self._observe_grid(image,image_stamp,scan,scan_stamp,now,velocity,rate)
+        grid_selected=self._observe_grid(image,image_stamp,scan,scan_stamp,now,velocity,rate)
         late=False
         if self.state=='parking_cruise':
             self.cruise_distance+=abs(velocity)*dt
             if now-self.started>self.c['cruise_timeout']:return self.fail('CRUISE_SEARCH_TIMEOUT')
             if self.cruise_distance>self.c['cruise_distance_limit']:return self.fail('CRUISE_SEARCH_DISTANCE_LIMIT')
             if self.selected is not None:
-                self._move_target(self.selected,dt,velocity,rate)
+                # A freshly fused grid target is already expressed at ``now``.
+                # Moving it again here would advance the turn point twice.
+                if not grid_selected:self._move_target(self.selected,dt,velocity,rate)
                 self.nearest_start=self.selected['entrance'][0]-self._turn_lead()
             else:late=self._find_gap(scan,scan_stamp,now,velocity,rate)
             cap=self.c['trial_cruise_max_speed'] if self.c.get('test_drive_until_sign') else self.c['cruise_max_speed']
@@ -320,7 +333,7 @@ class Parking:
             self.search_distance+=abs(velocity)*dt
             if now-self.slow_started>self.c['search_timeout']:return self.fail('NO_FREE_GAP_BEFORE_TIMEOUT')
             if self.search_distance>self.c['search_distance_limit']:return self.fail('SEARCH_DISTANCE_LIMIT')
-            late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
+            if self.selected is None:late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
             if self.selected is not None:
                 self.state='parking_approach';self.approach_started=now;self.approach_distance=0.;dt=0.
         if self.state=='parking_approach':
