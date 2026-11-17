@@ -459,6 +459,10 @@ ANSWER_CONFIG = {
         # 0.45: 45° 원호로 꺾으면 앞 오른쪽 모서리가 옆 차로 장애물 선에 닿기까지 뒷축이 약 0.45 m 감. 합성(지그재그, 앞 장애물까지
         # 간격 0.58 m): 예전 기준·0.2는 앞 0.45 m에서 시작해 충돌·정지, 0.45는 앞 0.71 m에서 시작해 통과
         'avoid_side_ahead': 0.45, 'avoid_plan': True, 'avoid_plan_margin': 0.04, 'avoid_plan_tail': 0.2,
+        # 이동 중 재판단 (11/18 혁준, lane_change.redecide, 합성 시험만·실차 전). 끄기: redecide False
+        # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
+        # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
+        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,

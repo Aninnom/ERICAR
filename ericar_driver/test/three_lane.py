@@ -89,6 +89,25 @@ CASES = {
     # (줄 간격 1.1 m, 실차는 이동 시작 때 그 장애물이 스캔에 없었음). 실차: 왼쪽으로 꺾을 거리가 없어 정지 → 수동 후진 뒤 통과
     # 합성 시뮬은 차가 실차보다 짧게 돌아(도착 때 0.8 m 남음) 후진 없이 통과함 → 배치 회귀 확인용. 후진 동작은 단위 시험 test_backup
     'backup_tight': dict(signs={}, start_s=4.0, obstacles=[(4.86, 0.0), (4.1, 0.52), (5.7, 0.52), (5.97, -0.52)]),
+    # 11/17 현장 venue_1117_01 재현 (줄 간격 약 0.6 m): 가운데 2대 → 왼+오 → 가운데 → 왼+오 (라이다 빈 거리로 복원한 앞면 위치)
+    # 실차: 오른쪽으로 피함 → 가운데로 돌아오는 짧은 S자 끝에서 다음 가운데 장애물 정면 0.25 m 정지 (132.6 s)
+    # 한 칸 이동(전진 0.8~1.05 m)을 줄 사이에 끝낼 수 없는 배치 → 이동 중 재판단(lane_change.redecide) 확인용
+    # 기본값(redecide False)에서는 6건 모두 정지(실차 재현), LC_SET='{"redecide": true}'로 켜면 통과. venue_lag: 조향 지연 실차 흉내
+    # 11/18 보정: 가운데 둘째 6.13 → 6.01 (라이다 지도 map_s2.png의 장애물 간격 0.46·0.75·0.58 m 기준, 처음 값은 12 cm 뒤였음)
+    'venue': dict(duration=120.0, signs={}, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.52), (6.66, -0.52), (7.31, 0.0),
+                                       (8.31, 0.52), (8.31, -0.52)]),
+    'venue_lag': dict(duration=120.0, signs={}, steer_lag=0.7, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.52), (6.66, -0.52), (7.31, 0.0),
+                                                           (8.31, 0.52), (8.31, -0.52)]),
+    # 같은 줄 간격, 옆 차로 장애물만 바깥으로 치우침 (차로 중앙 기준 6·10 cm)
+    'venue_out6': dict(duration=120.0, signs={}, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.58), (6.66, -0.58), (7.31, 0.0),
+                                            (8.31, 0.58), (8.31, -0.58)]),
+    'venue_out10': dict(duration=120.0, signs={}, steer_lag=0.7, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.62), (6.66, -0.62), (7.31, 0.0),
+                                                             (8.31, 0.62), (8.31, -0.62)]),
+    # 같은 배치 + 갈림길 표지판(마지막 줄 앞에서 확정): 장애물 구간 뒤 목적 차로로 나란히 들어가야 함
+    'venue_left': dict(duration=120.0, signs={'left': (7.4, 9.6)}, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.52), (6.66, -0.52), (7.31, 0.0),
+                                                              (8.31, 0.52), (8.31, -0.52)]),
+    'venue_right': dict(duration=120.0, signs={'right': (7.4, 9.6)}, obstacles=[(5.55, 0.0), (6.01, 0.0), (6.66, 0.52), (6.66, -0.52), (7.31, 0.0),
+                                                                (8.31, 0.52), (8.31, -0.52)]),
     'slalom_left': dict(signs={'left': (6.0, 8.5)}, post=(8.76, 0.0),
                         obstacles=[(5.2, 0.0), (5.6, 0.0), (6.0, 0.0), (6.4, 0.0), (6.8, 0.0), (5.4, 0.52),
                                    (7.60, 0.52), (7.72, 0.52)]),
@@ -209,7 +228,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
             # 구간 관리자의 누적 회전에 치우침 주입 (실차: 출발 전 대기·주행 중 자이로 누적, 11/17 early_1117_0015 +9.6°)
             drv = node.driver if hasattr(node, 'driver') else node.loop.driver
             drv.sections.yaw -= math.radians(case['heading_bias_deg'])
-        for k in range(int(duration / DT)):
+        for k in range(int(case.get('duration', duration) / DT)):
             t = k * DT
             fake_ros.Clock.now_s = 100.0 + t
             stamp = fake_ros.Header(100.0 + t)
@@ -254,6 +273,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                 out['max_y_signed'] = max(out.get('max_y_signed', 0.0), sim['y'], key=abs)
             if collides(sim['s'], sim['y'], sim['psi'], obstacles):
                 out['collision'] = True
+                out.setdefault('collision_at', (round(t, 1), round(sim['s'], 2), round(sim['y'], 2), round(sim['psi'], 2)))
             if case.get('post'):
                 # 기둥(중심)과 차체 사각형 사이 최소 거리, 기둥을 지나칠 때 옆 거리 (섬 침범 정도 비교용)
                 px, py = case['post'][0]-sim['s'], case['post'][1]-sim['y']
@@ -287,6 +307,8 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     params.ANSWER_CONFIG['lane_change'].update(case.get('lane_change', {}))   # 사례별 설정 덮어쓰기
     params.ANSWER_CONFIG['sections']['lane_change_max_distance'] = None   # 합성 장면은 3차선이 실제(약 5 m)보다 김
     params.ANSWER_CONFIG['missions']['fork_enter_distance'] = None       # 같은 이유: 입구 거리 안전장치도 끔
+    if os.environ.get('LC_SET'):         # lane_change 설정 덮어쓰기 (JSON), 비교 실험용
+        params.ANSWER_CONFIG['lane_change'].update(json.loads(os.environ['LC_SET']))
     if os.environ.get('LC_LOOKAHEAD'):   # 값 비교 실험용
         params.ANSWER_CONFIG['lane_change']['lookahead'] = float(os.environ['LC_LOOKAHEAD'])
     sys.argv = [sys.argv[0]]
@@ -309,6 +331,8 @@ def judge(case_name, r):
     ok = reached and not off and not r['collision'] and fork_ok
     info = dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
                 끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2))
+    if r.get('collision_at'):
+        info['충돌지점'] = r['collision_at']      # (시각, s, y, 방향) 첫 접촉
     if 'post_clear' in r:
         # 섬(도면 길이 0.48 m, 폭은 가운데 차로 폭쯤)은 그리지 않음 → 기둥과의 거리로 침범 정도만 표시 (판정에는 안 씀)
         info['기둥최소거리'] = round(r['post_clear'], 2)

@@ -455,7 +455,8 @@ class LaneChange:
             self.offset -= velocity*math.sin(self.heading)*dt*self.c.get('lateral_scale', 1.0)
             self.travel += abs(velocity)*dt
             if not self.try_extend(points, fork_lanes, request_limit):
-                self.try_reverse(points, fork_lanes, request_limit)
+                if not self.try_reverse(points, fork_lanes, request_limit):
+                    self.redecide(points)
             self.camera_correct(lane)
             error = self.target-self.offset
             if self.c.get('steer_mode', 'arc') == 'arc':
@@ -576,6 +577,13 @@ class LaneChange:
                             direction = other
                         else:
                             self.debug['rejected']['left' if other > 0 else 'right'] = 'path_blocked'
+        cross = None
+        if direction == 0 and not requested and self.c.get('redecide', False):
+            # 규칙 6: 옆 차로로 한 칸 옮길 자리가 없어도, 두 칸을 직선으로 가로지르는 길이 비어 있으면 그 길로 출발
+            cross = self.cross_two(forward, left, center, heading)
+            if cross is not None:
+                direction = cross['direction']
+                self.debug['cross'] = cross
         self.debug['choice'] = direction
         if direction == 0 and not requested and all(
                 self.debug['rejected'].get(side) in ('outside_lane_count', 'yellow_boundary') for side in ('left', 'right')):
@@ -685,6 +693,8 @@ class LaneChange:
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.span, self.move_angle = 1, None
+        if cross is not None:
+            self.span, self.move_angle, self.short = 2, cross['angle'], False     # 두 칸 직선 가로지르기 (보통 속도)
         if plan is not None:
             self.span, self.move_angle = plan['span'], plan['angle']
             self.short = False     # 고른 각도·보통 속도로 (짧은 S자 감속 안 씀)
@@ -736,6 +746,58 @@ class LaneChange:
         self.span, self.target, self.move_angle = 2, target, angle
         self.short, self.requested_move = False, True
         self.plan = self.debug['plan'] = info
+        return True
+
+    def cross_two(self, forward, left, center, heading):
+        """두 칸 직선 가로지르기 후보 (11/18, 사용자 규칙 6). 끝 차로에서 반대쪽 끝 차로까지, 지금 출발하는 경로가 비어 있을 때만
+        줄 간격이 짧아 가운데 차로에 나란히 설 자리가 없어도, 비스듬히 가로지르는 직선은 장애물 모서리 사이를 지남
+        (현장 수동 주행 check_1118_01의 동선). 반환 dict(direction, angle, gap) 또는 None"""
+        c = self.c
+        middle = max(-c['lane_width']/2, min(c['lane_width']/2, center))
+        best = None
+        for direction in (1, -1):
+            if not 0 <= self.index+2*direction < c['lane_count']:
+                continue
+            for angle in c.get('redecide_angles', [45.0]):
+                gap = self.path_gap(forward, left, 2*direction*c['lane_width']+middle, angle, -self.start_heading(heading),
+                                    c.get('redecide_tail', c.get('avoid_plan_tail', .2)))
+                if gap >= c.get('avoid_plan_margin', .04) and (best is None or gap > best['gap']):
+                    best = dict(direction=direction, angle=float(angle), gap=round(min(gap, 9.9), 3))
+        return best
+
+    def redecide(self, points):
+        """이동 중 재판단 (11/18, 사용자 규칙 3·6): 일반 회피로 한 칸 옮기는 중 도착할 차로 앞이 막혀 있으면,
+        되돌아 정렬하지 않고 같은 방향 다음 차로까지 그대로 가로지름 (두 칸을 직선으로)
+        11/17 venue_1117_01 119.7~132.6 s: 오른쪽 → 가운데 이동 중 가운데 차로 0.6 m 앞에 장애물이 보였는데 이동을 끝까지 마치려고
+        복귀 원호로 그 장애물 정면을 향함 → 정지. 그때 왼쪽 차로는 1 m 넘게 비어 있었음
+        조건: 요청 이동이 아님, 한 칸 이동 중, 다음 차로가 있음, 도착 차로의 앞 빈 거리 < redecide_front(m, 뒷축 기준),
+        지금 자세에서 다음 차로까지 그린 경로의 여유가 avoid_plan_margin 이상 (옆 장애물을 지나칠 수 있을 때만 = 규칙 5).
+        안 되면 이번 주기는 그대로 두고 다음 주기에 다시 봄"""
+        c = self.c
+        if not c.get('redecide', False) or self.requested_move or self.span != 1:
+            return False
+        far = self.index+2*self.direction
+        if not 0 <= far < c['lane_count']:
+            return False
+        target = self.target+self.direction*c['lane_width']
+        remaining = target-self.offset
+        walls = self.walls
+        kept = self.drop_walls(points, self.heading, remaining, far)
+        self.walls = walls
+        forward, left = to_road(kept, self.heading)
+        half = self.robot['width']/2+c['margin']
+        inside = (np.abs(left-(self.target-self.offset)) < half) & (forward > 0)
+        front = float(forward[inside].min()) if np.any(inside) else c['free_range']
+        if front >= c.get('redecide_front', 1.0):
+            return False
+        angle = c.get('redecide_angle', c.get('short_arc_angle', 45.0))
+        gap = self.path_gap(forward, left, remaining, angle, -self.heading, c.get('redecide_tail', c.get('avoid_plan_tail', .2)))
+        info = dict(front=round(front, 2), gap=round(min(gap, 9.9), 3))
+        if gap < c.get('avoid_plan_margin', .04):
+            self.debug['redecide_blocked'] = info
+            return False
+        self.span, self.target, self.move_angle, self.back = 2, target, angle, False
+        self.debug['redecide'] = info
         return True
 
     def try_reverse(self, points, fork_lanes, limit):
