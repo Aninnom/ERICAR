@@ -77,7 +77,20 @@ class LaneVision:
         bird = cv2.remap(color, map_x, map_y, cv2.INTER_NEAREST,           # 2. 버드아이뷰
                          borderMode=cv2.BORDER_CONSTANT)
         white_bird = cv2.remap(white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
-        return self.analyze_bird(bird, fork_bias, white_bird)
+        return self.analyze_bird(self.drop_thick(bird), fork_bias, white_bird)
+
+    def drop_thick(self, bird):
+        """차선보다 두꺼운 노란 덩어리(방지턱 줄) 제거. 가로·세로 모두 yellow_max_thickness(m) 넘는 부분과 그 둘레만 지움"""
+        limit = self.c.get('yellow_max_thickness')
+        if not limit:
+            return bird
+        size = (max(3, round(limit * self.scale)), max(3, round(limit / self.row_m)))   # (가로 px, 세로 px)
+        thick = cv2.morphologyEx(bird, cv2.MORPH_OPEN, np.ones(size[::-1], np.uint8))
+        if not thick.any():
+            return bird
+        margin = self.c.get('yellow_thick_margin', 0.035)
+        around = np.ones((2 * round(margin / self.row_m) + 1, 2 * round(margin * self.scale) + 1), np.uint8)
+        return cv2.bitwise_and(bird, cv2.bitwise_not(cv2.dilate(thick, around)))
 
     def drop_beyond_yellow(self, white, yellow):
         """노란 선 너머(차 반대쪽) 흰색 제거 → 트랙 밖 흰 테두리를 점선으로 오인하지 않음
