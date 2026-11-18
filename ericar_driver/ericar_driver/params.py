@@ -281,6 +281,11 @@ ANSWER_CONFIG = {
         # 진입은 화면 전체 붉은 비율 cone_red_enter_ratio 이상일 때만 (11/13 유경 결정). 같은 사진: 의자 0.01, 콘 1개 0.07,
         # 코너 중 콘 줄 0.17~0.27, 통로 정면 0.30, 통로 안 0.39~0.45. 0.27(회전 중 한쪽 줄)은 진입함
         'cone_red_enter_ratio': 0.15,   # 11/18: 0.2 → 0.15. V 35에서도 진입 시점 비율이 0.22~0.27이라 여유 확보 (콘 1개 0.07보다는 위)
+        # 붉은색이 보이는데 비율이 위 기준 미달일 때 라이다 문만으로 진입할지 (11/18 유경). False면 예전처럼 막음
+        # 왜 True: run_1118_1931은 v_min 60이라 비율이 0.087까지만 올라 123.2~128.5 s 내내 "red지만 corridor 아님"이었고,
+        # 그동안 라이다 진입까지 막혀 콘 0.24 m 앞에서야 켜짐 → 추돌·3 s 정지. 조금 보이는 상태가 아예 안 보이는 상태보다
+        # 위험해지는 구조. 라이다 조건(문 쌍·정면 방위·0.3 m·넓은 군집 없음)은 그대로라 한쪽 줄·표지판 기둥에는 안 켜짐
+        'cone_red_lidar_entry': True,
         'cone_red_side_width': 0.2, 'cone_red_side_top': 0.4,   # 양쪽 끝 띠 비율: 확인용 출력만 (판단에 안 씀)
         'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9,
         # 진입 시점: 라바콘 모드로 바꾸는 라이다 앞 방향 거리(m). 붉은색이 보이면 콘 후보 하나, 아니면 문 중점 기준.
@@ -293,6 +298,14 @@ ANSWER_CONFIG = {
         # 11/15 인계 조건 (cones.start_gate): 코너 유지 중에는 차 진행 폭(좌우 cone_hold_half_width m) 안 콘이 바로 앞일 때만,
         # 유지가 아니면 문을 정면으로 볼 때(문 중점 앞 cone_face_distance·옆 cone_face_lateral 안, 방향 cone_face_angle rad 안) 미리 인계
         'cone_hold_half_width': 0.2, 'cone_face_distance': 1.0, 'cone_face_lateral': 0.2, 'cone_face_angle': 0.35,
+        # 11/18 유경 완화 (코너 유지 중 진입 지연): 유지 중에도 붉은색이 화면에 차고(corridor) 문을 정면으로 보면
+        # cone_hold_face_distance 안에서 미리 인계. 폭(cone_face_lateral)·방위(cone_face_angle) 조건은 그대로라
+        # 콘 한 줄·비스듬한 문에는 안 켜짐. 0이나 None이면 예전처럼 유지 중 미리 인계 없음
+        # 근거 run_1118_1931 재생: 정면 문이 124.4 s에 0.51 m 앞으로 들어왔는데 유지 중이라 못 받음.
+        # 그 구간은 driver 접근 서행(state=='lane')도 안 걸려 corner_speed로 콘에 다가감.
+        # 이 녹화에서 진입이 124.84 → 124.75 s로 0.1 s 빨라짐 (그 앞 0.6 s는 문이 정면 방위 밖이라 완화와 무관)
+        # 값 0.6: 유지가 아닐 때의 1.0보다 짧게 (아직 도는 중이라 먼 문은 코너 바깥 줄일 수 있음)
+        'cone_hold_face_distance': 0.6,
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전 상한. 늦은 진입 완화
