@@ -4,7 +4,7 @@ import numpy as np
 from .common import clip
 from .lidar import body_points
 from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
-from .parking_grid import parking_grid_candidates
+from .parking_grid import parking_grid_candidates,move_ground_segments
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
 from .parking_sign import SignPassage,slow_distance
@@ -21,7 +21,7 @@ class Parking:
         if not 0<=self.c['approach_start_tolerance']<=self.c['approach_passed_tolerance']:raise ValueError('invalid approach tolerances')
         self.state='idle';self.reason='WAITING_FOR_PARKING_SIGN';self.debug={};self.stable_since=None
         self.selected=None;self.gap_debug={};self.line_debug={};self.last_scan=None
-        self.grid_debug={};self.grid_tracks=[];self.last_grid_image=None
+        self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -41,7 +41,7 @@ class Parking:
         self.last_scan=self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=self.turn_distance=0.;self.motion_since=None
         self.gap_debug={};self.line_debug={}
-        self.grid_debug={};self.grid_tracks=[];self.last_grid_image=None
+        self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -231,18 +231,28 @@ class Parking:
                 self.state not in ('parking_cruise','parking_scan','parking_approach')):return False
         previous_stamp=self.last_grid_image
         self.last_grid_image=image_stamp
+        elapsed=0. if previous_stamp is None else max(0.,min(.5,image_stamp-previous_stamp))
+        for frame in self.grid_segment_frames:
+            for color in ('yellow','white'):
+                frame[color]=move_ground_segments(frame.get(color,[]),elapsed,velocity,rate)
+        prior={color:[segment for frame in self.grid_segment_frames for segment in frame.get(color,[])]
+               for color in ('yellow','white')}
         try:
-            candidates,details=parking_grid_candidates(image,self.robot,self.c)
+            candidates,details=parking_grid_candidates(image,self.robot,self.c,prior)
         # An experimental observer must never interrupt the proven controller.
         except Exception as error:
             self.grid_tracks=[]
+            self.grid_segment_frames=[]
             observe_only=bool(self.c.get('grid_observe_only',True))
             enabled=bool(self.c.get('grid_enable_actuation',False))
             self.grid_debug=dict(stamp=float(image_stamp),reason='GRID_DETECTOR_ERROR',error=type(error).__name__,
                                  observe_only=observe_only,enable_actuation=enabled,
                                  control_applied=False,evaluations=[])
             return False
-        elapsed=0. if previous_stamp is None else max(0.,min(.5,image_stamp-previous_stamp))
+        current=details.pop('current_segments_by_color',{})
+        if any(current.get(color) for color in ('yellow','white')):
+            self.grid_segment_frames.append(current)
+            self.grid_segment_frames=self.grid_segment_frames[-self.c.get('grid_history_frames',6):]
         for track in self.grid_tracks:self._move_target(track['target'],elapsed,velocity,rate)
         evaluations=[];new_tracks=[]
         for source in candidates:
@@ -284,6 +294,7 @@ class Parking:
         self.grid_debug=dict(stamp=float(image_stamp),scan_stamp=float(scan_stamp),reason=details.get('reason'),
                              observe_only=observe_only,enable_actuation=enabled,
                              control_applied=selected_now,
+                             history_frames=len(self.grid_segment_frames),color=details.get('color'),
                              segments_px=details.get('segments_px',[]),
                              segments_ground=details.get('segments_ground',[]),evaluations=evaluations)
         return selected_now
