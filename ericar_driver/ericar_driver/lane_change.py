@@ -456,7 +456,7 @@ class LaneChange:
             self.travel += abs(velocity)*dt
             if not self.try_extend(points, fork_lanes, request_limit):
                 if not self.try_reverse(points, fork_lanes, request_limit):
-                    self.redecide(points)
+                    self.redecide(points, fork_lanes)
             self.camera_correct(lane)
             error = self.target-self.offset
             if self.c.get('steer_mode', 'arc') == 'arc':
@@ -765,16 +765,22 @@ class LaneChange:
                     best = dict(direction=direction, angle=float(angle), gap=round(min(gap, 9.9), 3))
         return best
 
-    def redecide(self, points):
+    def redecide(self, points, fork_lanes=None):
         """이동 중 재판단 (11/18, 사용자 규칙 3·6): 일반 회피로 한 칸 옮기는 중 도착할 차로 앞이 막혀 있으면,
         되돌아 정렬하지 않고 같은 방향 다음 차로까지 그대로 가로지름 (두 칸을 직선으로)
         11/17 venue_1117_01 119.7~132.6 s: 오른쪽 → 가운데 이동 중 가운데 차로 0.6 m 앞에 장애물이 보였는데 이동을 끝까지 마치려고
         복귀 원호로 그 장애물 정면을 향함 → 정지. 그때 왼쪽 차로는 1 m 넘게 비어 있었음
         조건: 요청 이동이 아님, 한 칸 이동 중, 다음 차로가 있음, 도착 차로의 앞 빈 거리 < redecide_front(m, 뒷축 기준),
         지금 자세에서 다음 차로까지 그린 경로의 여유가 avoid_plan_margin 이상 (옆 장애물을 지나칠 수 있을 때만 = 규칙 5).
-        안 되면 이번 주기는 그대로 두고 다음 주기에 다시 봄"""
+        안 되면 이번 주기는 그대로 두고 다음 주기에 다시 봄
+        표지판 방향이 정해졌으면(fork_lanes: 시작 차로에서 목적 차로까지 칸 수, + 왼쪽) 목적 차로에서 더 멀어지는 쪽으로는
+        넓히지 않음 (11/18 redecide_1118_06 81.3 s: left 확정 뒤 왼쪽 차로 콘을 오른쪽으로 피하던 중, 가운데 차로 0.98 m 앞
+        갈림길 표지판 기둥을 장애물로 보고 오른쪽 끝 차로까지 넘어가 B로 진입). 이동을 마친 뒤 요청 이동이 목적 쪽으로 되돌림"""
         c = self.c
         if not c.get('redecide', False) or self.requested_move or self.span != 1:
+            return False
+        if fork_lanes is not None and abs(int(fork_lanes)-2*self.direction) > abs(int(fork_lanes)-self.direction):
+            self.debug['redecide_blocked'] = dict(reason='away_from_fork', fork_lanes=int(fork_lanes))
             return False
         far = self.index+2*self.direction
         if not 0 <= far < c['lane_count']:
