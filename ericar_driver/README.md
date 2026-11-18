@@ -150,7 +150,7 @@ ros2 launch ericar_driver bringup.launch.py
 
 예: 차선만 + 녹화 `ros2 launch ericar_driver bringup.launch.py yolo:=false record:=true`
 
-- 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`
+- 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`. 전송 기본 초당 5장·화질 50·크기 0.8배(약 1.7 Mbit/s). 화면이 늦게 따라오면 창을 하나만 열고 `/?fps=3&q=30&scale=0.6`, 망이 좋으면 `/?fps=8&q=70&scale=1`. 포트 전달은 밀린 화면을 쌓아 지연이 커짐 → 같은 망이면 `http://<차 IP>:8080` 직접 접속이 덜 밀림
 - 시작 로그에 `[bringup] 카메라 노출: data=600` 확인
 - 카메라 `Failed to setup devices` 오류 한 줄은 단독 실행 때도 나오는 메시지, 영상은 정상
 - wego `teleop_launch.py`와 같이 켜지 말 것 (차동 모드 드라이버라 바퀴 드라이버 중복)
