@@ -89,3 +89,20 @@ def test_obstacle_on_planned_right_arc_blocks_commit():
     scan=dict(points=np.array([[.6,-.3]])-lidar)
     assert not p._turn_path_clear(scan)
     assert not p.path_debug['clear'] and p.path_debug['clearance_m']<p.path_debug['required_m']
+
+
+def test_far_free_cell_waits_until_within_reach():
+    """멀리 있는 빈 칸은 회전 시작까지 template_select_max_remaining 안에 들어올 때 선택 (11/18 redecide_1118_06)"""
+    c=config();c['answer']['parking']['template_enabled']=True
+    c['answer']['parking']['template_select_max_remaining']=1.0;p=Parking(c);p.start(0.)
+    image=np.zeros((480,640,3),np.uint8)
+    def occupancy(slot,*_):
+        return ('FREE' if slot['slot_index']==2 else 'OCCUPIED'),dict(reason='TEST')
+    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
+         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
+        for step in range(3):
+            assert not p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
+        assert p.selected is None and p.template_debug['evaluations'][2]['state']=='FREE'
+        for slot in p.template_slots:p._move_target(slot,1.,.2,0.)     # 0.2 m 전진: 셋째 칸 회전 시작까지 1.135 → 0.935 m
+        assert p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
+    assert p.selected['slot_index']==2

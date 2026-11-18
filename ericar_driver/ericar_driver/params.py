@@ -332,7 +332,12 @@ ANSWER_CONFIG = {
         'template_min_length_fraction': .07, 'template_max_line_gap_px': 18,
         'template_min_ground_length': .18, 'template_start_min_length': .35,
         'template_ground_far': 2.5, 'template_orientation_ratio': 1.8,
-        'template_right_min': -1.1, 'template_right_max': -.05,
+        # 기준선은 차로 오른쪽 선(옆 약 -0.26 m)만 인정 (11/18 혁준, redecide_1118_06: -1.1이던 때 1행 뒷선(옆 -0.95)에 틀이 놓여
+        # 칸이 한 줄 바깥에 그려짐. 성공한 03·04·05는 모두 옆 -0.25~-0.26의 COLOR_TRANSITION)
+        'template_right_min': -.55, 'template_right_max': -.05,
+        # 회전 시작까지 이 거리(m) 안에 든 칸만 선택 (approach_distance_limit 1.2보다 작게). 멀리서 고르면 접근 한계에 걸려 실패
+        # (06: 1.26 m 전 선택 → 0.07 m 남기고 APPROACH_DISTANCE_LIMIT). 그 전까지는 parking_scan 속도로 계속 전진
+        'template_select_max_remaining': 1.0,
         'template_transition_tolerance': .24,
         # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
         'template_selected_occupied_frames': 2,

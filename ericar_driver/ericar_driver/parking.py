@@ -408,9 +408,11 @@ class Parking:
                     if self.state=='parking_approach':
                         self.state='parking_scan';self.entry_stable_since=None
             if self.selected is None:
+                reach=self.c.get('template_select_max_remaining')
                 usable=[index for index,item in enumerate(evaluations)
                         if item['state']=='FREE' and item['rejection'] is None and
-                        item['slot_index'] not in self.rejected_template_slots]
+                        item['slot_index'] not in self.rejected_template_slots and
+                        (reach is None or item['turn_start_remaining_m']<=reach)]
                 if usable:
                     chosen=min(usable,key=lambda index:fused_slots[index]['entrance'][0])
                     self.selected=dict(fused_slots[chosen]);evaluations[chosen]['control_applied']=True
