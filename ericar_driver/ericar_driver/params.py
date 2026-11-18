@@ -425,7 +425,12 @@ ANSWER_CONFIG = {
         # **경기장에서 시작선 ~ 주차 줄 시작(표지판) 거리를 줄자로 확인**
         # 시작선이 template_start_fix_distance(m) 안에 들어와 template_start_frames_min번 넘게 보였을 때 틀 확정
         # 0.65: 카메라 바닥 거리 추정이 1 m 밖에서는 10~20% 짧게 나옴(라이다 대조, 1.1 m에서 틀이 0.12~0.24 m 앞당겨짐) → 가까울 때만
-        'template_anchor_from_start': True, 'template_start_to_row': .45,
+        # 11/19 경기장 track_testv2_1118_01·07·08·09: 0.45로 만든 틀의 첫 칸 시작이 라이다상 표지판 기둥보다 0.076~0.107 m 앞
+        #   (평균 0.09) → 0.54. 줄자 실측 전 임시값
+        'template_anchor_from_start': True, 'template_start_to_row': .54,
+        # 회전점까지 freeze_remaining(m) 안에서는 선택 칸을 보정 틀로 다시 맞추지 않고 오도메트리로만 이동.
+        # 그 전에도 한 번에 max_jump(m) 넘게 옮기지 않음 (track_testv2_1118_09: 회전 시작 프레임에 목표 0.126 m 튐)
+        'template_target_freeze_remaining': .25, 'template_target_max_jump': .02,
         # 첫 칸(0번)을 고르면 조향 목표를 다음 칸 쪽으로 이만큼(m) 옮김 (parking._observe_template, 11/18 혁준, 정윤에게 공유 필요)
         #   표지판 받침이 첫 칸 시작 모서리에 있어 회전 안쪽 옆면이 스침. 22번 재생: +0.05 여유 0.02(막힘), +0.08 여유 0.05(회전 시작), +0.11 여유 0.27
         #   0.08이면 차 옆면 ~ 0·1번 칸 경계선 약 0.06 m (칸 폭 0.50, 차 폭 0.225). 더 올리면 선을 밟음. 0이면 끔. 실차 미확인
@@ -448,7 +453,10 @@ ANSWER_CONFIG = {
         # 11/18 redecide_1118_08: 진행 방향 오차 약 0.21 m로 상한 0.15에 걸림. 큰 오차는 가까운 카메라 재보정이 담당.
         # 상한은 칸 간격 절반(0.257) 미만 필수: 0.30이면 옆면 하나만 보일 때 한 칸 밀린 해가 같은 점수 (재생 확인)
         # 깊이 방향은 물체 차로 쪽 끝이 입구선 밖일 때만 이동(한쪽 벌점). 옆면 u_min = -LIMO 폭/2 가정
-        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .20,
+        # 11/19 경기장: LiDAR 맞춤이 매번 +0.13~0.19 m(상한 근처)로 틀을 밀어 첫 칸 시작이 표지판 기둥보다 0.04~0.11 m 뒤
+        #   (경기장 LIMO가 칸 가운데가 아님 → "옆면 = -LIMO 폭/2" 가정이 틀어짐) → 회전이 늦어 다음 칸 쪽 선으로 치우침(08 약 13 cm).
+        #   시작선 기준 틀이 기둥과 0.09 m 이내라 진행 방향 보정은 ±0.05로 축소
+        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .05,
         # 11/18 track_test_1118_04·05: 둘째 줄 물체를 담으려 칸을 0.14 m 깊게 밀어 가운데 칸 OCCUPIED → 칸 안쪽 이동은
         # max_deeper_offset 0.05까지만 (차로 쪽은 입구 밖으로 나온 물체용으로 normal_offset 0.15 유지).
         # 차 쪽 면이 칸 입구에서 max_face_depth(m)보다 깊은 군집(둘째 줄)은 정렬 점수에서 제외. 빈 칸 판정은 앞쪽 occupancy_depth(m)만

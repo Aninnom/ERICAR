@@ -30,6 +30,7 @@ class Parking:
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
         self.template_alignment=None;self.fusion_debug={}
         self.refine_debug={};self.refine_count=0;self.selected_fresh=False;self.refine_last=None
+        self.parked_debug={}
         self.template_start_track=None;self.start_debug={}
         self.armed_distance=0.;self.line_seen_armed=False
         self.path_block_since=None;self.path_block_scans=0;self.path_block_stamp=None;self.scan_stamp=None
@@ -58,6 +59,7 @@ class Parking:
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
         self.template_alignment=None;self.fusion_debug={}
         self.refine_debug={};self.refine_count=0;self.selected_fresh=False;self.refine_last=None
+        self.parked_debug={}
         self.template_start_track=None;self.start_debug={}
         self.armed_distance=0.;self.line_seen_armed=False
         self.path_block_since=None;self.path_block_scans=0;self.path_block_stamp=None;self.scan_stamp=None
@@ -85,7 +87,7 @@ class Parking:
                         parking_template=self.template_debug,
                         parking_fusion=self.fusion_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
-                        turn_path=self.path_debug,
+                        turn_path=self.path_debug,parked_check=self.parked_debug,
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
                         approach_speed_cap_m_s=self.approach_speed_cap,
@@ -209,6 +211,32 @@ class Parking:
             if key in target:target[key]=((np.asarray(target[key])-[x,y])@rotation).tolist()
         for key in ('tangent','normal'):
             target[key]=(np.asarray(target[key])@rotation).tolist()
+
+    def _first_slot_shift(self,slot):
+        """첫 칸(0번) 조향 목표만 다음 칸 쪽으로 template_first_slot_shift(m) (혁준 11/18). 재동기화 때도 같은 값 유지
+        (11/19: 예전에는 선택 순간에만 적용되고 다음 프레임 보정 위치로 덮여 사라짐)"""
+        shift=self.c.get('template_first_slot_shift',0.)
+        if not shift or slot.get('slot_index')!=0 or slot.get('first_slot_shift_m'):return slot
+        move=shift*np.asarray(slot['tangent'],float)
+        for key in ('entrance','center'):
+            if key in slot:slot[key]=(np.asarray(slot[key],float)+move).tolist()
+        slot['polygon']=(np.asarray(slot['polygon'],float)+move).tolist()
+        slot['first_slot_shift_m']=float(shift)
+        return slot
+
+    def _parked_check(self,scan):
+        """주차 완료 시 차체 옆(뒷축 기준 x -0.15~0.45) 좌우 가장 가까운 LiDAR 점과 차 옆면 간격 (진단용)"""
+        try:points=body_points(scan,self.robot)
+        except Exception:return {}
+        if not len(points):return {}
+        side=points[(points[:,0]>=-.15)&(points[:,0]<=.45)]
+        half=self.robot['width']/2
+        left=side[side[:,1]>half];right=side[side[:,1]<-half]
+        result=dict(left_y=None if not len(left) else float(left[:,1].min()),
+                    right_y=None if not len(right) else float(right[:,1].max()))
+        result['left_gap_m']=None if result['left_y'] is None else result['left_y']-half
+        result['right_gap_m']=None if result['right_y'] is None else -result['right_y']-half
+        return result
 
     def _approach(self,now,dt,velocity,angular_velocity,scan):
         self.approach_distance+=abs(velocity)*dt
@@ -605,20 +633,30 @@ class Parking:
                     # 첫 칸 목표 이동 (11/18 혁준, redecide_1118_22·24): 주차 표지판 받침이 첫 칸 시작 모서리(우회전 안쪽)에 있어
                     # 회전 경로 여유 0.00~0.03 m로 SELECTED_SLOT_TURN_PATH_BLOCKED → 첫 칸을 버리고 지나감.
                     # 선택한 칸이 0번이면 조향 목표만 줄 방향(다음 칸 쪽)으로 template_first_slot_shift(m) 옮김. 칸 평가용 틀은 그대로
-                    shift=self.c.get('template_first_slot_shift',0.)
-                    if shift and self.selected.get('slot_index')==0:
-                        move=shift*np.asarray(self.selected['tangent'],float)
-                        for key in ('entrance','center'):
-                            self.selected[key]=(np.asarray(self.selected[key],float)+move).tolist()
-                        self.selected['polygon']=(np.asarray(self.selected['polygon'],float)+move).tolist()
-                        self.selected['first_slot_shift_m']=float(shift)
+                    self.selected=self._first_slot_shift(self.selected)
                     selected_now=True
             elif (self.selected is not None and self.selected.get('source')=='parking_template' and
                   self.state in ('parking_cruise','parking_scan','parking_approach')):
                 # 래치한 칸도 회전 전까지는 보정된 템플릿·LiDAR 정렬을 따라감 (오도메트리 누적 대신)
                 fresh=next((slot for slot in fused_slots if slot['slot_index']==selected_index),None)
                 if fresh is not None:
-                    self.selected=dict(fresh);self.selected_fresh=True;selected_now=True
+                    fresh=self._first_slot_shift(dict(fresh))
+                    # 11/19 track_testv2_1118_09: 회전 시작 프레임에 융합 오프셋 0.19 → 0.13으로 목표 입구가 0.126 m 튀어
+                    # 그 순간 회전 시작. 회전점 template_target_freeze_remaining(m) 안에서는 오도메트리로만 옮기고,
+                    # 그 전에도 한 번에 template_target_max_jump(m) 넘게는 옮기지 않음
+                    current=np.asarray(self.selected['entrance'],float)
+                    remaining=float(current[0]-self._turn_lead())
+                    if remaining>self.c.get('template_target_freeze_remaining',-1.):
+                        limit=self.c.get('template_target_max_jump',float('inf'))
+                        delta=np.asarray(fresh['entrance'],float)-current
+                        norm=float(np.linalg.norm(delta))
+                        if norm>limit:
+                            move=delta*(limit/norm)-delta
+                            for key in ('entrance','center'):
+                                if key in fresh:fresh[key]=(np.asarray(fresh[key],float)+move).tolist()
+                            fresh['polygon']=(np.asarray(fresh['polygon'],float)+move).tolist()
+                        self.selected=fresh;self.selected_fresh=True;selected_now=True
+                    else:self.selected['target_frozen']=True
         self.template_debug=dict(reason=('TEMPLATE_ACTIVE' if self.template_slots else
                                          'WAITING_FOR_SIDE_ANCHOR' if self.template_armed else
                                          'WAITING_FOR_START_LINE'),
@@ -731,12 +769,14 @@ class Parking:
                   self.c.get('white_loss_requires_seen_after_arm',True) else self.line_seen)
             self.line_debug['seen_after_arm']=self.line_seen_armed
             if new_image and loss_armed and seen and self.loss_frames>=self.c['white_loss_frames']:
-                self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP';return self._output()
+                self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
+                self.parked_debug=self._parked_check(scan);return self._output()
             # 흰 선 소실은 최소 회전각 이후에만 아래 종료 조건보다 우선
             slot_heading=math.atan2(self.selected['normal'][1],self.selected['normal'][0])
             done=self.c.get('turn_done_heading')
             if done is not None and slot_heading>=-done:
-                self.state='parked';self.reason='TURN_COMPLETE_STOP';return self._output()
+                self.state='parked';self.reason='TURN_COMPLETE_STOP'
+                self.parked_debug=self._parked_check(scan);return self._output()
             if now-self.turn_started>self.c['turn_timeout']:return self.fail('TURN_TIMEOUT')
             if self.turn_distance>self.c['turn_distance_limit']:return self.fail('TURN_DISTANCE_LIMIT')
             if not self.line_seen and now-self.turn_started>self.c['white_acquire_timeout']:return self.fail('WHITE_LINE_NEVER_SEEN')
