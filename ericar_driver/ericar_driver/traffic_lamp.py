@@ -62,3 +62,12 @@ def predict_confidence(config):
     if low is None or not config.get('lamp_check', True):
         return config['confidence']
     return min(config['confidence'], low)
+
+
+def image_size(config, state):
+    """YOLO 입력 크기. 신호등 앞 정지 중(traffic_hold)에는 traffic_hold_image_size, 그 외에는 image_size (11/19 혁준)
+
+    정지선에서는 신호등이 화면에 크게 찍혀 640 입력이면 초록 신뢰도가 떨어짐 (track_testv2_1118_10 정지 뒤 초록 26프레임
+    중앙 0.04, 같은 화면 320은 0.70). 먼 빨강·보행자는 640이 일찍 봄 → 정지한 동안에만 320. 끄기: traffic_hold_image_size None"""
+    hold = config.get('traffic_hold_image_size')
+    return hold if hold and state == 'traffic_hold' else config['image_size']

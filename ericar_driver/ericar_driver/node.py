@@ -24,7 +24,7 @@ except ImportError:   # 맥 시험 등 limo_msgs 없는 환경: SWB 재출발만
     LimoStatus = None
 
 from .common import clip
-from .traffic_lamp import box_name, predict_confidence
+from .traffic_lamp import box_name, image_size, predict_confidence
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
 from .params import YOLO_CLASSES
@@ -173,7 +173,7 @@ class DriverNode(Node):
                 last_stamp = stamp
                 try:
                     results = self.detector.predict(frame if lut is None else cv2.LUT(frame, lut), conf=predict_confidence(c['detector']),
-                                                    imgsz=c['detector']['image_size'],
+                                                    imgsz=image_size(c['detector'], self.loop.driver.state),
                                                     device=c['detector']['device'], verbose=False)[0]
                     torch.set_num_threads(self.threads)
                     objects = []

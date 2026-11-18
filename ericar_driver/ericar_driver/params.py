@@ -105,6 +105,10 @@ ANSWER_CONFIG = {
         #   gamma: YOLO 입력에만 적용하는 밝기 보정(1.0 = 없음, 작을수록 밝게). 320에서 감마만 쓰면 parking·pedestrian이 줄어듦 → 640과 함께
         #   차선·램프 색 판정은 원본 영상 그대로. 되돌리기: image_size 320, gamma 1.0
         'enabled': True, 'confidence': 0.45, 'image_size': 640, 'gamma': 0.6, 'device': 0, 'rate_hz': 5.0,
+        # traffic_hold_image_size (11/19 혁준, 녹화 재추론만·실차 전): 신호등 앞 정지 중(traffic_hold)에만 이 크기로 추론
+        #   640은 가까운 초록 신뢰도가 낮음 (track_testv2_1118_10 정지 뒤 초록 인정 18/39 → 320은 38/39, 02·04·01번은 같음)
+        #   빨강 대기 194프레임 중 320의 초록 오인정 0. 접근·보행자·주차는 640 그대로 (traffic_lamp.image_size). 끄기: None
+        'traffic_hold_image_size': 320,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
