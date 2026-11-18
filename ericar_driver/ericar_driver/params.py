@@ -323,6 +323,12 @@ ANSWER_CONFIG = {
         'template_transition_tolerance': .24,
         # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
         'template_selected_occupied_frames': 2,
+        # 카메라 템플릿을 LiDAR 군집에 맞춰 작은 평행이동만 허용. 칸 크기·간격·방향은 변경하지 않는다.
+        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .15,
+        'template_fusion_step': .03, 'template_fusion_smoothing': .35,
+        'template_fusion_roi_padding': .25, 'template_fusion_cluster_distance': .12,
+        'template_fusion_cluster_min_points': 3, 'template_fusion_offset_penalty': .2,
+        'template_fusion_obstacle_front_depth': .08,
         'turn_path_check_distance': .90, 'turn_path_margin': .03,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
