@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import json
 import cv2
+import numpy as np
 import threading
 
 import rclpy
@@ -23,7 +24,7 @@ except ImportError:   # 맥 시험 등 limo_msgs 없는 환경: SWB 재출발만
     LimoStatus = None
 
 from .common import clip
-from .traffic_lamp import NAMES as LAMP_NAMES, lamp_name
+from .traffic_lamp import box_name, predict_confidence
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
 from .params import YOLO_CLASSES
@@ -158,6 +159,9 @@ class DriverNode(Node):
         import torch
         c = self.c
         last_stamp = None
+        # YOLO 입력 밝기 보정표 (detector.gamma, 1.0이면 없음). 램프 색 재확인(lamp_name)은 원본 frame 사용
+        gamma = float(c['detector'].get('gamma', 1.0))
+        lut = None if abs(gamma-1.0) < 1e-3 else np.clip(np.linspace(0, 1, 256)**gamma*255, 0, 255).astype(np.uint8)
         while not self.stop_event.is_set():
             if self.detector_paused(self.loop.driver.state):
                 self.stop_event.wait(.2)
@@ -168,7 +172,7 @@ class DriverNode(Node):
             if frame is not None and stamp != last_stamp:
                 last_stamp = stamp
                 try:
-                    results = self.detector.predict(frame, conf=c['detector']['confidence'],
+                    results = self.detector.predict(frame if lut is None else cv2.LUT(frame, lut), conf=predict_confidence(c['detector']),
                                                     imgsz=c['detector']['image_size'],
                                                     device=c['detector']['device'], verbose=False)[0]
                     torch.set_num_threads(self.threads)
@@ -178,14 +182,11 @@ class DriverNode(Node):
                         x0, y0, x1, y1 = box.xyxy[0].cpu().tolist()
                         margin = c['detector'].get('edge_margin', .01)
                         truncated = x0 <= margin*w or x1 >= (1-margin)*w or y0 <= margin*h or y1 >= (1-margin)*h
-                        name = results.names[int(box.cls[0])]
-                        extra = {}
-                        if (name in LAMP_NAMES and c['detector'].get('lamp_check', True) and
-                                (x1-x0)*(y1-y0)/(w*h) >= c['detector'].get('lamp_min_area', .005)):
-                            # 같은 프레임에서 켜진 램프 위치로 색 재확인. 판정되면 YOLO 이름 대신 사용 (traffic_lamp.py)
-                            lamp = lamp_name(frame, (x0, y0, x1, y1), c['detector'])
-                            if lamp is not None and lamp != name:
-                                extra, name = dict(yolo_name=name), lamp
+                        # 같은 프레임에서 켜진 램프 위치로 색 재확인, 낮은 신뢰도 신호등 박스는 램프 판정이 확실할 때만 인정 (traffic_lamp.box_name)
+                        name, extra = box_name(frame, (x0, y0, x1, y1), results.names[int(box.cls[0])],
+                                               float(box.conf[0]), c['detector'])
+                        if name is None:
+                            continue
                         objects.append(dict(name=name, **extra,
                                             bbox=[x0/w, y0/h, x1/w, y1/h], truncated=truncated,
                                             confidence=float(box.conf[0]),

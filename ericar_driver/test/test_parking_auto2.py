@@ -81,7 +81,7 @@ def test_visual_pd_cannot_weaken_nominal_turn_even_when_enabled(phase,offset):
 
 def test_latest_main_calibration_and_defaults_are_preserved():
     c=config();p=Parking(c)
-    assert p._turn_lead()==pytest.approx(.615)
+    assert p._turn_lead()==pytest.approx(.55)  # 11/18 IMU 실측 반경 (redecide_1118_23·34·35)
     assert p.c['pd']['enabled'] is False
     assert p.c['turn_done_heading']==.05
     assert p.c['cruise_search_enabled'] is True

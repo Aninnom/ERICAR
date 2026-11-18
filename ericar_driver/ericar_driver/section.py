@@ -33,6 +33,7 @@ class SectionManager:
         self.distance = 0.0       # 이 구간에 들어온 뒤 주행 거리(m)
         self.yaw = -math.radians(90.0*self.index)   # 출발 뒤 누적 회전(rad, + 왼쪽). 재출발은 그 구간 직선 방향에서 시작
         self.turned = 0.0         # 이 구간 직선 방향에서 오른쪽으로 돈 각도(°)
+        self.carried = 0.0        # 주행으로 볼 수 없는 회전 누적(rad): 자동 상태로 차를 들어 돌린 것. 구간 전환 계산에서 뺌
         self.held = False         # 전환 기준을 넘었지만 보류 중인지 (디버그 표시용)
         self.held_distance = 0.0  # 기준을 넘은 채 보류로 주행한 거리(m)
 
@@ -64,6 +65,10 @@ class SectionManager:
                     best, error = k, e
         if abs(error) > self.c.get('restart_tolerance', 40.0):
             best = self.index
+        # 이웃 구간으로 바꾸는 건 그 방향과 restart_switch_tolerance(°) 안으로 맞을 때만 (11/18 track_test_1118_01: 손으로 빠르게
+        # 한 바퀴 돌리자 누적 회전이 약 65° 어긋나 지금 구간 −65°·이웃 구간 +25°로 읽힘). 손으로 옮긴 뒤 방향 오차는 보통 12° 이하
+        if best != self.index and abs(error) > self.c.get('restart_switch_tolerance', self.c.get('restart_tolerance', 40.0)):
+            best = self.index
         return best, error
 
     def update(self, yaw_rate, velocity, dt, hold=False, advance=False):
@@ -71,7 +76,15 @@ class SectionManager:
         advance: 회전 기준과 무관하게 지금 다음 구간으로 넘김 (driver: 라바콘이 앞 구간에서 시작됨, 11/16)"""
         self.yaw += yaw_rate*dt
         self.distance += abs(velocity)*dt
-        self.turned = -math.degrees(self.yaw)-90.0*self.index
+        # 들어 올려 돌린 회전은 코너로 세지 않음 (11/18 track_test_1118_01 107~109 s: SWB를 내리기 전 자동 상태로 차를 들어 돌림
+        # → 2 s 동안 약 90~140°/s, 바퀴 속도 0.2 m/s → S2 → S3 → S4로 넘어가 라바콘이 꺼진 채 재출발).
+        # 그 속도로 낼 수 있는 최대 회전(속도 × carry_curvature)의 carry_rate_gain배 + carry_rate_offset(°/s)을 넘으면 주행이 아님
+        # 누적 회전(yaw)에는 그대로 더함: 재출발 방향 판단(relocate)용. 끄기: carry_rate_gain None
+        gain = self.c.get('carry_rate_gain')
+        if gain is not None and abs(yaw_rate) > (gain*abs(velocity)*self.c.get('carry_curvature', 2.3)
+                                                  + math.radians(self.c.get('carry_rate_offset', 15.0))):
+            self.carried += yaw_rate*dt
+        self.turned = -math.degrees(self.yaw-self.carried)-90.0*self.index
         if advance and self.index < len(SECTION_MISSIONS)-1:
             self.held, self.held_distance = False, 0.0
             self.index += 1

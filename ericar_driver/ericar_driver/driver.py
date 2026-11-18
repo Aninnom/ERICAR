@@ -63,6 +63,7 @@ class Driver:
         self.done = set()             # 이번 주행에서 끝낸(또는 시간 초과로 포기한) 미션. 같은 구간에서 다시 들어가지 않음
         if self.c['missions'].get('start_stage') == 'parking':
             self.done.add('traffic')  # 주차 지점 재출발: 신호등은 이미 지난 것으로 봄
+        self.traffic_done_at = None   # 신호등을 끝낸 시점의 S4 구간 거리(m). parking_auto_start가 사용
         self.stall_time = 0.0         # 의도하지 않은 정지 누적 시간(s)
         self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
         self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
@@ -72,6 +73,7 @@ class Driver:
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
         self.restarts = 0             # SWB 재출발 횟수 (디버그 표시용)
         self.restart_error = None     # 마지막 재출발 때 놓인 방향과 구간 직선 방향의 차(°). 출발은 None
+        self.arrow_history = []       # 새 검출 프레임마다 화살표 하나('left'·'right') 또는 None. 다수결 확정용 (arrow_vote)
 
     @property
     def avoiding(self):
@@ -274,6 +276,8 @@ class Driver:
         """
         for name in MISSION_SIGNS.get(mission, []):
             self.cooldowns[name] = now + self.c['missions']['sign_cooldown']
+        if mission == 'traffic' and 'traffic' not in self.done:
+            self.traffic_done_at = self.sections.distance
         self.done.add(mission)
         self.line_distance = None
         self.transition('lane', now)
@@ -343,7 +347,25 @@ class Driver:
         return self.sections.distance >= self.c['parking'].get('after_traffic_distance', 4.0)
 
     def advance(self, mission):
+        if mission == 'traffic' and 'traffic' not in self.done:
+            self.traffic_done_at = self.sections.distance
         self.done.add(mission)
+
+    def parking_auto_start(self):
+        """표지판 없이 주차 단계를 켤 시점인지 (11/18 경기장: P 표지판을 right로 읽어 주차가 시작되지 않음, params parking.auto_start)
+        시작선 기준 틀은 주차 단계가 시작선 전에 켜져 있어야 하므로 횡단보도를 지난 뒤·시작선 전 거리에서 켬"""
+        p = self.c['parking']
+        if (not p.get('auto_start', False) or p.get('test_wait_for_sign', False) or not self.c['sections']['enabled']
+                or self.sections.index != START_SECTION['parking']):
+            return False
+        stage = self.c['missions'].get('start_stage')
+        if stage == 'parking':
+            return self.sections.distance >= p.get('auto_start_placed', .2)
+        if stage == 'traffic':
+            # 신호등 지점에 놓고 시작: 구간 거리가 트랙 기준이 아님 → 신호등을 끝낸 지점 기준
+            return (self.traffic_done_at is not None and
+                    self.sections.distance-self.traffic_done_at >= p.get('auto_start_after_traffic', .9))
+        return self.sections.distance >= p.get('auto_start_distance', 3.0)
 
     def traffic_filter(self, detections):
         """신호등 박스 중 지금 보는 신호등 것만 남김 (11/14 integ_1114_lap3: 녹색 0.042 + 배경 빨간 상자 0.003 동시 검출 → 54초 대기)
@@ -441,13 +463,43 @@ class Driver:
         # 빨강·노랑은 첫 검출부터 녹색 허가 차단. 광고판 등 동시 검출 시 보수적 대기
         # 충돌 해소 후 새 녹색 프레임을 confirm_frames만큼 다시 확인
         if stamp != self.last_detection_stamp:
+            arrows = names & {'left', 'right'}
+            self.arrow_history = (self.arrow_history+[next(iter(arrows)) if arrows else None])[-20:]
             self.sign_counts = {name: self.sign_counts.get(name, 0) + 1 for name in names}
             if {'traffic_red', 'traffic_yellow'} & names:
                 self.sign_counts['traffic_green'] = 0   # 빨강·노랑과 겹친 녹색은 버리고 새 프레임부터 다시 셈 (11/14)
             self.last_detection_stamp = stamp
-        return {name for name in names
-                if self.sign_counts.get(name, 0) >= self.c['detector'].get('confirm_frames_by_class', {}).get(
-                    name, self.c['detector']['confirm_frames'])}
+        confirmed = {name for name in names
+                     if self.sign_counts.get(name, 0) >= self.c['detector'].get('confirm_frames_by_class', {}).get(
+                         name, self.c['detector']['confirm_frames'])}
+        return confirmed | self.arrow_vote(names)
+
+    def arrow_vote(self, names):
+        """화살표 다수결 확정 (11/18 소민, 녹화 재현만·실차 전). 연속 확정(confirm_frames_by_class)에 더해 OR로 씀
+        최근 window 검출 프레임 중 같은 화살표 count번 이상 + 반대 화살표 opposite_max번 이하 + 이번 프레임도 그 화살표면 확정
+        11/18 redecide_1118_19: left·right가 번갈아 나와 연속 3이 계속 끊김 → 첫 화살표 뒤 3.9 s에 확정. 6중 4면 1.8 s 앞당겨짐
+        다수결만 쓰면 위험: redecide_1118_20은 처음 프레임이 r l r r(실제 left) → 5중 3은 right로 잘못 확정.
+        오늘 녹화 4개(05·17·19·20)에서 '연속 3 또는 6중 4·반대 1 이하'는 틀린 확정 0, 늦어진 확정 0. 표본이 적어 실차 확인 필요"""
+        vote = self.c['detector'].get('arrow_vote', {})
+        if not vote.get('enabled', False) or not self.arrow_history:
+            return set()
+        window = self.arrow_history[-int(vote.get('window', 6)):]
+        latest = window[-1]
+        if latest not in names:
+            return set()
+        other = 'right' if latest == 'left' else 'left'
+        if window.count(latest) >= vote.get('count', 4) and window.count(other) <= vote.get('opposite_max', 1):
+            return {latest}
+        return set()
+
+    def traffic_line_too_early(self, distance):
+        """신호등 정지선으로 쓰기에는 S4에서 너무 앞에 있는 선인지 (첫 선·'천천히' 글씨 오판 방지, params traffic_line_min_distance)"""
+        gate = self.c['missions'].get('traffic_line_min_distance')
+        if (gate is None or distance is None or not self.c['sections']['enabled']
+                or self.sections.index != START_SECTION['traffic']
+                or self.c['missions'].get('start_stage') in ('traffic', 'parking')):
+            return False
+        return self.sections.distance+distance < gate
 
     def update_stop_line(self, lane, velocity, now, dt):
         m = self.c['missions']
@@ -460,6 +512,8 @@ class Driver:
             # 횡단보도 앞 선을 못 찾을 때 쓰는 '정지선 너머 흰 선' 기록 (원본 거리, 찍힌 시각)
             self.plain_seen = (lane['stop_distance'] - velocity*max(0.0, now-image_stamp), now)
         cross = lane.get('crosswalk_distance')
+        if cross is not None and self.allowed('traffic') and self.traffic_line_too_early(cross):
+            cross = None   # S4 앞부분의 횡단보도 선 판정은 믿지 않음 → 일반 선으로 취급
         if new_image and (cross is not None or lane['stop_distance'] is not None):
             # 횡단보도 바로 앞 선이 보이면 그 선 우선. 한 번 잡으면 일반 흰 선(서행 시작선·횡단보도 뒤 선)으로 안 바꿈 (소민)
             kind = 'crosswalk' if cross is not None else 'plain'
@@ -563,6 +617,8 @@ class Driver:
                     self.transition('pedestrian_approach', now)
             elif 'parking' in ready and c['parking']['enabled'] and self.allowed('parking') and self.parking_ready():
                 self.transition('parking_scan', now)
+            elif c['parking']['enabled'] and self.allowed('parking') and self.parking_auto_start():
+                self.transition('parking_scan', now)
         return green_only
 
     def stop_missions(self, speed, velocity, green_only, now):
@@ -575,6 +631,8 @@ class Driver:
             line = self.line_distance
             if traffic and m.get('traffic_crosswalk_only', True) and self.line_kind != 'crosswalk':
                 line = None
+            if traffic and self.traffic_line_too_early(line):
+                line = None   # 따라가던 선이 S4 앞부분(첫 선·글씨)에 있음 → 정지 대상 아님 (구간이 바뀌기 전에 잡힌 선 포함)
             offset = m.get('traffic_stop_offset', m['stop_offset']) if traffic else m['stop_offset']
             # 신호등: 선을 가까이(traffic_near_measure m 안)에서 직접 잰 적이 있으면 보행자와 같은 조건 → traffic_stop_offset_near.
             # 먼 곳에서 한 번만 재고 오도메트리로 온 경우는 그 오차를 보정한 traffic_stop_offset (11/14 실측 −0.045)
@@ -892,6 +950,18 @@ class Driver:
                 self.cones.since_exit += abs(velocity)*dt
             if self.cone_exit_left > 0:
                 self.cone_exit_left -= abs(velocity)*dt
+        m = self.c['missions']
+        if (m.get('traffic_zone_speed') and self.state in ('lane', 'traffic_approach') and self.allowed('traffic')
+                and self.c['sections']['enabled'] and self.sections.index == START_SECTION['traffic']
+                and self.sections.distance < m.get('traffic_zone_distance', 3.0)):
+            # 신호등 구간 서행 (11/18): 신호등 확정·정지선 측정 시간을 벌고 서행 표지판 구간 속도를 지킴. stop_missions가 이 값 아래로만 더 줄임
+            speed = min(speed, m['traffic_zone_speed'])
+        lidar_c = self.c['lidar']
+        if (lidar_c.get('cone_approach_speed') and self.state == 'lane' and not self.cones.started and not self.cones.active
+                and self.c['sections']['enabled'] and self.sections.index == START_SECTION['cones'] and self.sections.allows('cones')
+                and self.sections.distance < lidar_c.get('cone_approach_distance', 2.0)):
+            # 라바콘 접근 서행 (11/18): 라바콘이 켜지기 전 S3 앞부분. 색 판정이 빗나가도 빠른 속도로 콘에 닿지 않게 함
+            speed = min(speed, lidar_c['cone_approach_speed'])
         speed = self.stop_missions(speed, velocity, green_only, now)
         if self.c['parking'].get('test_drive_until_sign',False):
             speed=min(speed,self.c['parking']['scan_speed'])
@@ -945,6 +1015,7 @@ class Driver:
                           fork_remaining=self.fork_remaining, fork_request=self.fork_request, fork_goal=self.fork_goal,
                           fork_sign=self.fork_sign, fork_sign_stamp=self.fork_sign_stamp,
                           fork_sign_counts={n: self.sign_counts.get(n, 0) for n in ('left', 'right')},
+                          fork_arrow_history=''.join((a or '-')[0] for a in self.arrow_history[-8:]),
                           avoiding=self.avoiding, cone_active=self.cones.active, cone_red=self.cones.red,
                           cone_red_ratio=float(lane.get('cone_red', 0.0)), cone_corridor=self.cones.corridor,
                           cone_heading=self.cones.heading, cone_center=self.cones.center, speed=speed,

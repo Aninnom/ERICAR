@@ -70,7 +70,7 @@ def test_unknown_geometry_can_stabilize_but_first_free_result_latches():
 
 def test_free_cell_after_turn_start_is_rejected():
     p=Parking(config());p.start(0.)
-    for stamp in (1.,1.1,1.2):observe(p,stamp,'FREE',x=.5)
+    for stamp in (1.,1.1,1.2):observe(p,stamp,'FREE',x=.45)  # 회전 시작점보다 0.10 m 지남 (반경 0.55)
     assert p.selected is None
     assert p.grid_debug['evaluations'][0]['rejection']=='TURN_START_ALREADY_PASSED'
 

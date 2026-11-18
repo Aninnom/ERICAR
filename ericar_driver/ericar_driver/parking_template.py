@@ -34,6 +34,12 @@ def parking_template_landmarks(image,robot,config):
     top=config.get('template_roi_top',.40)
     white=_mask(image,config.get('grid_white_min',[0,0,95]),config.get('grid_white_max',[179,85,255]),top)
     yellow=_mask(image,config.get('grid_yellow_min',[18,40,50]),config.get('grid_yellow_max',[40,255,255]),top)
+    # 11/18 redecide_1118_14: 밝은 조명 반사로 노란 차선 일부가 채도 48~85 → 흰색 범위에 들어가
+    # 노란 차선 중간에 가짜 황색→흰색 전환점 생성. 노란 색상 + 채도 일정 이상은 흰색에서 제외
+    # (실제 흰 선 채도 1~5, 반사된 노란 선 48 이상)
+    exclude=_mask(image,config.get('template_white_exclude_min',[10,30,60]),
+                  config.get('template_white_exclude_max',[45,255,255]),top)
+    white=cv2.bitwise_and(white,cv2.bitwise_not(exclude))
     white_lines=_segments(white,image,robot,config);yellow_lines=_segments(yellow,image,robot,config)
     ratio=config.get('template_orientation_ratio',1.8)
     transverse=[];white_long=[];yellow_long=[];start_positions=[]
@@ -65,6 +71,11 @@ def parking_template_landmarks(image,robot,config):
             if distance<=tolerance and (best is None or distance<best[0]):best=(distance,yellow_end,yellow_line)
         if best is not None:
             anchor=(white_start+best[1])/2;confidence='COLOR_TRANSITION';support=best[2]
+            # 11/18 재생: 먼 흰 선분은 짧아 방향 오차 큼 → 칸이 차로 쪽으로 돌아감.
+            # 같은 차로 경계인 노란 선분(길고 가까움)이 더 길면 그 방향 사용
+            if support['length']>white_line['length']:
+                yp=support['points'];direction=yp[np.argmax(yp[:,0])]-yp[np.argmin(yp[:,0])]
+                direction=direction/max(np.linalg.norm(direction),1e-9)
         else:
             anchor=white_start;confidence='WHITE_START_ONLY';support=None
         normal=np.array([direction[1],-direction[0]])
@@ -81,12 +92,16 @@ def parking_template_landmarks(image,robot,config):
                 reason='ANCHOR_FOUND' if anchors else 'WAITING_FOR_WHITE_SIDE')
 
 
-def slots_from_anchor(anchor,tangent,normal,width=.50,depth=.59,count=3):
-    """Render known-size consecutive cells in the vehicle ground frame."""
+def slots_from_anchor(anchor,tangent,normal,width=.50,depth=.59,count=3,pitch=None):
+    """Render known-size consecutive cells in the vehicle ground frame.
+
+    pitch: 칸 중심 간격. 도면 3칸 x 6110~7650 = 1.54 m → 0.513 (선 두께 포함). None이면 width
+    """
     anchor=np.asarray(anchor,float);tangent=np.asarray(tangent,float);normal=np.asarray(normal,float)
+    pitch=width if pitch is None else float(pitch)
     result=[]
     for index in range(count):
-        entrance=anchor+(index+.5)*width*tangent
+        entrance=anchor+(index*pitch+width/2)*tangent
         corners=np.array([entrance-width/2*tangent,entrance+width/2*tangent,
                           entrance+width/2*tangent+depth*normal,
                           entrance-width/2*tangent+depth*normal])

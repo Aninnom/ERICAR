@@ -33,6 +33,8 @@ DT = 0.05
 THREE_LANE = (4.5, 10.8)
 # 이 장면의 3차선은 S2 시작(3.5) 뒤 7.3 m까지 → 실제 트랙용 거리 기준(lane_change_max_distance)은 끔
 ANSWER_CONFIG['sections']['lane_change_max_distance'] = None
+# 가짜 코너는 0.2 m에 90°(곡률 7.9 /m, 차 한계 2.23의 3.5배)라 '들어 돌린 회전'으로 걸러짐 → 이 장면에서는 끔 (11/18)
+ANSWER_CONFIG['sections']['carry_rate_gain'] = None
 ANSWER_CONFIG['missions']['fork_enter_distance'] = None   # 같은 이유: 입구 거리 안전장치도 끔
 # 주행 시간(s): S2 방향 확정 전 속도 상한(fork_prepare_speed 0.18, PR #37)으로 주차 완료가 약 111 s → 기본 110 s로는 모자람
 DURATION = 130.0
@@ -312,7 +314,8 @@ def test_slow_zone():
     # (가) 표지판 → 감속, 방지턱(2.0 m) 감지 뒤 0.5 m에서 해제. 출발 직후는 기본 속도 (감속이 눈에 보여야 함)
     log, driver = slow_run(bump=2.0)
     assert speed_at(log, 0.5) > 0.3 and speed_at(log, 1.0) == z['speed'] and speed_at(log, 2.3) == z['speed']
-    assert 2.0 <= driver.slow_zone.bump_at + 0.8 <= 2.1, driver.slow_zone.bump_at
+    # 하한 1.95: 판정 간격이 한 스텝(base_speed 0.6 × DT = 0.03 m)이라 턱 위치보다 그만큼 앞에서 잡힐 수 있음
+    assert 1.95 <= driver.slow_zone.bump_at + 0.8 <= 2.1, driver.slow_zone.bump_at
     assert speed_at(log, 2.7) > 0.3 and 'slow' in driver.done
     assert max(row[1] for row in log if 0.85 <= row[0] < 2.45) <= 0.2
     # 턱 위 조향 고정: 차선 오차가 튀어도 조향은 직전 값(직선 0)
@@ -320,7 +323,8 @@ def test_slow_zone():
     print('  표지판 + 방지턱 감지: 0.8 m 감속, %.2f m 해제' % next(r[0] for r in log if r[0] > 1.0 and r[1] > 0.3))
     # (나) 표지판 누락 → entry_distance에서 감속
     log, driver = slow_run(sign=None, bump=2.0)
-    assert speed_at(log, 1.3) > 0.3 and speed_at(log, 1.6) == z['speed'] and speed_at(log, 2.7) > 0.3
+    entry = z['entry_distance']   # 값은 params.py (11/18 경기장 1.5 → 1.2). 진입 0.2 m 전은 기본 속도, 0.1 m 뒤는 서행
+    assert speed_at(log, entry-0.2) > 0.3 and speed_at(log, entry+0.1) == z['speed'] and speed_at(log, 2.7) > 0.3
     # (다) 방지턱 감지 실패(IMU 없음) → 1번 코너(S1)에서 해제, 그 전에는 서행 유지
     log, driver = slow_run(tilt=False, corner=3.0, length=5.0)
     assert speed_at(log, 2.9) == z['speed'] and driver.slow_zone.state == 'done' and 'slow' in driver.done
@@ -343,7 +347,8 @@ def test_slow_zone():
     log, driver = slow_run(sign=None, length=3.0, entry_distance=None)
     assert min(row[1] for row in log if row[0] > 0.5) > 0.3
     # (자) 출발 위치에서 표지판이 이미 보임 + 흰 선 1.5 m: 선 전에는 기본 속도, 선부터 서행 (11/16 main_1116_1605·1614)
-    log, driver = slow_run(sign=(0.0, 2.0), line=1.5, length=3.0)
+    # 거리 진입(entry_distance, 11/18부터 1.2 m)은 선보다 먼저 걸리므로 이 경우에서는 끔 → 선 기준 진입만 확인
+    log, driver = slow_run(sign=(0.0, 2.0), line=1.5, length=3.0, entry_distance=None)
     assert speed_at(log, 1.0) > 0.3 and speed_at(log, 1.2) > 0.3 and speed_at(log, 1.7) == z['speed']
     # (차) 표지판 확정이 선보다 늦음: 확정 즉시 서행
     log, driver = slow_run(sign=(1.2, 2.0), line=0.9, length=3.0, entry_distance=None)

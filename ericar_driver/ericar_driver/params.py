@@ -3,9 +3,16 @@
 
 ANSWER_CONFIG = {
     'rate_hz': 20.0, 'debug_rate_hz': 5.0, 'sensor_timeout': 0.7, 'odometry_timeout': 0.7,
-    'base_speed': 0.4, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
-    'corner_speed': 0.2,   # 코너 속도 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
-    'corner_slow_curvature': [2.0, 3.5],   # 선 곡률(1/m) 이 구간에서 base_speed → corner_speed 보간 (lane_driving)
+    # 11/18 유경: base_speed 0.4 -> 0.6 (랩타임). 감속 계열(slow_speed·minimum_curve_speed·zigzag·slow_zone)은 그대로
+    # 규정 권고는 0.3~0.4라 육안 판정 미션(서행)에서 기본 속도가 빨라 보일 수 있음 -> 팀장 확인 필요
+    'base_speed': 0.6, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
+    # 코너 속도 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
+    # 11/18 유경: 0.2 -> 0.25 (0.4 접촉과 사이, 차로 폭 0.77 m에 여유 남김). 0.3 이상은 실차 확인 전까지 금지
+    'corner_speed': 0.25,
+    # 선 곡률(1/m) 이 구간에서 base_speed → corner_speed 보간 (lane_driving)
+    # 11/18 유경: [2.0, 3.5] -> [1.6, 3.0]. base_speed가 0.6이면 같은 곡률에서 보간 중 속도가 전보다 높고
+    # 줄여야 하는 폭도 커져 코너 진입이 늦음 -> 감속 시작을 약간 앞으로 (곡률 1.6 ≈ 코너 약 0.7 m 전)
+    'corner_slow_curvature': [1.6, 3.0],
     # 우회전 코너 유지: 코너 안에서는 카메라 사각지대(앞바퀴 앞 약 0.4 m 이내)로 선을 놓치고 남은 한 선 좌우 오판 (11/9 white_1109_lap)
     # → 코너 감지 후 오른쪽 조향 시작하면 고정 조향으로 odom 회전각 angle(°)까지 유지. 조향 0.31 = atan(축간거리 0.2 / 코너 중심 반지름 0.62)
     # 끝: 회전각 도달 또는 최대 거리 (두 선 조기 종료는 11/9 제거, lane_driving.corner_hold 참고)
@@ -48,6 +55,11 @@ ANSWER_CONFIG = {
     # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
                  'hold_distance': 3.0, 'off': [], 'restart_tolerance': 40.0,
+                 # 11/18 혁준 (track_test_1118_01, 실차 전): 재출발 때 이웃 구간으로 바꾸는 건 방향 오차가 이 값(°) 안일 때만. 40이면 예전과 같음
+                 'restart_switch_tolerance': 20.0,
+                 # 자동 상태로 차를 들어 돌린 회전은 구간 전환에서 뺌 (section.update). 회전 속도가 속도 × carry_curvature(1/m, 최대 조향
+                 # 곡률 약 2.23) × carry_rate_gain + carry_rate_offset(°/s)을 넘을 때. 0.4 m/s 주행 최대 약 51°/s, 기준 약 94°/s. 끄기: gain None
+                 'carry_rate_gain': 1.5, 'carry_curvature': 2.3, 'carry_rate_offset': 15.0,
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
                  'cone_early_turn': 20.0,
                  # S2에서 라바콘 모드가 실제로 시작되면 회전 기준(65°)을 기다리지 않고 S3로 전환 (11/16). 끄기 False
@@ -70,8 +82,11 @@ ANSWER_CONFIG = {
     # tilt_threshold(°)·tilt_decay(s): 자이로 x·y 누설 적분 기울기가 문턱 넘으면 방지턱. arm_distance(m): 감속 직후 숙임 무시
     # release_distance: 첫 감지 뒤 해제까지 거리(m). 뒷바퀴 기준 = 축거 0.2 + 턱 길이 + 여유
     # hold_distance: 첫 감지 뒤 조향 고정 거리(m, 앞·뒷바퀴 통과). stuck_*: 턱에서 멈추면 boost_speeds를 단계로 올림, boost_distance 구르면 복귀
+    # entry_distance 11/18 경기장: 1.5 → 1.2. 방지턱 삼각 표지판이 pedestrian으로 읽혀 표지판 확정이 없고 거리 조건으로만 시작
+    #   → 0.39 m/s에서 흰 선(출발 뒤 1.64~1.71 m) 6~16 cm 전에야 감속 시작 (17·20번). 1.2면 선 약 0.45 m 전
     # entry_at_line: 표지판 확정만으로 시작하지 않고 흰 가로선이 앞축 entry_line_distance(m) 안에 올 때 시작 (11/16, 선은 출발 뒤 약 1.47 m)
-    'slow_zone': {'speed': 0.15, 'entry_at_line': True, 'entry_line_distance': 0.1, 'entry_distance': 1.5, 'exit_distance': None, 'max_distance': 4.0,
+    # 11/18 혁준 (사용자 지시): speed 0.15 → 0.18. 04번 서행 구간 2.33 m에 15.4 s, 규정 상한 0.2까지 여유 0.02
+    'slow_zone': {'speed': 0.18, 'entry_at_line': True, 'entry_line_distance': 0.1, 'entry_distance': 1.2, 'exit_distance': None, 'max_distance': 4.0,
                   'tilt_threshold': 2.0, 'tilt_decay': 0.5, 'arm_distance': 0.15, 'release_distance': 0.5,
                   'hold_distance': 0.35, 'stuck_speed': 0.03, 'stuck_seconds': 0.7,
                   'boost_speeds': [0.2, 0.3], 'boost_distance': 0.1},
@@ -85,11 +100,19 @@ ANSWER_CONFIG = {
     'detector': {
         # device 0 = Jetson GPU. 11/14 실측: CPU 추론은 주행 노드 CPU 390 %·영상 지연 0.16 s, GPU는 65 %·0.02 s
         # GPU 없는 PC에서 모델을 직접 돌릴 때만 'cpu'로 바꿈
-        'enabled': True, 'confidence': 0.45, 'image_size': 320, 'device': 0, 'rate_hz': 5.0,
+        # image_size 320 → 640, gamma 0.6 (11/18 경기장 어두운 조명, 17·19·20번 사진 재추론): 빨강 신호등 1 → 13프레임(17), 0 → 9(20),
+        #   보행자 첫 검출 61.6 → 57.3 s, 갈림길 화살표 오독 10 → 5. 차 GPU 추론 시간은 320·640 모두 약 33 ms (실측)
+        #   gamma: YOLO 입력에만 적용하는 밝기 보정(1.0 = 없음, 작을수록 밝게). 320에서 감마만 쓰면 parking·pedestrian이 줄어듦 → 640과 함께
+        #   차선·램프 색 판정은 원본 영상 그대로. 되돌리기: image_size 320, gamma 1.0
+        'enabled': True, 'confidence': 0.45, 'image_size': 640, 'gamma': 0.6, 'device': 0, 'rate_hz': 5.0,
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
         'confirm_frames_by_class': {'left': 3, 'right': 3, 'traffic_red': 1, 'traffic_yellow': 1},
+        # arrow_vote (11/18 소민, 녹화 재현만·실차 전): 화살표는 위 연속 3에 더해 '최근 window 프레임 중 count 이상 +
+        # 반대 opposite_max 이하 + 이번 프레임도 같은 화살표'여도 확정 (driver.arrow_vote). 끄기: enabled False
+        # 11/18 녹화 4개: 19는 1.8 s 앞당겨짐, 05·17·20은 그대로, 틀린 확정 0. 5중 3은 20을 right로 잘못 확정해서 안 씀
+        'arrow_vote': {'enabled': True, 'window': 6, 'count': 4, 'opposite_max': 1},
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
             'parking': 0.002, 'pedestrian': 0.004, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
@@ -102,6 +125,10 @@ ANSWER_CONFIG = {
         # 신호등 박스 안 켜진 램프 위치로 색 재확인 (traffic_lamp.py, 11/14). 밝기·채도 하한, 칸 화소 비율 하한, 둘째 칸 대비 배수
         # lamp_min_area: 이보다 작은 박스는 판별 안 함 (11/14 lap5: 먼 배경의 빨간 상자 0.003을 녹색으로 판정)
         'lamp_check': True, 'lamp_min_area': 0.005, 'lamp_value_min': 180, 'lamp_saturation_min': 60, 'lamp_min_fraction': 0.002, 'lamp_ratio': 3.0,
+        # 낮은 신뢰도 신호등 박스 (11/18 혁준, 사용자 지시, track_test_1118_02~05, 소민에게 공유 필요): 정지선 앞 초록 신뢰도가
+        # confidence 근처라 절반쯤 탈락 → 04번 첫 초록 뒤 20.6 s 출발(15초 규정 초과). 신뢰도 lamp_low_confidence 이상·면적
+        # lamp_low_area 이상인 신호등 박스는 램프 위치 판정이 확실하면 그 색으로 인정 (traffic_lamp.box_name). 끄기: lamp_low_confidence None
+        'lamp_low_confidence': 0.05, 'lamp_low_area': 0.02,
         'allow_truncated_classes': ['traffic_red', 'traffic_yellow', 'traffic_green'],
         'shutdown_timeout': 5.0,
         # 시작 직후 첫 검출을 기다리는 최대 시간(s). 그 뒤로는 검출이 끊겨도(timeout 초과·예외) 표지판 미션만 끄고 주행 계속
@@ -120,7 +147,7 @@ ANSWER_CONFIG = {
         # 정지선·횡단보도 = 흰색. 정지선 검출에만 사용 (차선은 노랑만). 예전 범위로 시작, 노출 300 기준 실측 필요
         # 11/9 통합 시험: V 165 → 110. 3차선 점선 V 135~150 (녹화 white_1109_lap 138~152 s), 정지선 247 s도 V 165에서 누락
         # 부작용: 코너 바깥 현수막 흰 테두리를 정지선으로 잡음 (83·184 s). 소민 확인 필요
-        'white_min': [0, 0, 110], 'white_max': [179, 85, 255],
+        'white_min': [0, 0, 70], 'white_max': [179, 85, 255],
         # 3차선 흰 점선: 보이면 항상 차선 후보로 추가 (lane_vision.white_dashes)
         # 흰 조각 중 길이(m) 이상, 폭(m) 이하, 진행 방향 기준 기울기(도) 이하만 사용. 점선·횡단보도 실측 전 임시값
         'white_dash_min_length': 0.08, 'white_dash_max_width': 0.05, 'white_dash_max_tilt': 40,
@@ -163,6 +190,14 @@ ANSWER_CONFIG = {
         'stop_min_width': 0.32, 'stop_max_thickness': 0.13,   # 정지선 최소 길이·최대 두께(m)
         # 정지선 탐색 전 흰 마스크를 차선 방향으로 펴는 세로 밀기 기울기(행/px) 하한·상한. stop_level_max 0이면 끔 (11/16, lane_vision.stop_level)
         'stop_level_min': 0.03, 'stop_level_max': 0.6,
+        # 11/18 경기장 (redecide_1118_17·19·20 재생): 바닥판 이음매가 흰 선을 끊어 신호등 앞 정지선 0프레임
+        # stop_seam_close(m): 정지선 탐색 마스크만 가로로 닫아 틈 메움. 0.035(7 px)에서 S4 횡단보도 선 0 → 6~12프레임,
+        #   0.055(11 px)는 S0·S1의 ◇·천천히 글씨를 횡단보도 선으로 잡음 → 올리지 말 것. 0이면 끔
+        # stop_white_min: 정지선·횡단보도 전용 흰색 하한. 경기장 S4 흰 페인트 V 100~135 → 110에서는 블록 판정 탈락. None이면 white_min
+        'stop_seam_close': 0.035, 'stop_white_min': [0, 0, 85],
+        # stop_white_ratio (11/18 오후): 정지선 흰색 하한 = 도로 위 노란 선 밝기(V 가운데값) × 이 값, stop_white_min V ~ white_min V 사이로 제한.
+        #   어두운 경기장(노란 선 V 90~105) → 85~95, 밝은 연습장·경기장 S1(V 165 이상) → 110(예전 값). None이면 stop_white_min 고정
+        'stop_white_ratio': 0.9, 'stop_white_min_pixels': 300,
         'abnormal_fit_residual': 0.035, 'solid_row_fraction': 0.85,
     },
     'pid': {
@@ -233,20 +268,28 @@ ANSWER_CONFIG = {
         # 11/12 실차 red_check (노출 300, 콘 약 1 m): 콘 H 0~9·170~179, S 약 190, V 약 130 → 색 범위 맞음.
         # 노란 선(H 20~39, V 40 전후)·흰 선·검은 바닥은 판정 0. 카메라가 낮아 콘 몸통은 대부분 화면 가운데보다 위
         # (아래 50%만 볼 때 0.040, 위쪽만 0.153) → 판정 영역 아래 75%로 넓힘. 먼 콘(약 2 m)은 아래 50%에 안 들어옴
-        'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 60,
+        'cone_red_h_low': 10, 'cone_red_h_high': 165, 'cone_red_s_min': 100, 'cone_red_v_min': 0,   # 11/18 20시 유경 speed c68f28b: 30 → 0 (사용자 지시, 시험 없이 반영)
+        # cone_red_v_min 60 → 35 (11/18 경기장 redecide_1118_17·19·20, 유경에게 공유 필요): 어두운 조명에서 콘 몸통 밝기 V 중앙 45
+        #   → 콘이 화면을 채워도 붉은 비율 0.00~0.14, 진입 기준 미달로 3회 모두 0.37~0.40 m/s로 콘 0.11 m 앞까지 감.
+        #   35면 비율 0.2~0.28(다른 구간 0.00~0.01), 라이다 포함 재생에서 3번 코너가 끝나는 시점(콘 0.41~0.50 m 앞)에 켜짐
+        #   → 30으로 확정 (유경 I_See_Parking acba2fd, 11/18): 진입 시각은 35와 같고 접근 신호가 더 큼(19번 최대 0.31 vs 0.26),
+        #   라바콘 구간 밖 최대는 0.056~0.060으로 비슷. 조명이 바뀌면 tools/red_check.py로 재측정 (유경)
         # 11/12 유경: 판정 영역 화면 전체로 (콘 바로 앞 위치는 사진 확인 못 함). 마지막으로 보인 뒤 cone_red_memory(m)까지 유지
         'cone_red_rows': 1.0, 'cone_red_ratio': 0.03, 'cone_red_memory': 0.5,
         # 11/13 실차 사진 18장(red_1113_000127, 코너 앞 → 콘 통로): 관중석 붉은 의자만 보여도 전체 0.010~0.015
         # → 기준 0.002에서 0.03으로 올림 (콘 1개가 화면 끝에 보일 때 0.07).
         # 진입은 화면 전체 붉은 비율 cone_red_enter_ratio 이상일 때만 (11/13 유경 결정). 같은 사진: 의자 0.01, 콘 1개 0.07,
         # 코너 중 콘 줄 0.17~0.27, 통로 정면 0.30, 통로 안 0.39~0.45. 0.27(회전 중 한쪽 줄)은 진입함
-        'cone_red_enter_ratio': 0.2,
+        'cone_red_enter_ratio': 0.15,   # 11/18: 0.2 → 0.15. V 35에서도 진입 시점 비율이 0.22~0.27이라 여유 확보 (콘 1개 0.07보다는 위)
         'cone_red_side_width': 0.2, 'cone_red_side_top': 0.4,   # 양쪽 끝 띠 비율: 확인용 출력만 (판단에 안 씀)
         'cone_red_gate_max': 1.6, 'cone_red_half_width': 0.9,
         # 진입 시점: 라바콘 모드로 바꾸는 라이다 앞 방향 거리(m). 붉은색이 보이면 콘 후보 하나, 아니면 문 중점 기준.
         # 11/12 실차(유경): 1.2 m에서 켜면 코너 유지(고정 조향) 중에 바로 꺼져 차선 이탈 → 콘 바로 앞까지 차선 주행·코너 유지.
         # 같은 날 문 중점 직선거리 0.3 m는 안 켜짐 (차로 중앙과 문 중점이 옆으로 어긋남) → 붉은색 + 콘 앞 방향 거리로 변경
         'cone_enter_distance': 0.3,
+        # 라바콘 접근 서행 (11/18): S3에 들어와 라바콘이 한 번도 안 켜진 동안 구간 거리 cone_approach_distance(m)까지 cone_approach_speed.
+        #   색 판정이 또 빗나가도 0.39 m/s로 콘에 닿지 않게 하는 예비 장치 (라이다 단독 진입은 콘 0.3 m 앞에서야 켜짐). None이면 끔
+        'cone_approach_speed': 0.2, 'cone_approach_distance': 2.0,
         # 11/15 인계 조건 (cones.start_gate): 코너 유지 중에는 차 진행 폭(좌우 cone_hold_half_width m) 안 콘이 바로 앞일 때만,
         # 유지가 아니면 문을 정면으로 볼 때(문 중점 앞 cone_face_distance·옆 cone_face_lateral 안, 방향 cone_face_angle rad 안) 미리 인계
         'cone_hold_half_width': 0.2, 'cone_face_distance': 1.0, 'cone_face_lateral': 0.2, 'cone_face_angle': 0.35,
@@ -273,7 +316,20 @@ ANSWER_CONFIG = {
         # traffic_watch_speed로 감속. 정지선 없이 빨강 박스가 traffic_stop_area 이상이면 그 자리 예비 정지
         'traffic_watch_area': 0.0008, 'traffic_watch_hold': 1.5, 'traffic_watch_speed': 0.18, 'traffic_stop_area': 0.04,
         # 신호등은 횡단보도 바로 앞 선(너머에 블록 3개 이상)에만 정지. 앞축 기준 0.088 m = 앞 범퍼(앞축 +0.058) 3 cm 앞
-        'traffic_crosswalk_only': True, 'traffic_stop_offset': -0.133,   # 11/15: −0.045에서 stop_offset과 같은 폭(−0.088) 이동, 실차 재확인 필요
+        # traffic_stop_offset 11/15: −0.045 → −0.133 (stop_offset과 같은 폭 이동, 연습장에서 먼 측정이 짧게 나오던 것 보정)
+        # 11/18 경기장 redecide_1118_19: 먼 측정(0.9 m)도 정확 → 보정 −0.133이 그대로 초과가 되어 앞축이 선 0.12~0.14 m 지나 정지,
+        #   신호등이 화면 오른쪽 끝에 걸려 녹색 미검출 9.4 s 대기. → 0.0 (모자라게 서는 쪽이 신호등이 화면에 남음). 실차 재확인 필요
+        'traffic_crosswalk_only': True, 'traffic_stop_offset': 0.0,
+        # 신호등 구간 서행 (11/18 경기장): 신호등 앞에 ◇·천천히·원형 서행 표지판이 있음. 예전에는 S4 0.75 m 뒤 0.38 m/s로 가속
+        #   → 빨강을 면적 0.158(코앞)에서야 확정·정지선 측정 전에 통과 (17·20번). S4에서 신호등을 끝내기 전이면
+        #   구간 거리 traffic_zone_distance(m)까지 traffic_zone_speed로 제한 (차선 주행·정지 접근 모두). None이면 끔
+        #   거리 상한: 신호등을 끝내 못 봐도 횡단보도(정지선 약 1.9 m, 뒷선 약 2.4 m)를 지나면 풀림
+        'traffic_zone_speed': 0.18, 'traffic_zone_distance': 3.0,
+        # 신호등 정지선 거리 조건 (11/18 오후, redecide_1118_26·28): S4 순서는 흰 선 → ◇ → 천천히 → 정지선 → 횡단보도.
+        #   첫 선(S4 약 0.80~0.84 m)이나 '천천히' 글씨(약 1.35~1.4 m)가 횡단보도 선으로 잘못 판정돼도 서지 않게,
+        #   S4 구간 거리 기준 위치가 traffic_line_min_distance(m)보다 앞인 선에는 신호등 정지를 하지 않음. 정지선은 약 1.70~1.80 m (앞축)
+        #   한 바퀴 주행에만 적용 (신호등·주차 지점 재출발은 구간 거리가 트랙 기준이 아님). None이면 끔
+        'traffic_line_min_distance': 1.55,
         # 11/14: 보행자 stop_offset 0.015 → 0.088 (lap3 보행자 선 0.04 m 앞을 선 밟음으로 봄). 11/15 앞바퀴 기준 확정으로 0.0
         # 신호등 박스 선별 (driver.traffic_filter): 따라가던 박스와 IoU traffic_box_iou 이상 또는 면적 traffic_main_ratio배 이상만 사용
         'traffic_main_ratio': 0.5, 'traffic_box_iou': 0.2,
@@ -357,21 +413,64 @@ ANSWER_CONFIG = {
         # 시작선이 template_start_fix_distance(m) 안에 들어와 template_start_frames_min번 넘게 보였을 때 틀 확정
         # 0.65: 카메라 바닥 거리 추정이 1 m 밖에서는 10~20% 짧게 나옴(라이다 대조, 1.1 m에서 틀이 0.12~0.24 m 앞당겨짐) → 가까울 때만
         'template_anchor_from_start': True, 'template_start_to_row': .45,
+        # 첫 칸(0번)을 고르면 조향 목표를 다음 칸 쪽으로 이만큼(m) 옮김 (parking._observe_template, 11/18 혁준, 정윤에게 공유 필요)
+        #   표지판 받침이 첫 칸 시작 모서리에 있어 회전 안쪽 옆면이 스침. 22번 재생: +0.05 여유 0.02(막힘), +0.08 여유 0.05(회전 시작), +0.11 여유 0.27
+        #   0.08이면 차 옆면 ~ 0·1번 칸 경계선 약 0.06 m (칸 폭 0.50, 차 폭 0.225). 더 올리면 선을 밟음. 0이면 끔. 실차 미확인
+        # 11/18 17시: 정윤 757b563 병합으로 turn_radius 0.615 → 0.55(회전 시작이 6.5 cm 늦어짐) → 0.08 → 0.02로 줄임
+        # (첫 칸 회전 시작 지점은 redecide_1118_30 성공 때와 0.5 cm 차이로 유지)
+        'template_first_slot_shift': .02,
         'template_start_fix_distance': .65, 'template_start_frames_min': 3,
         'template_row_lateral': -.26, 'template_row_lateral_window': .12, 'template_row_line_far': 1.6,
         'template_row_line_band': .08, 'template_row_fit_slope': False, 'template_row_fit_length': .30,
         'template_transition_tolerance': .24,
+        # 11/18: 반사된 노란 차선(채도 48~)을 흰색에서 제외. 전환점은 차로 가로 시작선 뒤
+        # start_to_lot_min~max(m)에서만 인정 (도면 0.50, 사진 0.47). 시작선은 |y|≤start_max_lateral
+        'template_white_exclude_min': [10,30,60], 'template_white_exclude_max': [45,255,255],
+        'template_start_max_lateral': .35, 'template_start_to_lot_min': .25, 'template_start_to_lot_max': .90,
+        # 전환점 좌우 위치(오른쪽 차로 경계)·차로 대비 각도(rad) 범위, 시작선 추적 관측 허용 차이(m)
+        'template_anchor_lateral': [-.50,-.12], 'template_anchor_max_angle': .26, 'template_start_track_gate': .30,
         # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
         'template_selected_occupied_frames': 2,
         # 카메라 템플릿을 LiDAR 군집에 맞춰 작은 평행이동만 허용. 칸 크기·간격·방향은 변경하지 않는다.
-        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .15,
+        # 11/18 redecide_1118_08: 진행 방향 오차 약 0.21 m로 상한 0.15에 걸림. 큰 오차는 가까운 카메라 재보정이 담당.
+        # 상한은 칸 간격 절반(0.257) 미만 필수: 0.30이면 옆면 하나만 보일 때 한 칸 밀린 해가 같은 점수 (재생 확인)
+        # 깊이 방향은 물체 차로 쪽 끝이 입구선 밖일 때만 이동(한쪽 벌점). 옆면 u_min = -LIMO 폭/2 가정
+        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .20,
+        # 11/18 track_test_1118_04·05: 둘째 줄 물체를 담으려 칸을 0.14 m 깊게 밀어 가운데 칸 OCCUPIED → 칸 안쪽 이동은
+        # max_deeper_offset 0.05까지만 (차로 쪽은 입구 밖으로 나온 물체용으로 normal_offset 0.15 유지).
+        # 차 쪽 면이 칸 입구에서 max_face_depth(m)보다 깊은 군집(둘째 줄)은 정렬 점수에서 제외. 빈 칸 판정은 앞쪽 occupancy_depth(m)만
+        'template_fusion_max_normal_offset': .15, 'template_fusion_max_deeper_offset': .05,
+        'template_fusion_max_face_depth': .40,
+        'template_occupancy_depth': .50, 'template_fusion_obstacle_half_width': .1125,
+        'template_fusion_face_weight': 4.,
         'template_fusion_step': .03, 'template_fusion_smoothing': .35,
         'template_fusion_roi_padding': .25, 'template_fusion_cluster_distance': .12,
-        'template_fusion_cluster_min_points': 3, 'template_fusion_offset_penalty': .2,
+        'template_fusion_cluster_min_points': 3, 'template_fusion_offset_penalty': 2.,
         'template_fusion_obstacle_front_depth': .08,
+        # 도면 3칸 x 6110~7650 = 1.54 m → 칸 중심 간격 0.513 (폭 0.50 + 선 두께)
+        'template_slot_pitch': .513,
+        # 래치 뒤 가까운(0.70~0.95 m) 황색→흰색 전환점으로 진행 방향만 재보정. 1회 반영 비율 gain. 11/18 재생: 0.9 m 밖은 LiDAR 대비 0.1~0.3 m 짧음
+        'template_refine_enabled': True, 'template_refine_range': [.70,.95],
+        'template_refine_gain': .5, 'template_refine_max_jump': .35, 'template_refine_max_normal': .08,
+        'template_refine_consistency': .06,
         'turn_path_check_distance': .90, 'turn_path_margin': .03,
+        # 회전 직전 원호가 막히면 정지 후 새 스캔 block_scans회·block_seconds초 동안 계속 막힐 때만 칸 포기
+        'turn_path_block_scans': 4, 'turn_path_block_seconds': 1.0, 'turn_path_self_margin': .01,
+        # 11/18 redecide_1118_33: 표지판 인식 뒤 시작선을 보자마자 0.12 m/s 서행 → 회전까지 2.4 m·22 s.
+        # 시작선 뒤에도 차선 주행 유지(YOLO 계속), 상한 template_cruise_max_speed. 서행 전환은
+        # 표지판 화면 소실 / 칸 회전점이 감속 거리 안 / 시작선 뒤 armed_distance(m) 중 먼저. 서행 속도 search_speed
+        # 0.30 근거: 표지판은 첫 칸 회전점 약 0.4 m 앞에서 화면을 벗어남, 0.4 m/s 감속 거리 0.49 m·0.30은 0.35 m
+        'template_cruise_max_speed': .30, 'template_slow_on_sign_passed': True,
+        'template_cruise_armed_distance': 2.5, 'search_speed': .18,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
+        # 표지판 없이 주차 단계 시작 (11/18 경기장 redecide_1118_18·19·20, 정윤에게 공유 필요): P 표지판을 right로 읽고 parking은
+        #   화면 끝 잘린 박스로만 나와 확정이 안 됨 → 18·19번은 주차 단계 미시작. 표지판이 첫 칸 모서리라 표지판으로 시작하면
+        #   시작선이 이미 뒤(20번 WAITING_FOR_START_LINE). 시작선 기준 틀은 주차 단계가 시작선 전에 켜져 있어야 함.
+        #   한 바퀴 주행: S4 구간 거리 auto_start_distance(m)부터 (횡단보도 뒷선 약 2.4 m, 시작선 약 4.2 m, 앞축 기준)
+        #   주차 지점 재출발(start_stage parking): 출발 뒤 auto_start_placed(m). 신호등 지점 재출발: 신호등을 끝낸 뒤 auto_start_after_traffic(m)
+        #   표지판으로 시작하는 기존 조건은 그대로 둠. auto_start False면 예전과 같음
+        'auto_start': True, 'auto_start_distance': 3.0, 'auto_start_placed': 0.2, 'auto_start_after_traffic': 0.9,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
         # 최초 표지판부터 탐색. 목표 감속 거리에서 서행, 표지판 통과만으로 감속 제외
         'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
@@ -404,7 +503,9 @@ ANSWER_CONFIG = {
         # 11/14: 회전 90° = 반경 0.615 × π/2 = 0.97 m·8 s → 상한 0.85 m·8 s로는 79°에서 실패 종료 (lap4). 1.2 m·13 s로
         'search_timeout': 45., 'search_distance_limit': 5., 'turn_timeout': 13., 'turn_distance_limit': 1.2,
         # 실측 회전 반경(m, 조향 −0.35, lap4 IMU 69°·0.756 m). 회전 시작 시점(turn lead) 계산에 사용. None이면 축거/tan(조향)
-        'turn_radius': .615,
+        # 11/18 redecide_1118_23·34·35 IMU 실측 0.539~0.574 (조향 명령 -0.365). 0.615면 회전을 약 6 cm 일찍 시작해
+        # 칸 안쪽(이전 칸 장애물·표지판 받침 쪽)으로 치우침 → 가운데 칸 회전 경로 여유 0.017 m로 포기 (33)
+        'turn_radius': .55,
         # 방향 정면 정지는 보조 종료. 흰 선 소실 정지는 방향·입구 조건 없이 즉시 우선 적용
         'turn_done_heading': .05,
         'sensor_timeout': .7, 'motion_timeout': 4., 'body_margin': .015,
@@ -418,8 +519,15 @@ ANSWER_CONFIG = {
         'white_min_length_fraction': .12, 'white_min_vertical_fraction': .12,
         # 장애물 모서리를 흰 선으로 오인해 38도에서 멈춘 11/18 bag 대응.
         'white_loss_frames': 1, 'white_loss_min_angle': 1.134, 'white_acquire_timeout': 1.5,
+        # 11/18 redecide_1118_35: 최소 회전각 전에 사라진 선으로는 정지하지 않음 (셋째 칸 65°에서 덜 들어간 채 정지)
+        'white_loss_requires_seen_after_arm': True,
+        # 템플릿 모드 흰 선 소실 정지 최소 회전각 80° (track_test_1118_02: 71°에서 정지, 방향 정지는 84~88°)
+        'template_white_loss_min_angle': 1.396,
     },
-    'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
+    # 카메라 화면 한 장으로 갈 수 있는 거리(m) 상한: 속도 <= max_image_travel / 화면 나이 (loop.py)
+    # 11/18 유경: 0.04 -> 0.06. 화면 나이가 약 0.1 s라 0.04에서는 base_speed를 올려도 0.4 m/s에서 잘림
+    # 부작용: 한 장이 오래된 동안 최대 6 cm까지 눈 감고 가므로 차선 반응이 그만큼 늦음 (차선 담당 공유 필요)
+    'max_image_travel': 0.06, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         # 11/15 소민: trigger_distance 1.15 → 1.4 (가까워진 뒤 시작하면 조향 공간 없음 no_safe_steering, 다음 장애물 늦게 봄)
@@ -485,6 +593,12 @@ ANSWER_CONFIG = {
         # 11/17 05:50 정리: 실차 근거가 없는 것은 끔 (오늘 추가한 규칙끼리 충돌 사례 5건, 사용자 결정). 코드는 유지, 현장에서 하나씩 비교
         #   끔: request_reverse·request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
         #   켬: request_extend(실차 2회 성공)·short_arc_margin 0.10·entry_align·heading_bias_min_distance·fork_sign_bearing·화살표 최소 면적
+        # 11/18 오후 request_reverse 켬 (사용자 지시, redecide_1118_20): 왼쪽 끝 차로에서 오른쪽으로 피하기 시작한 직후(옆 이동 0.05 m)
+        #   left 확정 → 이동을 끝까지 마친 뒤(S2 4.97 m)에야 돌아오려다 late_request_blocked → B로 진입.
+        #   녹화 재생: 켜면 확정 1.2 s 뒤(옆 이동 0.13 m, 경로 여유 0.04) 목적 차로로 되돌림. 합성 27건 켬·끔 모두 27/27. 실차 미확인
+        # 11/18 저녁 다시 끔 (사용자 지시, redecide_1118_33): 반대쪽 45°를 본 자세에서 되돌리면 방향만 펴고 끝남(arc_steering 복귀 판정이
+        #   차 방향 부호를 안 봄) → 차로 번호만 바뀐 채 가운데 차로에 남아 기둥을 반대쪽으로 피함, right인데 A 진입.
+        #   같은 상황(redecide_1118_19·20)은 소민 줄이기(request_shrink, 아래)로 대신함. 줄이기는 되돌리기와 같이 켜면 되돌리기로 넘어감
         'request_reverse': False, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
         # safe_flip_block: 이동 시작 직후(safe_flip_travel m 안) 안전 조향이 목표 반대쪽이고 차이가 safe_flip_max(rad) 넘으면 따르지 않고 정지 (11/17)
         'safe_flip_block': False, 'safe_flip_max': 0.4, 'safe_flip_travel': 0.15, 'safe_flip_offset': 0.08,
@@ -537,6 +651,17 @@ ANSWER_CONFIG = {
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
         'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        # redecide_tail (11/18, track_test_1118_01~05): cross_two arrival must leave this much free distance ahead (m).
+        # 0.2 -> 0.6: all five runs arrived 0.37 m behind an obstacle, then a 0.10 m/s short S (11~16 s).
+        # synthetic 100 layouts: 0.2/0.6/1.0 identical (67/100). real car unverified. revert: remove key (falls back to avoid_plan_tail)
+        'redecide_tail': 0.6,
+        # 두 칸 → 한 칸 줄이기 (11/18 소민, lane_change.try_shrink, 녹화 재현·합성 시험만·실차 전). 끄기: request_shrink False
+        # 두 칸 이동 중 표지판이 확정됐는데 첫째(가운데) 차로가 목적 차로에 더 가까우면, 복귀 원호를 일찍 시작해 첫째 차로에서 끝냄
+        # 조건: 복귀 원호 전 + 첫째 차로 중앙까지 남은 횡거리 > 되돌리는 원호 횡거리 + shrink_slack(m) + 첫째 차로 쪽 경로가 빔
+        # redecide_1118_20: 확정 때 횡이동 0.05 m (45°면 남은 횡거리 약 0.26 m까지 줄일 수 있음) → 줄였으면 19처럼 2 → 1 → 2
+        'request_shrink': True, 'shrink_slack': 0.0,
+        # redecide_fork_guard (11/18 소민, run_1118_1627 대응): 표지판 확정 뒤 재판단이 목적 차로에서 더 멀어지는 쪽으로 두 칸 넓히는 것 막음
+        'redecide_fork_guard': True,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,
@@ -560,6 +685,11 @@ ANSWER_CONFIG = {
         # → 1.0. arc_margin 0.03 → 0.08: 복귀 원호를 시작한 뒤 조향이 넘어가는 동안 계산(0.09 m)보다 약 0.05 m 더 감 (실차 전)
         'steer_mode': 'arc', 'arc_angle': 36.0, 'arc_gain': 2.5, 'arc_margin': 0.08, 'arc_finish_heading': 0.05,
         'lateral_scale': 1.0,
+        # 끝 차로 안쪽 여유 (11/18 혁준, 사용자 지시, track_test_1118_01~05: 두 칸 이동이 바깥 노란 선 쪽 차로에서 끝날 때
+        # 복귀 원호 중 앞 왼쪽 모서리가 노란 선까지 계산상 0.13~0.15 m). 끝 차로로 가는 일반 회피 이동은 조향 목표를
+        # 차로 중앙에서 점선 쪽으로 이만큼(m) 당김 (lane_change.edge_inset). 표지판 요청·확정 뒤 이동은 제외. 끄기: 0
+        # 합성 시험만·실차 전. 도착 뒤에는 차선 주행이 다시 차로 중앙으로 맞춤
+        'edge_lane_inset': 0.10,   # 11/18 20시: 0.06 → 0.10 (사용자 지시, 시험 없이 반영)
         # 교통섬 노란 선 구분 (소민 11/15, lane_change.trusted_colors)
         # 표지판 확정 뒤: 출구 쪽 노란 선만 바깥선, 반대쪽 노란 선은 교통섬 (숫자 없음)
         # 표지판 전: 노란 선 가까운 끝이 yellow_near_max(m, 뒷축 앞 거리. BEV 맨 아래 0.6 m)보다 멀거나

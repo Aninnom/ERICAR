@@ -22,8 +22,10 @@ for _name in OPTIONAL:
 
 def test_defaults():
     lc = DEFAULT_CONFIG['lane_change']
-    assert not any(lc[name] for name in OPTIONAL+('backup',)), {name: lc[name] for name in OPTIONAL+('backup',)}
-    assert lc['request_extend'] and lc['entry_align'] and lc['short_arc_margin'] == 0.08
+    # request_reverse는 11/18 오후 켰다가 저녁에 다시 끔 (redecide_1118_33, params.py 설명). 대신 소민 줄이기(request_shrink) 켬
+    off = OPTIONAL+('backup',)
+    assert not any(lc[name] for name in off), {name: lc[name] for name in off}
+    assert lc['request_shrink'] and lc['request_extend'] and lc['entry_align'] and lc['short_arc_margin'] == 0.08
     area = DEFAULT_CONFIG['detector']['minimum_area_by_class']
     assert area['left'] == area['right'] == 0.003
     print('  기본값(끈 기능·켠 기능) 확인 통과')

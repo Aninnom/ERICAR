@@ -106,6 +106,7 @@ class LaneChange:
         self.hold_steering = 0.0       # 짧은 S자 중 마지막 안전 조향 (위험해 멈출 때 바퀴 고정)
         self.engaged, self.clear_since = False, None   # 앞 장애물 회피 판단 중인지, 앞이 빈 채 지난 시각 (front_clear_hold)
         self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
+        self.shrunk = False            # 지금 이동을 두 칸 → 한 칸으로 줄였는지 (try_shrink). 다시 넓히지 않음
 
     def trusted_colors(self, lane):
         """선 색에서 교통섬 노란 선을 걸러 냄 (소민 11/14 run_1114_2330: 가운데 차로에서 교통섬 노란 선을 바깥선으로 봐
@@ -288,7 +289,7 @@ class LaneChange:
         c = self.c
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
         points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction*self.span)
-        error = self.target-self.offset
+        error = self.target-self.offset-self.edge_inset()
         if self.short or c.get('steer_mode', 'arc') == 'arc':
             # 짧은 S자(앞 장애물 short_front 안)도 원호–직선–원호로, 각도만 short_arc_angle로 크게 (소민 11/16)
             desired = self.arc_steering(error)
@@ -340,6 +341,17 @@ class LaneChange:
             if since < flip:
                 speed = min(speed, c.get('short_flip_speed', speed))
         return (speed if safe else 0.0), steering
+
+    def edge_inset(self):
+        """끝 차로(0·lane_count−1)로 가는 일반 회피 이동의 조향 목표를 점선 쪽으로 edge_lane_inset(m) 당김 (부호는 이동 방향)
+        target·offset·차로 번호 계산은 차로 중앙 기준 그대로 두고 복귀 원호 시작만 앞당김 → 들어갈 때 앞 모서리가 바깥 노란 선에 덜 붙음
+        표지판 요청 이동·표지판 확정 뒤 이동은 제외 (끝 차로 안쪽 = 교통섬 쪽이라 기둥에 가까워짐)"""
+        inset = self.c.get('edge_lane_inset', 0.0)
+        if not inset or self.requested_move or self.fork_running:
+            return 0.0
+        if self.index+self.direction*self.span not in (0, self.c['lane_count']-1):
+            return 0.0
+        return math.copysign(inset, self.target)
 
     def arc_steering(self, error):
         """원호–직선–원호 (11/15): 차 방향을 도로 방향에서 arc_angle(°)까지 틀어 유지하다가, 남은 횡오차가
@@ -455,8 +467,11 @@ class LaneChange:
             self.offset -= velocity*math.sin(self.heading)*dt*self.c.get('lateral_scale', 1.0)
             self.travel += abs(velocity)*dt
             if not self.try_extend(points, fork_lanes, request_limit):
-                if not self.try_reverse(points, fork_lanes, request_limit):
-                    self.redecide(points, fork_lanes)
+                # 줄이기를 되돌리기보다 먼저 봄: 두 칸 이동 중 가운데 차로가 목적에 더 가까우면 같은 방향 그대로 한 칸에서 끝냄
+                # (되돌리기는 반대쪽을 본 자세에서 시작해 방향만 펴고 끝나는 결함이 있어 기본 끔, 11/18 redecide_1118_33)
+                if not self.try_shrink(points, fork_lanes):
+                    if not self.try_reverse(points, fork_lanes, request_limit):
+                        self.redecide(points, fork_lanes)
             self.camera_correct(lane)
             error = self.target-self.offset
             if self.c.get('steer_mode', 'arc') == 'arc':
@@ -690,6 +705,7 @@ class LaneChange:
         self.back = False
         self.move_clock, self.hold_steering = self.clock, 0.0
         self.engaged, self.clear_since = False, None
+        self.shrunk = False
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.span, self.move_angle = 1, None
@@ -748,6 +764,51 @@ class LaneChange:
         self.plan = self.debug['plan'] = info
         return True
 
+    def try_shrink(self, points, fork_lanes):
+        """진행 중인 두 칸 이동을 한 칸으로 줄임 (11/18 소민, redecide_1118_20 대응, 녹화 재현·합성 시험만·실차 전)
+        11/18 redecide_1118_20 99.4~119.9 s: 왼쪽 끝 차로(2)에서 앞 장애물을 피하려고 재판단(redecide)으로 두 칸(→0) 이동 시작,
+        2.4 s 뒤(101.8 s, 횡이동 0.05 m) left 확정(목적 2). 넓히기(try_extend)만 있고 줄이기는 없어 오른쪽 끝(0)까지 감
+        → 왼쪽 요청이 늦은 지점·교통섬 노란선으로 거절 → 목적이 0으로 바뀌어 반대 길로 나감
+        같은 상황의 redecide_1118_19는 한 칸(→1)으로 끝나 1 → 2로 돌아가 맞는 길로 나감
+        조건: 두 칸 이동 중(span 2), 복귀 원호 전, 가운데(첫째) 차로가 목적 차로에 더 가까움(fork_lanes 기준),
+        지금 방향을 되돌리는 원호가 차지할 횡거리(arc_steering의 need) + shrink_slack(m)보다 첫째 차로 중앙까지 남은 횡거리가 큼,
+        지금 자세에서 첫째 차로까지 그린 경로의 여유가 avoid_plan_margin 이상. 줄인 뒤에는 이 이동을 다시 넓히지 않음(shrunk)
+        fork_lanes: 이동 시작 차로에서 목적 차로까지 칸 수(+ 왼쪽). 방향 확정 전·입구 뒤에는 None → 아무것도 안 함"""
+        c = self.c
+        if not c.get('request_shrink', False) or fork_lanes is None:
+            return False
+        if self.span != 2 or self.back or self.shrunk:
+            return False
+        lanes = int(fork_lanes)
+        if abs(lanes-self.direction) >= abs(lanes-2*self.direction):
+            return False                                      # 둘째 차로가 목적 차로이거나 더 가까움: 그대로 감
+        target = self.target-self.direction*c['lane_width']
+        remaining = target-self.offset
+        radius = self.robot['wheelbase']/math.tan(self.robot['max_steering'])
+        margin = c.get('short_arc_margin', c.get('arc_margin', .03)) if self.short else c.get('arc_margin', .03)
+        need = radius*(1-math.cos(abs(self.heading)))+margin
+        info = dict(offset=round(float(self.offset), 3), remaining=round(float(remaining), 3), need=round(float(need), 3))
+        if self.direction*remaining < need+c.get('shrink_slack', 0.0):
+            info['why'] = 'late'                              # 이미 첫째 차로 중앙에 너무 가까움: 줄이면 지나침
+            self.debug['shrink_blocked'] = info
+            return False
+        angle = self.move_angle
+        if angle is None:
+            angle = c.get('short_arc_angle', 45.0) if self.short else c.get('arc_angle', 30.0)
+        walls = self.walls
+        kept = self.drop_walls(points, self.heading, remaining, self.index+self.direction)
+        self.walls = walls
+        forward, left = to_road(kept, self.heading)
+        gap = self.path_gap(forward, left, remaining, angle, -self.heading, c.get('redecide_tail', c.get('avoid_plan_tail', .2)))
+        info['gap'] = round(min(gap, 9.9), 3)
+        if gap < c.get('avoid_plan_margin', .04):
+            info['why'] = 'path_blocked'                      # 첫째 차로 쪽 경로가 막힘: 다음 주기에 다시 봄
+            self.debug['shrink_blocked'] = info
+            return False
+        self.span, self.target, self.shrunk = 1, target, True
+        self.debug['shrink'] = info
+        return True
+
     def cross_two(self, forward, left, center, heading):
         """두 칸 직선 가로지르기 후보 (11/18, 사용자 규칙 6). 끝 차로에서 반대쪽 끝 차로까지, 지금 출발하는 경로가 비어 있을 때만
         줄 간격이 짧아 가운데 차로에 나란히 설 자리가 없어도, 비스듬히 가로지르는 직선은 장애물 모서리 사이를 지남
@@ -777,9 +838,13 @@ class LaneChange:
         넓히지 않음 (11/18 redecide_1118_06 81.3 s: left 확정 뒤 왼쪽 차로 콘을 오른쪽으로 피하던 중, 가운데 차로 0.98 m 앞
         갈림길 표지판 기둥을 장애물로 보고 오른쪽 끝 차로까지 넘어가 B로 진입). 이동을 마친 뒤 요청 이동이 목적 쪽으로 되돌림"""
         c = self.c
-        if not c.get('redecide', False) or self.requested_move or self.span != 1:
+        if not c.get('redecide', False) or self.requested_move or self.span != 1 or self.shrunk:
             return False
-        if fork_lanes is not None and abs(int(fork_lanes)-2*self.direction) > abs(int(fork_lanes)-self.direction):
+        if (c.get('redecide_fork_guard', True) and fork_lanes is not None
+                and abs(int(fork_lanes)-2*self.direction) > abs(int(fork_lanes)-self.direction)):
+            # 표지판 확정 뒤 목적 차로에서 더 멀어지는 쪽으로는 넓히지 않음 (11/18 소민, run_1118_1627 64.7 s:
+            # 오른쪽 확정·목적 0인데 차로 0 앞 장애물을 왼쪽으로 피하는 한 칸 이동을 재판단이 두 칸(→2)으로 넓혀 반대 끝까지 감.
+            # 넓힌 시점이 이미 가운데 차로 중앙 근처(횡 0.455 m)라 줄이기(try_shrink)도 늦음)
             self.debug['redecide_blocked'] = dict(reason='away_from_fork', fork_lanes=int(fork_lanes))
             return False
         far = self.index+2*self.direction
