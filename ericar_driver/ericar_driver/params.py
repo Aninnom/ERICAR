@@ -444,7 +444,12 @@ ANSWER_CONFIG = {
         # **경기장에서 시작선 ~ 주차 줄 시작(표지판) 거리를 줄자로 확인**
         # 시작선이 template_start_fix_distance(m) 안에 들어와 template_start_frames_min번 넘게 보였을 때 틀 확정
         # 0.65: 카메라 바닥 거리 추정이 1 m 밖에서는 10~20% 짧게 나옴(라이다 대조, 1.1 m에서 틀이 0.12~0.24 m 앞당겨짐) → 가까울 때만
-        'template_anchor_from_start': True, 'template_start_to_row': .45,
+        # 11/19 경기장 track_testv2_1118_01·07·08·09: 0.45로 만든 틀의 첫 칸 시작이 라이다상 표지판 기둥보다 0.076~0.107 m 앞
+        #   (평균 0.09) → 0.54. 줄자 실측 전 임시값
+        'template_anchor_from_start': True, 'template_start_to_row': .54,
+        # 회전점까지 freeze_remaining(m) 안에서는 선택 칸을 보정 틀로 다시 맞추지 않고 오도메트리로만 이동.
+        # 그 전에도 한 번에 max_jump(m) 넘게 옮기지 않음 (track_testv2_1118_09: 회전 시작 프레임에 목표 0.126 m 튐)
+        'template_target_freeze_remaining': .25, 'template_target_max_jump': .02,
         # 첫 칸(0번)을 고르면 조향 목표를 다음 칸 쪽으로 이만큼(m) 옮김 (parking._observe_template, 11/18 혁준, 정윤에게 공유 필요)
         #   표지판 받침이 첫 칸 시작 모서리에 있어 회전 안쪽 옆면이 스침. 22번 재생: +0.05 여유 0.02(막힘), +0.08 여유 0.05(회전 시작), +0.11 여유 0.27
         #   0.08이면 차 옆면 ~ 0·1번 칸 경계선 약 0.06 m (칸 폭 0.50, 차 폭 0.225). 더 올리면 선을 밟음. 0이면 끔. 실차 미확인
@@ -467,7 +472,10 @@ ANSWER_CONFIG = {
         # 11/18 redecide_1118_08: 진행 방향 오차 약 0.21 m로 상한 0.15에 걸림. 큰 오차는 가까운 카메라 재보정이 담당.
         # 상한은 칸 간격 절반(0.257) 미만 필수: 0.30이면 옆면 하나만 보일 때 한 칸 밀린 해가 같은 점수 (재생 확인)
         # 깊이 방향은 물체 차로 쪽 끝이 입구선 밖일 때만 이동(한쪽 벌점). 옆면 u_min = -LIMO 폭/2 가정
-        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .20,
+        # 11/19 경기장: LiDAR 맞춤이 매번 +0.13~0.19 m(상한 근처)로 틀을 밀어 첫 칸 시작이 표지판 기둥보다 0.04~0.11 m 뒤
+        #   (경기장 LIMO가 칸 가운데가 아님 → "옆면 = -LIMO 폭/2" 가정이 틀어짐) → 회전이 늦어 다음 칸 쪽 선으로 치우침(08 약 13 cm).
+        #   시작선 기준 틀이 기둥과 0.09 m 이내라 진행 방향 보정은 ±0.05로 축소
+        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .05,
         # 11/18 track_test_1118_04·05: 둘째 줄 물체를 담으려 칸을 0.14 m 깊게 밀어 가운데 칸 OCCUPIED → 칸 안쪽 이동은
         # max_deeper_offset 0.05까지만 (차로 쪽은 입구 밖으로 나온 물체용으로 normal_offset 0.15 유지).
         # 차 쪽 면이 칸 입구에서 max_face_depth(m)보다 깊은 군집(둘째 줄)은 정렬 점수에서 제외. 빈 칸 판정은 앞쪽 occupancy_depth(m)만
@@ -560,6 +568,44 @@ ANSWER_CONFIG = {
     # 11/18 유경: 0.04 -> 0.06. 화면 나이가 약 0.1 s라 0.04에서는 base_speed를 올려도 0.4 m/s에서 잘림
     # 부작용: 한 장이 오래된 동안 최대 6 cm까지 눈 감고 가므로 차선 반응이 그만큼 늦음 (차선 담당 공유 필요)
     'max_image_travel': 0.06, 'curve_speed_gain': 0.6,
+    # 3차선 점선 추종 (3lane_chu_js 시제품, 11/19 추추, dash_lane.py). 합성 시험만, 실차 전. 끄기: enabled False → 기존 lane_change 그대로
+    # 차로 사이 흰 점선(±0.26)에 차 중심을 두고 달림. 장애물은 라이다로 비는 옆 위치를 골라 몇 cm만 비켜 감
+    'dash_lane': {
+        'enabled': True,
+        'default_side': 1,           # 표지판 전에 탈 점선: +1 왼쪽(1|2 사이, A 쪽), −1 오른쪽(0|1 사이, B 쪽)
+        'speed': 0.30,               # 점선 위 유지 속도 (m/s). 기존 S2 상한 fork_prepare_speed 0.18 대신 적용
+        'shift_speed': 0.22,         # 목표 옆 위치까지 settle(m) 넘게 남았을 때
+        # 비는 옆 위치가 없을 때: 앞 장애물까지 stop_distance 넘으면 approach_speed로 천천히, 안이면 그 주기는 기존 방식에 맡김(handoff)
+        # stop_distance는 기존 lane_change.stop_distance(0.6)와 같게: 더 다가간 뒤 넘기면 기존 후진 재시도가 못 들어감 (합성 시험 backup_tight)
+        'approach_speed': 0.15, 'stop_distance': 0.6, 'handoff': True,
+        'handoff_early': True,       # 비는 위치가 없으면 거리와 상관없이 바로 기존 방식에 맡김 (False면 stop_distance까지 천천히 다가간 뒤)
+        'settle': 0.06,
+        'lookahead': 0.45,           # pure pursuit 목표점 앞 거리 (m, 뒷축 기준)
+        'slope': 0.35,               # 경로 모델 옆 이동 기울기 (앞 1 m당 옆 m, 약 19°). 0.45는 차가 24° 넘게 틀어짐 (합성 시험)
+        'start_near': 0.8,           # 가장 가까운 점선 끝이 이 앞 거리(m) 안이어야 시작 (3차로 구간 진입 확인)
+        # 진입 노란 선 보호 (11/19 사용자: 진입 때 너무 일찍 조향해 노란 선 밟음·넘음): 첫 점선(구간 시작)을 차체 뒤끝까지 지나기 전에는
+        # 들어온 1차로 노란 선을 가상 벽으로 경로 검사 → 옆 이동이 그만큼 늦게 시작. zone_refresh: 구간 시작이 이 앞 거리(m) 넘게 남았을 때만 화면으로 다시 맞춤
+        'entry_wall': True, 'zone_refresh': 0.7,
+        'corner_turn': 30.0,         # S2에서 오른쪽으로 이 각도(°) 넘게 돌면 3번 코너로 보고 끔 (기존 corner3 15°는 회피 중 틀어짐에 걸림)
+        # 경로 검사 차체 여유 (m) 3단계: soft → margin → tight(approach_speed로 천천히). 앞 단계에 비는 위치가 있으면 그 단계에서 고름
+        # 점선 위 + 양옆 차로 중앙 장애물(폭 0.22)이면 이론 여유 0.0375 → 위치 추정 오차 몇 mm면 0.035로는 못 지나감 (합성 시험 venue)
+        'soft_margin': 0.07, 'margin': 0.025, 'tight_margin': 0.012,
+        'delay': 0.15,               # 경로 모델: 옆 이동이 시작되기까지 앞 거리 (m, 조향 지연·방향 전환)
+        'y_max': 0.52,               # 차 중심 옆 위치 한계 (m, 가운데 차로 중앙 기준) = 바깥 차로 중앙
+        'step': 0.005, 'hold_weight': 0.3,  # 후보 간격 (0.01은 폭 5 mm 틈을 못 찾음), 지금 목표 유지 가중치 (좌우로 튀지 않게)
+        'window': 1.8,               # 장애물로 볼 앞 거리 (m). 1.4는 바깥 차로 장애물을 늦게 봐 옆에 끼임 (합성 시험 normal)
+        'wall_y': 0.72,              # 이보다 바깥(옆 위치) 점은 벽·트랙 밖으로 보고 제외 (노란 바깥선 ±0.78)
+        'fix_gain': 0.5, 'fix_window': 0.15,   # 점선 보정 비율, 추정과 이만큼 넘게 다르면 보정 안 함
+        'dash_memory': 2.0,          # 점선 보정 없이 이 거리(m) 넘게 가면 기존 방식으로 넘김
+        'lane_tolerance': 0.12,      # 차로 중앙에서 이 거리 안이면 '그 차로에 있음' (갈림길 입구 판단용)
+        'exit_slope': 0.6,           # 입구 앞 반 칸·반대쪽 이동 기울기 (0.5는 extend_right 늦은 표지판에서 섬 기둥 반대쪽, 0.7은 reverse_right 기둥 접촉)
+        'exit_distance': 1.2,        # 분기 입구까지 이 거리(m) 안이면 목적 바깥 차로 중앙으로 반 칸 이동
+        # 표지판 확정 전 입구 center_distance(m) 안이면 가운데 차로 중앙으로 (어느 쪽 표지판이든 0.52 m만 옮기면 됨, 11/19 사용자 제안)
+        'center_before_sign': True, 'center_distance': 2.5,
+        'entrance_distance': None,   # S2 시작 ~ 분기 입구 거리(m). None이면 lane_change.request_entrance_distance (현장 실측값)
+        'exit_by_distance': True,    # 입구 거리를 S2 주행 거리(lane_change.request_entrance_distance)로도 판단 (합성 시험은 끔: 장면 길이가 다름)
+        'safety_horizon': 0.3, 'safety_margin': 0.02,
+    },
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         # 11/15 소민: trigger_distance 1.15 → 1.4 (가까워진 뒤 시작하면 조향 공간 없음 no_safe_steering, 다음 장애물 늦게 봄)

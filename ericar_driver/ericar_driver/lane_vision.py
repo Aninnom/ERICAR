@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from .common import clip
+from .dash_lane import measure_dashes
 
 
 class LaneVision:
@@ -278,6 +279,8 @@ class LaneVision:
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid,
                       # 가장 먼 흰 점선까지 앞 거리(m). 없으면 None. 분기 입구(점선 끝) 판단용 (fork.py, 소민)
                       dash_end=float(self.meters_at(np.flatnonzero(dashes.any(axis=1)).min())) if white_lane else None,
+                      # 흰 점선 직선 목록 (3lane_chu_js 점선 추종 dash_lane.py 전용, 다른 판단에는 안 씀)
+                      dash_lines=measure_dashes(dashes, self.scale, self.row_m, c['far'], c['near']) if white_lane else [],
                       colors=line_colors,
                       # 선별 가까운 끝 앞 거리(m)·가까운 끝 기울기(rad, + 왼쪽). 교통섬 노란 선 구분용 (lane_change.trusted_colors, 소민 11/14)
                       near_ends={s: float(self.meters_at(spans[s][1])) for s in spans},
