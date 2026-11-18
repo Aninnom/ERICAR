@@ -17,6 +17,7 @@
 | `cones.py` | 라바콘: 좌·우 콘 쌍(문) 사이로 조향 | 유경 |
 | `lane_change.py` | 3차선 정적 장애물: 라이다 감지 → 좌·우 판단 → 원호–직선–원호 이동, 표지판 요청 이동 경로 계획 | 유경, 소민, 혁준 |
 | `fork.py` | 갈림길 상태: 방향 기억, 목표 차로, 입구 판단 | 소민, 혁준 |
+| `dash_lane.py` | 3차선 점선 추종 (3lane_chu_js 시제품): 흰 점선 위 주행 + 라이다로 비는 옆 위치 골라 살짝 비켜 감. 끄기 `params.py` `dash_lane.enabled` False. 설명 `docs/three_lane.md` "점선 추종" | 추추 |
 | `traffic_lamp.py` | 신호등 박스 안 램프 위치로 색 재확인 | 혁준 |
 | `node.py` | ROS 입출력: 센서 수신, YOLO, `/limo/ack_cmd` 발행 | 공통 |
 | `loop.py` | 제어 주기 1회 계산 (센서 상태 → 차선 → 판단), 설정 검사. ROS 의존 없음 | 공통 |

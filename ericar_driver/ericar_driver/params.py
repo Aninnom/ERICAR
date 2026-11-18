@@ -549,6 +549,38 @@ ANSWER_CONFIG = {
     # 11/18 유경: 0.04 -> 0.06. 화면 나이가 약 0.1 s라 0.04에서는 base_speed를 올려도 0.4 m/s에서 잘림
     # 부작용: 한 장이 오래된 동안 최대 6 cm까지 눈 감고 가므로 차선 반응이 그만큼 늦음 (차선 담당 공유 필요)
     'max_image_travel': 0.06, 'curve_speed_gain': 0.6,
+    # 3차선 점선 추종 (3lane_chu_js 시제품, 11/19 추추, dash_lane.py). 합성 시험만, 실차 전. 끄기: enabled False → 기존 lane_change 그대로
+    # 차로 사이 흰 점선(±0.26)에 차 중심을 두고 달림. 장애물은 라이다로 비는 옆 위치를 골라 몇 cm만 비켜 감
+    'dash_lane': {
+        'enabled': True,
+        'default_side': 1,           # 표지판 전에 탈 점선: +1 왼쪽(1|2 사이, A 쪽), −1 오른쪽(0|1 사이, B 쪽)
+        'speed': 0.30,               # 점선 위 유지 속도 (m/s). 기존 S2 상한 fork_prepare_speed 0.18 대신 적용
+        'shift_speed': 0.22,         # 목표 옆 위치까지 settle(m) 넘게 남았을 때
+        # 비는 옆 위치가 없을 때: 앞 장애물까지 stop_distance 넘으면 approach_speed로 천천히, 안이면 그 주기는 기존 방식에 맡김(handoff)
+        # stop_distance는 기존 lane_change.stop_distance(0.6)와 같게: 더 다가간 뒤 넘기면 기존 후진 재시도가 못 들어감 (합성 시험 backup_tight)
+        'approach_speed': 0.15, 'stop_distance': 0.6, 'handoff': True,
+        'handoff_early': True,       # 비는 위치가 없으면 거리와 상관없이 바로 기존 방식에 맡김 (False면 stop_distance까지 천천히 다가간 뒤)
+        'settle': 0.06,
+        'lookahead': 0.45,           # pure pursuit 목표점 앞 거리 (m, 뒷축 기준)
+        'slope': 0.35,               # 경로 모델 옆 이동 기울기 (앞 1 m당 옆 m, 약 19°). 0.45는 차가 24° 넘게 틀어짐 (합성 시험)
+        'start_near': 0.8,           # 가장 가까운 점선 끝이 이 앞 거리(m) 안이어야 시작 (3차로 구간 진입 확인)
+        'corner_turn': 30.0,         # S2에서 오른쪽으로 이 각도(°) 넘게 돌면 3번 코너로 보고 끔 (기존 corner3 15°는 회피 중 틀어짐에 걸림)
+        # 경로 검사 차체 여유 (m) 3단계: soft → margin → tight(approach_speed로 천천히). 앞 단계에 비는 위치가 있으면 그 단계에서 고름
+        # 점선 위 + 양옆 차로 중앙 장애물(폭 0.22)이면 이론 여유 0.0375 → 위치 추정 오차 몇 mm면 0.035로는 못 지나감 (합성 시험 venue)
+        'soft_margin': 0.07, 'margin': 0.025, 'tight_margin': 0.012,
+        'delay': 0.15,               # 경로 모델: 옆 이동이 시작되기까지 앞 거리 (m, 조향 지연·방향 전환)
+        'y_max': 0.52,               # 차 중심 옆 위치 한계 (m, 가운데 차로 중앙 기준) = 바깥 차로 중앙
+        'step': 0.005, 'hold_weight': 0.3,  # 후보 간격 (0.01은 폭 5 mm 틈을 못 찾음), 지금 목표 유지 가중치 (좌우로 튀지 않게)
+        'window': 1.8,               # 장애물로 볼 앞 거리 (m). 1.4는 바깥 차로 장애물을 늦게 봐 옆에 끼임 (합성 시험 normal)
+        'wall_y': 0.72,              # 이보다 바깥(옆 위치) 점은 벽·트랙 밖으로 보고 제외 (노란 바깥선 ±0.78)
+        'fix_gain': 0.5, 'fix_window': 0.15,   # 점선 보정 비율, 추정과 이만큼 넘게 다르면 보정 안 함
+        'dash_memory': 2.0,          # 점선 보정 없이 이 거리(m) 넘게 가면 기존 방식으로 넘김
+        'lane_tolerance': 0.12,      # 차로 중앙에서 이 거리 안이면 '그 차로에 있음' (갈림길 입구 판단용)
+        'exit_slope': 0.6,           # 입구 앞 반 칸·반대쪽 이동 기울기 (0.5는 extend_right 늦은 표지판에서 섬 기둥 반대쪽, 0.7은 reverse_right 기둥 접촉)
+        'exit_distance': 1.2,        # 분기 입구까지 이 거리(m) 안이면 목적 바깥 차로 중앙으로 반 칸 이동
+        'exit_by_distance': True,    # 입구 거리를 S2 주행 거리(lane_change.request_entrance_distance)로도 판단 (합성 시험은 끔: 장면 길이가 다름)
+        'safety_horizon': 0.3, 'safety_margin': 0.02,
+    },
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
     'lane_change': {
         # 11/15 소민: trigger_distance 1.15 → 1.4 (가까워진 뒤 시작하면 조향 공간 없음 no_safe_steering, 다음 장애물 늦게 봄)

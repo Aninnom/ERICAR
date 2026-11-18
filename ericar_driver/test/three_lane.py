@@ -304,6 +304,11 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
                 out['timeline'].append('%5.1f s=%5.2f y=%+.2f psi=%+.2f v=%.2f idx=%s stage=%s front=%.2f lane=%s mode=%s lc=%s span=%s' % (
                     t, sim['s'], sim['y'], sim['psi'], sim['v'], d.get('lane_index'), d.get('stage'), d.get('front', -1) or -1, d.get('lane_valid'), mode,
                     change.get('reason'), span))
+                dash = d.get('dash_lane') or {}
+                if dash.get('active') or dash.get('reason') not in (None, 'off', 'waiting_for_dashes'):
+                    out['timeline'][-1] += ' dash=%s y=%s cmd=%s want=%s' % (dash.get('reason'), dash.get('y'), dash.get('y_cmd'), dash.get('want'))
+            if sim['s'] > ZONE_END and 'time' not in out:
+                out['time'] = round(t, 1)        # 3차로 끝(ZONE_END) 도달 시각 (점선 추종과 기존 방식 비교용)
             if sim['s'] > ZONE_END + 0.5:
                 break
         out['final'] = (round(sim['s'], 2), round(sim['y'], 2))
@@ -317,6 +322,11 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     params.ANSWER_CONFIG['missions']['fork_enter_distance'] = None       # 같은 이유: 입구 거리 안전장치도 끔
     if os.environ.get('LC_SET'):         # lane_change 설정 덮어쓰기 (JSON), 비교 실험용
         params.ANSWER_CONFIG['lane_change'].update(json.loads(os.environ['LC_SET']))
+    # 점선 추종(dash_lane, 3lane_chu_js): 합성 장면은 3차로가 실제보다 길어 입구 거리 기준 반 칸 이동은 끔 (표지판 기준만)
+    params.ANSWER_CONFIG.setdefault('dash_lane', {})['exit_by_distance'] = False
+    params.ANSWER_CONFIG['dash_lane'].update(case.get('dash_lane', {}))
+    if os.environ.get('DASH_SET'):       # dash_lane 설정 덮어쓰기 (JSON). 기존 방식 비교: DASH_SET='{"enabled": false}'
+        params.ANSWER_CONFIG['dash_lane'].update(json.loads(os.environ['DASH_SET']))
     if os.environ.get('LC_LOOKAHEAD'):   # 값 비교 실험용
         params.ANSWER_CONFIG['lane_change']['lookahead'] = float(os.environ['LC_LOOKAHEAD'])
     sys.argv = [sys.argv[0]]
@@ -338,7 +348,8 @@ def judge(case_name, r):
     fork_ok = want is None or r['end_lane'] == want
     ok = reached and not off and not r['collision'] and fork_ok
     info = dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
-                끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2))
+                끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2),
+                시간=r.get('time'))
     if r.get('collision_at'):
         info['충돌지점'] = r['collision_at']      # (시각, s, y, 방향) 첫 접촉
     if 'post_clear' in r:
