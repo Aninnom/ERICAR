@@ -318,9 +318,11 @@ class LaneVision:
                           curvature=max(float(self.line_curvature(fits[sd], np.arange(spans[sd][0], spans[sd][1] + 1, 3.0)).max())
                                         for sd in fits))
             # ---------- 6. 목표점 ---------- 두 선이면 평균이라 코너에서 차로가 넓어져도(0.52 → 0.78 m) 중앙
-            targets = [t for t in (self.pursuit_target(sd, fits[sd], spans[sd]) for sd in fits) if t is not None]
+            targets = {sd: target for sd in fits
+                       if (target := self.pursuit_target(sd, fits[sd], spans[sd])) is not None}
+            result['dash_targets'] = {sd: target for sd, target in targets.items() if line_colors[sd] == 'white'}
             if targets:
-                forward, lateral = np.mean(targets, axis=0)
+                forward, lateral = np.mean(list(targets.values()), axis=0)
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
 
         # ---------- 정지선 ----------

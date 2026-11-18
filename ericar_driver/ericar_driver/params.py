@@ -378,6 +378,8 @@ ANSWER_CONFIG = {
         # (그 녹화: follow가 끝까지 유지돼 fork_remaining 2.5 → 라바콘 모드 차단, 콘 앞 정지). 11/16 녹화의 입구 5.2~5.6 m
         # None이면 끔. 합성 시험 장면은 3차선이 더 길어 끔 (three_lane.py, lane_change_max_distance와 같은 이유)
         'fork_enter_distance': 5.4,
+        # S2 주행 거리(m). 앞쪽 장애물 구간에서는 화살표 검출만 누적하고 후반부터 분기 방향 확정
+        'fork_decision_distance': 3.5,
         # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
         'fork_wrong_lane_distance': 0.4,
         # 분기 입구 뒤 이 거리(m)까지만 바깥선 하나 추종 (교통섬 앞머리의 비스듬한 선 구간). 뒤에는 두 선 모두 사용
@@ -669,7 +671,7 @@ ANSWER_CONFIG = {
         #   trigger_distance(1.4, 뒷축) − 뒷축~차체 앞(0.26) 정도
         # request_blocked_escape: 요청 방향은 열렸는데 경로만 막히고 기둥이 anchor_escape 안이면 일반 회피로 넘김 (11/17)
         # 11/17 05:50 정리: 실차 근거가 없는 것은 끔 (오늘 추가한 규칙끼리 충돌 사례 5건, 사용자 결정). 코드는 유지, 현장에서 하나씩 비교
-        #   끔: request_reverse·request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
+        #   끔: request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
         #   켬: request_extend(실차 2회 성공)·short_arc_margin 0.10·entry_align·heading_bias_min_distance·fork_sign_bearing·화살표 최소 면적
         # 11/18 오후 request_reverse 켬 (사용자 지시, redecide_1118_20): 왼쪽 끝 차로에서 오른쪽으로 피하기 시작한 직후(옆 이동 0.05 m)
         #   left 확정 → 이동을 끝까지 마친 뒤(S2 4.97 m)에야 돌아오려다 late_request_blocked → B로 진입.
@@ -728,7 +730,9 @@ ANSWER_CONFIG = {
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
-        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        # 11/19 다시 켬 (사용자 지시): 끈 상태로는 점선 추종이 넘겨준 뒤 기존 방식이 경기장 배치(합성 venue 6건)에서 75 s 멈춤,
+        #   켜면 5/6 통과. 소민 test/dashed-line-avoidance(점선 쪽 당김·갈림길 우회)도 켬 전제
+        'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # redecide_tail (11/18, track_test_1118_01~05): cross_two arrival must leave this much free distance ahead (m).
         # 0.2 -> 0.6: all five runs arrived 0.37 m behind an obstacle, then a 0.10 m/s short S (11~16 s).
         # synthetic 100 layouts: 0.2/0.6/1.0 identical (67/100). real car unverified. revert: remove key (falls back to avoid_plan_tail)
@@ -740,6 +744,8 @@ ANSWER_CONFIG = {
         'request_shrink': True, 'shrink_slack': 0.0,
         # redecide_fork_guard (11/18 소민, run_1118_1627 대응): 표지판 확정 뒤 재판단이 목적 차로에서 더 멀어지는 쪽으로 두 칸 넓히는 것 막음
         'redecide_fork_guard': True,
+        # 가운데로 한 칸 피할 때 넘어온 흰 점선 쪽으로 목표를 당기는 거리(m). 끄기: 0 (11/19 소민 test/dashed-line-avoidance)
+        'intermediate_dash_bias': 0.05,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,

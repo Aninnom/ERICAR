@@ -30,10 +30,16 @@ ZONE_START, ZONE_END = 3.5, 11.0
 DASH_ON, DASH_OFF = 0.2, 0.2
 LINE = 0.02
 CAR_W, CAR_L = 0.22, 0.32
+SEVEN_LIMOS = [(5.55, 0.0), (6.01, 0.0), (6.66, 0.52), (6.66, -0.52),
+               (7.31, 0.0), (8.31, 0.52), (8.31, -0.52)]
 STOP_LINE = 2.0          # 보행자 정지선 (사례에서 pedestrian 표지판을 줄 때만 의미)
 WHITE_BGR = np.uint8([235, 235, 235])
 
 CASES = {
+    'seven_limos_left': dict(signs={'left': (6.0, 10.3)}, obstacles=SEVEN_LIMOS, post=(10.55, 0.0),
+                            start_zone=True, decision_distance=5.45, island=True),
+    'seven_limos_right': dict(signs={'right': (6.0, 10.3)}, obstacles=SEVEN_LIMOS, post=(10.55, 0.0),
+                             start_zone=True, decision_distance=5.45, island=True),
     # 장애물 3개 → 갈림길 왼쪽
     'normal': dict(signs={'left': (7.6, 8.4)}, obstacles=[(5.0, 0.0), (6.9, 0.52), (8.6, 0.0)]),
     # 장애물 피하기 전에 갈림길 표지판을 먼저 읽음 → 표지판 쪽(오른쪽)으로 피해야 함
@@ -181,6 +187,8 @@ def boxes(case):
     out = [(os_, oy, CAR_L, CAR_W) for os_, oy in case['obstacles']]
     if case.get('post'):     # 섬 위 표지판 기둥 (s, y), 한 변 POST m 상자. 닿으면 충돌
         out.append((case['post'][0], case['post'][1], POST, POST))
+        if case.get('island'):
+            out.append((case['post'][0]+0.24, case['post'][1], 0.48, 0.36))
     return out + (walls() if case.get('walls') else [])
 
 
@@ -205,20 +213,25 @@ def scan_ranges(s, y, psi, obstacles):
 
 def collides(s, y, psi, obstacles):
     # 시뮬 (s, y) = 라이다 위치. 차체: 라이다 앞 0.044 m(앞 범퍼 0.258 − 라이다 0.214) ~ 뒤 0.286 m
-    corners = [(dx, dy) for dx in (-0.286, 0.044) for dy in (-CAR_W / 2, CAR_W / 2)]
+    cos, sin = math.cos(psi), math.sin(psi)
+    half_length, half_width = 0.165, CAR_W/2
+    cx, cy = s-0.121*cos, y-0.121*sin
     for os_, oy, length, width in obstacles:
-        for dx, dy in corners:
-            px = s + dx * math.cos(psi) - dy * math.sin(psi)
-            py = y + dx * math.sin(psi) + dy * math.cos(psi)
-            if abs(px - os_) < length / 2 and abs(py - oy) < width / 2:
-                return True
+        dx, dy = os_-cx, oy-cy
+        a, b = length/2, width/2
+        # 두 사각형의 네 축에서 겹침 확인
+        if (abs(dx) <= a+half_length*abs(cos)+half_width*abs(sin)
+                and abs(dy) <= b+half_length*abs(sin)+half_width*abs(cos)
+                and abs(dx*cos+dy*sin) <= half_length+a*abs(cos)+b*abs(sin)
+                and abs(-dx*sin+dy*cos) <= half_width+a*abs(sin)+b*abs(cos)):
+            return True
     return False
 
 
 def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     import os
     import yaml
-    out = dict(name=name, collision=False, max_abs_y=0.0, timeline=[], stuck=0.0, end_lane=None)
+    out = dict(name=name, collision=False, max_abs_y=0.0, max_body_y=0.0, timeline=[], stuck=0.0, end_lane=None)
     sim = dict(s=case.get('start_s', ZONE_START + 0.3 if case.get('start_zone') else 0.0),
                y=case.get('start_y', 0.0), psi=0.0, v=0.0, steer=0.0)
     obstacles = boxes(case)
@@ -232,9 +245,9 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
         config = yaml.safe_load(open(cfg_path))
         camera, wheelbase = scenario.REFERENCE_CAMERA, config['robot']['wheelbase']
         last_print, zero_since, mode = -1.0, None, None
+        drv = node.driver if hasattr(node, 'driver') else node.loop.driver
         if case.get('heading_bias_deg'):
             # 구간 관리자의 누적 회전에 치우침 주입 (실차: 출발 전 대기·주행 중 자이로 누적, 11/17 early_1117_0015 +9.6°)
-            drv = node.driver if hasattr(node, 'driver') else node.loop.driver
             drv.sections.yaw -= math.radians(case['heading_bias_deg'])
         for k in range(int(case.get('duration', duration) / DT)):
             t = k * DT
@@ -276,8 +289,20 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
             sim['s'] += sim['v'] * math.cos(sim['psi']) * DT
             sim['y'] += sim['v'] * math.sin(sim['psi']) * DT
             d = node.driver.debug if hasattr(node, 'driver') else getattr(node.loop.driver, 'debug', {})
+            if drv.fork.sign:
+                out.setdefault('decision_s', sim['s'])
+                out.setdefault('decision_distance', drv.sections.distance)
+            if case.get('decision_distance') is not None and not drv.fork.sign:
+                change = drv.lane_change
+                if change.debug.get('reason') == 'dash_follow' or (change.active and change.steering_shift()):
+                    out['dash_frames'] = out.get('dash_frames', 0)+1
+                if change.active and change.span == 2:
+                    out['double_cross'] = True
             if ZONE_START <= sim['s'] < ZONE_END:
                 out['max_abs_y'] = max(out['max_abs_y'], abs(sim['y']))
+                sin, cos = math.sin(sim['psi']), math.cos(sim['psi'])
+                extent = abs(sim['y']-0.121*sin)+0.165*abs(sin)+CAR_W/2*abs(cos)
+                out['max_body_y'] = max(out['max_body_y'], extent)
                 out['max_y_signed'] = max(out.get('max_y_signed', 0.0), sim['y'], key=abs)
             # 3차로 진입 전 1차로 구간(s < ZONE_START, 노란 선 ±0.26)에서 차체 모서리가 선 중심을 넘은 양 (11/19 실차: 진입 때 너무 일찍 조향)
             for dx, dy in ((-0.286, -CAR_W/2), (-0.286, CAR_W/2), (0.044, -CAR_W/2), (0.044, CAR_W/2)):
@@ -326,6 +351,10 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
     params.ANSWER_CONFIG['lane_change'].update(case.get('lane_change', {}))   # 사례별 설정 덮어쓰기
     params.ANSWER_CONFIG['sections']['lane_change_max_distance'] = None   # 합성 장면은 3차선이 실제(약 5 m)보다 김
     params.ANSWER_CONFIG['missions']['fork_enter_distance'] = None       # 같은 이유: 입구 거리 안전장치도 끔
+    decision_distance = case.get('decision_distance')
+    params.ANSWER_CONFIG['missions']['fork_decision_distance'] = decision_distance
+    if decision_distance is not None:
+        params.ANSWER_CONFIG['lane_change']['request_entrance_distance'] = case['post'][0]-sim['s']
     if os.environ.get('LC_SET'):         # lane_change 설정 덮어쓰기 (JSON), 비교 실험용
         params.ANSWER_CONFIG['lane_change'].update(json.loads(os.environ['LC_SET']))
     # 점선 추종(dash_lane, 3lane_chu_js): 합성 장면은 3차로가 실제보다 길어 입구 거리 기준 반 칸 이동은 끔 (표지판 기준만)
@@ -352,7 +381,7 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
 
 def judge(case_name, r):
     reached = r['final'][0] > ZONE_END
-    off = r['max_abs_y'] + CAR_W/2 > 0.78   # 차체 가장자리가 노란 바깥선을 넘으면 이탈 (예전: 차체 중심 기준)
+    off = r['max_body_y'] > 0.78
     fork = CASES[case_name]['signs']
     want = 2 if 'left' in fork else 0 if 'right' in fork else None
     fork_ok = want is None or r['end_lane'] == want
@@ -360,6 +389,16 @@ def judge(case_name, r):
     info = dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
                 끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2),
                 시간=r.get('time'), 진입침범=round(r.get('entry_over', -1.0), 3))
+    gate = CASES[case_name].get('decision_distance')
+    if gate is not None:
+        decision = r.get('decision_s')
+        info['방향확정위치'] = None if decision is None else round(decision, 2)
+        info['방향확정누적거리'] = round(r.get('decision_distance', 0.0), 2)
+        info['점선사용프레임'] = r.get('dash_frames', 0)
+        info['두칸횡단'] = r.get('double_cross', False)
+        last_obstacle = max(x for x, _ in CASES[case_name]['obstacles'])
+        ok = (ok and decision is not None and r['decision_distance'] >= gate and decision >= last_obstacle
+              and r.get('dash_frames', 0) > 0 and r.get('double_cross', False))
     if r.get('collision_at'):
         info['충돌지점'] = r['collision_at']      # (시각, s, y, 방향) 첫 접촉
     if 'post_clear' in r:

@@ -220,7 +220,7 @@ def test_reverse():
     lane = dict(lane_with(0.0), colors={'left': 'yellow', 'right': 'white'})
     blind = dict(valid=False, heading=0.0, error=0.0, colors={}, solid={})
 
-    def moving(obstacle_forward):
+    def moving(obstacle_forward, limit=2.0, enabled=True):
         """오른쪽으로 0.30 m 옮겼고 40° 틀어진 자세. 떠난 차로의 장애물 뒷면~앞면이 차 기준 도로 방향 obstacle_forward(m)"""
         change = LaneChange(copy.deepcopy(ANSWER_CONFIG), robot)
         change.index = 2
@@ -237,11 +237,15 @@ def test_reverse():
             for l in (0.20, 0.30, 0.40):
                 x, y = to_body(f, l, heading)
                 points.append([x-lidar_x, y])
-        result = change.update(dict(blind, stamp=3.0), dict(points=points, wide_objects=0), 0.1, 0.0, 0.05, True,
-                               road_heading=heading, fork_lanes=0, request_limit=2.0)
+        result = change.update(dict(blind, stamp=3.0), dict(points=points, wide_objects=0), 0.1, 0.0, 0.05, enabled,
+                               road_heading=heading, fork_lanes=0, request_limit=limit)
         return change, result
     change, _ = moving((0.35, 0.45, 0.55, 0.65))          # 장애물이 아직 앞: 돌아갈 경로 막힘
     assert change.direction == -1 and change.index == 2 and 'reverse_blocked' in change.debug, change.debug
+    change, _ = moving((-0.65, -0.55, -0.45, -0.35), limit=.3)
+    assert change.direction == -1 and change.debug['reverse_blocked']['fits'] is False, change.debug
+    change, _ = moving((-0.65, -0.55, -0.45, -0.35), enabled=False)
+    assert change.direction == -1 and change.index == 2, change.debug
     change, result = moving((-0.65, -0.55, -0.45, -0.35))  # 장애물을 지나침: 바로 되돌림
     assert change.direction == 1 and change.index == 1 and change.span == 1 and change.plan.get('reversed'), change.debug
     assert abs(change.target-0.52) < 1e-6 and abs(change.offset-0.22) < 0.02 and result[1] > 0, (change.offset, result)

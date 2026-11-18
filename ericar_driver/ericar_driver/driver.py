@@ -50,6 +50,7 @@ class Driver:
                                 outer_distance=m.get('fork_outer_distance', .8))
         self.hold_section = 0        # 지금(또는 마지막) 코너 유지가 시작된 구간 번호 (코너 유지 누적 회전 상한용)
         self.signs_fresh = True      # 표지판 검출이 최신인지 (update의 signs_ok)
+        self.pending_fork_sign = None
         self.sync_fork()
         self.traffic_stop_completed = False
         self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
@@ -624,7 +625,17 @@ class Driver:
             self.slow_zone.sign = True
         self.fork.step(self.lane_change.index, self.changing, velocity, dt,
                        left_section=self.c['sections']['enabled'] and self.sections.index > START_SECTION['fork'])
-        if self.allowed('fork') and self.fork.lock(ready, detection_stamp):
+        decision_at = m.get('fork_decision_distance')
+        decision_open = (decision_at is None or not c['sections']['enabled']
+                         or self.sections.distance >= decision_at)
+        fork_allowed = self.allowed('fork')
+        arrows_ready = ready & {'left', 'right'}
+        if decision_at is None or not fork_allowed or {'left', 'right'} <= {d['name'] for d in detections}:
+            self.pending_fork_sign = None
+        elif arrows_ready:
+            self.pending_fork_sign = (arrows_ready, detection_stamp)
+        signs, sign_stamp = self.pending_fork_sign or (arrows_ready, detection_stamp)
+        if decision_open and fork_allowed and self.fork.lock(signs, sign_stamp):
             self.advance('fork')
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
         elif self.fork.running:
@@ -916,7 +927,7 @@ class Driver:
                 self.advance('slow')
             if self.slow_zone.state == 'slow' and mode == 'lane':
                 mode = 'slow_zone'
-        stuck_change = False
+        stuck_change = fork_boundary_hold = False
         # 분기 입구(흰 점선 끝) 추적. 입구에서 목표 차로가 아니면 manual(정지), 입구 뒤 차선 변경 금지 (소민)
         if self.sections.allows('fork') or self.fork.running:
             self.fork.observe(lane, self.lane_change.index, self.changing, velocity, dt)
@@ -986,8 +997,9 @@ class Driver:
                                                 request_lanes=self.request_lanes(requested), request_limit=self.request_limit(),
                                                 request_only=bool(late_request), road_heading=self.road_heading(),
                                                 fork_lanes=self.fork_lanes())
+                fork_boundary_hold = self.lane_change.debug.get('reason') == 'fork_boundary_hold'
                 retreat = self.backup.observe(change, self.lane_change, body_points(scan, self.robot), velocity, dt,
-                                              blocked=self.was_blocked, enabled=change_enabled,
+                                              blocked=self.was_blocked, enabled=change_enabled and not fork_boundary_hold,
                                               heading=self.road_heading())
                 if retreat is not None:
                     change = retreat
@@ -1041,9 +1053,19 @@ class Driver:
         backing = self.backup.active and speed < 0
         blocked = scan['valid_fraction'] < .5 or (not backing and clearance < self.c['lidar']['emergency_distance'])
         self.was_blocked = bool(blocked and speed >= 0)
-        speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
+        if fork_boundary_hold:
+            # 의도한 분기 정지: 멈춤 방지 서행보다 우선
+            speed, steering, mode = 0.0, 0.0, 'fork_hold: target boundary'
+        else:
+            speed, steering, blocked = self.stall_guard(speed, steering, scan, blocked, stuck_change, velocity, dt)
         if blocked:
             speed = 0.0
+        plan = self.lane_change.plan if self.lane_change.active else None
+        if speed > 0.0 and plan and plan.get('fork_detour') == 'alternate_exit' and self.fork.phase in ('locked', 'align'):
+            # 안전한 반대편 출구 승인. 원래 화살표는 로그에 유지
+            self.fork.direction = self.lane_change.direction
+            self.fork.destination = self.lane_change.index+self.fork.direction
+            self.sync_fork()
         if self.fork.phase == 'manual':
             # 분기 입구인데 가운데·반대편 차로: 교통섬을 가로지르지 않고 정지 (멈춤 방지보다 우선)
             speed, steering, mode = 0.0, 0.0, 'fork_manual: wrong lane at fork entrance'
