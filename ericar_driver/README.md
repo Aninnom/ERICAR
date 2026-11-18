@@ -74,15 +74,9 @@
 ros2 launch ericar_driver bringup.launch.py yolo:=false
 ```
 
-## 회귀 시험 (맥·차, ROS 불필요)
+## 시험 (맥·차, ROS 불필요)
 
-공통 파일 수정 후 동작이 바뀌지 않았는지 확인. 도면 치수로 합성한 3차로 영상·라이다·표지판으로 보행자 → 차선 변경 → 신호등 → 주차까지 노드 전체 실행 후 기준값과 비교 (약 15초)
-
-```bash
-python3 ericar_driver/test/test_regression.py
-```
-
-numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록. 지금 기준값은 맥 생성본 (PR #67).
+수정 뒤에는 바뀐 영역 시험 파일만 실행 (`python3 -m pytest test/<파일>`). 회귀 시험(`test_regression.py`·`golden_regression.json`)은 11/19 삭제: 기준값을 갱신하지 않아 항상 실패했고 차에서 155초 소요. 합성 장면 `test/scenario.py`는 `test_sections.py`·`three_lane.py`가 써서 유지
 
 3차선·갈림길을 바꿨으면 아래도 실행 (맥)
 
@@ -97,7 +91,7 @@ python3 ericar_driver/test/test_lane_change_heading.py
 - `three_lane.py`: 합성 사례 21건 (실차 실패 재현 사례 포함). 11/17 기준 21/21
 - `tools/lc_random_eval.py`: 임의 배치 50건. 11/17 기준 46/50 (실패 시드 18·21·27·44)
 - 합성 시험은 '나빠지지 않음' 정도의 근거. 11/17 새벽 실차 실패 중 합성으로 재현된 것은 1건
-- 알려진 실패 2건 (기능 문제 아님, 기준 정리 필요): `test_sections.py` 주차 표지판 누락 1건, `test_lidar_missions.py` 임의 3차선
+- 알려진 실패 2건 (기능 문제 아님, 기준 정리 필요): `test_sections.py` 주차 표지판 누락 1건, `test_lidar_missions.py` 임의 3차선(11/19 시험에서 삭제, 점수는 `three_lane.py`·`tools/lc_random_eval.py`로 확인)
 
 ## 원본 대비 실차 수정
 

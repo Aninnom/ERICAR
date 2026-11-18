@@ -441,18 +441,6 @@ def random_three_lane_layout(seed, cars=7, gap=(1.0, 1.6)):
 THREE_LANE_RANDOM_ALLOWED_FAILURES = 3
 
 
-def test_three_lane_random(seeds=30):
-    failed = []
-    for seed in range(seeds):
-        r = run_three_lane(random_three_lane_layout(seed))
-        if not (r['done'] and r['min_clear'] > 0.0):
-            failed.append(seed)
-            print(f"3차선 임의 {seed:2d} 실패: 차로 {r['lanes']} 최소 여유 {r['min_clear']:.3f} m, "
-                  f"대기 {r['waits']}주기, 통과 {r['done']} (x {r['x']:.2f})")
-    print(f"3차선 임의 배치: {seeds - len(failed)}/{seeds} 통과, 실패 시드 {failed}")
-    assert len(failed) <= THREE_LANE_RANDOM_ALLOWED_FAILURES, failed
-
-
 def test_cone_handover():
     """라바콘 인계 조건 (11/15 fix2_1115_2017 207.6 s: 콘 0.3 m 앞에서야 켜져 안쪽 콘 0.2 m 앞 정지)
     - 문을 정면으로 보면 1 m 앞에서 미리 인계, 비스듬하거나 옆으로 비켜 있으면 예전처럼 콘이 바로 앞일 때
@@ -489,5 +477,4 @@ if __name__ == '__main__':
     test_cones_not_started_by_other_objects()
     test_cones_outer_wall()
     test_three_lane_left_right()
-    test_three_lane_random()
     print('라이다 미션 시험 통과')

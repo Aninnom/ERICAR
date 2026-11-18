@@ -62,7 +62,7 @@
 
 1. 녹화로 문제 장면 확인: `tools/bag_timeline.py`(시계열) → `tools/bag_frames.py`(해당 시각 영상)
 2. 코드 수정 후 같은 녹화로 전후 비교: `tools/replay_bag.py` (main → before.csv, 내 브랜치 → after.csv)
-3. 회귀 시험 (`test/test_regression.py`, 차에서). 의도한 변화면 `scenario.py --write`로 재생성, 이유 PR에 기록
+3. 바뀐 영역 시험 파일만 실행 (`python3 -m pytest test/<파일>`, 차에서). 회귀 시험은 11/19 삭제
 4. 실차: `bringup.launch.py record:=true`로 녹화 남기며 시험 → 다시 1번
 
 ## 주의

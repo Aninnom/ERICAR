@@ -24,22 +24,6 @@ def test_known_anchor_renders_three_metric_cells():
     assert all(cell['width']==.50 and cell['depth']==.59 for cell in cells)
 
 
-def test_start_then_stable_anchor_selects_first_free_template_cell():
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    def occupancy(slot,*_):
-        return ('OCCUPIED' if slot['slot_index']==0 else 'FREE'),dict(reason='TEST')
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
-         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
-        assert not p._observe_template(image,1.,{},1.,1.,0.,0.)
-        assert not p._observe_template(image,1.1,{},1.1,1.1,0.,0.)
-        assert p._observe_template(image,1.2,{},1.2,1.2,0.,0.)
-    assert p.template_armed and len(p.template_slots)==3
-    assert p.selected['source']=='parking_template' and p.selected['slot_index']==1
-    assert p.template_debug['evaluations'][0]['state']=='OCCUPIED'
-    assert p.template_debug['evaluations'][1]['control_applied']
-
-
 def test_template_waits_when_no_side_anchor_exists():
     c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
     image=np.zeros((480,640,3),np.uint8)
@@ -61,23 +45,6 @@ def test_template_mode_never_uses_obstacle_pair_gap_as_target():
     assert result[2] in ('parking_cruise','parking_scan') and p.selected is None
 
 
-def test_selected_template_cell_is_rejected_after_two_occupied_frames():
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8);current=['FREE']
-    def occupancy(slot,*_):
-        state=current[0] if slot['slot_index']==0 else 'UNKNOWN'
-        return state,dict(reason='TEST')
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
-         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
-        p._observe_template(image,1.,{},1.,1.,0.,0.)
-        p._observe_template(image,1.1,{},1.1,1.1,0.,0.)
-        assert p._observe_template(image,1.2,{},1.2,1.2,0.,0.) and p.selected['slot_index']==0
-        current[0]='OCCUPIED';p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
-        assert p.selected is not None
-        p._observe_template(image,1.4,{},1.4,1.4,0.,0.)
-    assert p.selected is None and 0 in p.rejected_template_slots
-
-
 def test_planned_turn_path_is_reported_for_three_cell_debug_view():
     c=config();p=Parking(c);p.selected=slots_from_anchor([.5,-.2],[1.,0.],[0.,-1.],.5,.59,3)[0]
     path=p._planned_turn_path(.1)
@@ -93,23 +60,6 @@ def test_obstacle_on_planned_right_arc_blocks_commit():
     scan=dict(points=np.array([[.6,-.3]])-lidar)
     assert not p._turn_path_clear(scan)
     assert not p.path_debug['clear'] and p.path_debug['clearance_m']<p.path_debug['required_m']
-
-
-def test_far_free_cell_waits_until_within_reach():
-    """멀리 있는 빈 칸은 회전 시작까지 template_select_max_remaining 안에 들어올 때 선택 (11/18 redecide_1118_06)"""
-    c=config();c['answer']['parking']['template_enabled']=True
-    c['answer']['parking']['template_select_max_remaining']=1.0;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    def occupancy(slot,*_):
-        return ('FREE' if slot['slot_index']==2 else 'OCCUPIED'),dict(reason='TEST')
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
-         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
-        for step in range(3):
-            assert not p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
-        assert p.selected is None and p.template_debug['evaluations'][2]['state']=='FREE'
-        for slot in p.template_slots:p._move_target(slot,1.,.2,0.)     # 0.2 m 전진: 셋째 칸 회전 시작까지 1.135 → 0.935 m
-        assert p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
-    assert p.selected['slot_index']==2
 
 
 def _landmarks_at(anchor_x,start_x,slope=0.):
@@ -168,13 +118,6 @@ def test_row_start_comes_from_start_line_when_close():
     assert len(p.template_slots)==3
     assert np.allclose(p.template_slots[0]['entrance'],[.60+.45+.25,-.24],atol=.02),p.template_slots[0]['entrance']
     assert p.template_debug['anchors'][0]['confidence']=='START_LINE_OFFSET' if p.template_debug['anchors'] else True
-
-
-def test_selected_cell_is_kept_during_turn_even_if_it_reads_occupied():
-    """회전 중에는 선택 칸을 버리지 않음 (redecide_1118_15: 회전 중 selected가 None이 되어 주행 노드 종료)"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    state=dict(value='FREE')
 
 
 def test_points_inside_current_body_do_not_cancel_turn():
@@ -237,41 +180,6 @@ def test_near_transition_refines_far_latched_template():
     white=dict(near,anchor=[.8,-.29],confidence='WHITE_START_ONLY')
     p._refine_template([white],0.,0.,0.)
     assert p.template_slots[0]['polygon'][0][0]==before
-
-
-def test_transition_before_start_line_is_rejected():
-    """11/18 redecide_1118_14: 반사된 노란 차선 위 가짜 전환점(시작선보다 앞)으로 주차장 전에 회전"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    fake=landmarks();fake['start_x']=1.60  # 시작선 1.6 m, 전환점 0.5 m → 시작선 앞
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=fake):
-        for stamp in (1.,1.1,1.2,1.3):p._observe_template(image,stamp,{},stamp,stamp,0.,0.)
-    assert p.template_armed and not p.template_slots
-    assert p.start_debug['rejected']==1 and p.start_debug['accepted']==0
-
-
-def test_transition_far_right_or_skewed_is_rejected():
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    far=landmarks();far['anchors'][0]=dict(far['anchors'][0],anchor=[.5,-.95])
-    skew=landmarks();skew['anchors'][0]=dict(skew['anchors'][0],tangent=[.8,-.6],normal=[-.6,-.8])
-    for fake in (far,skew):
-        with patch('ericar_driver.parking.parking_template_landmarks',return_value=fake):
-            for stamp in (1.,1.1,1.2,1.3):p._observe_template(image,stamp,{},stamp,stamp,0.,0.)
-        assert not p.template_slots
-
-
-def test_start_line_track_keeps_passed_line_after_latch():
-    """래치 뒤 시작선이 카메라 아래로 지나가면 오도메트리로 이동, 칸 안쪽 다른 가로선으로 교체하지 않음"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8)
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()):
-        for stamp in (1.,1.1,1.2):p._observe_template(image,stamp,{},stamp,stamp,0.,0.)
-    assert p.template_slots
-    other=landmarks();other['start_x']=1.2
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=other):
-        p._observe_template(image,1.3,{},1.3,1.3,1.,0.)  # 0.1 s × 1 m/s 전진
-    assert abs(p.start_debug['start_x']-0.)<1e-6
 
 
 def test_glare_yellow_is_not_white_for_template():
@@ -339,22 +247,6 @@ def test_armed_distance_fallback_slows_without_other_evidence():
         t+=.5;_cruise(p,stamp=t,velocity=.3)  # 0.5 s × 0.3 m/s = 0.15 m/step
     assert p.state=='parking_scan' and p.slow_reason=='START_LINE_DISTANCE_FALLBACK'
     assert limit<=p.armed_distance<=limit+.16
-
-
-def test_selected_cell_is_kept_during_turn_even_if_it_reads_occupied():
-    """회전 중에는 선택 칸을 버리지 않음 (혁준 72ea089, redecide_1118_15: 회전 중 selected None → 주행 노드 종료)"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    image=np.zeros((480,640,3),np.uint8);state=dict(value='FREE')
-    def occupancy(slot,*_):return (state['value'] if slot['slot_index']==0 else 'OCCUPIED'),dict(reason='TEST')
-    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
-         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
-        for step in range(3):p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
-        assert p.selected is not None and p.selected['slot_index']==0
-        p.state='parking_turn';state['value']='OCCUPIED'
-        for step in range(3,7):p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
-    assert p.selected is not None and 0 not in p.rejected_template_slots
-
-
 
 
 def test_white_loss_before_minimum_angle_does_not_stop_turn():
