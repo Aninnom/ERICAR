@@ -463,9 +463,9 @@ ANSWER_CONFIG = {
         #   trigger_distance(1.4, 뒷축) − 뒷축~차체 앞(0.26) 정도
         # request_blocked_escape: 요청 방향은 열렸는데 경로만 막히고 기둥이 anchor_escape 안이면 일반 회피로 넘김 (11/17)
         # 11/17 05:50 정리: 실차 근거가 없는 것은 끔 (오늘 추가한 규칙끼리 충돌 사례 5건, 사용자 결정). 코드는 유지, 현장에서 하나씩 비교
-        #   끔: request_reverse·request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
+        #   끔: request_blocked_escape·safe_flip_block·back_end·lane_memory·backup
         #   켬: request_extend(실차 2회 성공)·short_arc_margin 0.10·entry_align·heading_bias_min_distance·fork_sign_bearing·화살표 최소 면적
-        'request_reverse': False, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
+        'request_reverse': True, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
         # safe_flip_block: 이동 시작 직후(safe_flip_travel m 안) 안전 조향이 목표 반대쪽이고 차이가 safe_flip_max(rad) 넘으면 따르지 않고 정지 (11/17)
         'safe_flip_block': False, 'safe_flip_max': 0.4, 'safe_flip_travel': 0.15, 'safe_flip_offset': 0.08,
         'request_extend_slack': 0.5,   # 넓히기: 기둥을 못 본 채 어림한 한계는 이만큼(m) 넘어도 허용
