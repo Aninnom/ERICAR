@@ -650,7 +650,7 @@ ANSWER_CONFIG = {
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
-        'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # redecide_tail (11/18, track_test_1118_01~05): cross_two arrival must leave this much free distance ahead (m).
         # 0.2 -> 0.6: all five runs arrived 0.37 m behind an obstacle, then a 0.10 m/s short S (11~16 s).
         # synthetic 100 layouts: 0.2/0.6/1.0 identical (67/100). real car unverified. revert: remove key (falls back to avoid_plan_tail)
