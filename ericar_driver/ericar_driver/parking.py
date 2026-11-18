@@ -153,12 +153,7 @@ class Parking:
         """Check the complete entry arc before committing to a latched cell."""
         points=body_points(scan,self.robot)
         distance=self.c.get('turn_path_check_distance',self._turn_lead())
-        # 검사도 실제 회전과 같은 실측 반경으로 (11/18 혁준). 조향각 계산 반경 0.548로 검사하면 안쪽을 0.03~0.04 m 더 좁게 봄
-        # (redecide_1118_07 146.5 s: 첫 칸 모서리의 주차 표지판 받침 여유 0.017 → 실측 반경 0.615로는 0.07)
-        radius=self.c.get('turn_radius')
-        steering=(self.c['turn_steering'] if not radius else
-                  math.copysign(math.atan(self.robot['wheelbase']/radius),self.c['turn_steering']))
-        clearance=path_clearance(points,steering,self.robot,distance)
+        clearance=path_clearance(points,self.c['turn_steering'],self.robot,distance)
         required=self.c.get('turn_path_margin',.03)
         path=self._planned_turn_path(remaining)
         self.path_debug=dict(clear=bool(clearance>=required),clearance_m=clearance,
@@ -205,12 +200,6 @@ class Parking:
                                    entry_speed_ready=ready,waiting_for_slow_speed=remaining<=self.c['approach_start_tolerance'] and not ready)
         if remaining<=self.c['approach_start_tolerance'] and ready:
             if self.selected.get('source')=='parking_template' and not self._turn_path_clear(scan,max(0.,remaining)):
-                # 막혔으면 바로 버리지 않고 turn_path_wait_distance(m)까지 더 가며 매 주기 다시 검사 (11/18 혁준)
-                # 칸 가까운 모서리의 물체(주차 표지판 받침)는 조금 더 가면 경로에서 벗어남. 먼 쪽 물체는 계속 막혀 그때 버림
-                # (redecide_1118_08 22.8 s: 0.1 s 전 스캔의 받침 1점으로 여유 0 → 칸을 버리고 직진)
-                if remaining > -self.c.get('turn_path_wait_distance',0.):
-                    self.path_debug['waiting_remaining_m']=remaining
-                    return None
                 slot=self.selected.get('slot_index')
                 if slot is not None:self.rejected_template_slots.add(slot)
                 self.path_debug['rejected_slot']=slot
