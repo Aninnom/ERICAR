@@ -320,8 +320,9 @@ ANSWER_CONFIG = {
         'grid_maximum_extrapolation': .14,
         'grid_entrance_right_min': -.85, 'grid_entrance_right_max': -.05,
         # 11/18 혁준 (parking_grid_relaxed.py): 칸 사이 선이 입구 쪽 grid_relaxed_visible_min(m)만 보여도 칸으로 추정. 끄기: grid_relaxed False
-        # grid_relaxed_single: 가로선이 하나만 보여도 그 옆에 칸을 가정 (입구선이 칸 폭 전체에 이어질 때만). 줄 밖을 칸으로 보면 False로
-        'grid_relaxed': True, 'grid_relaxed_visible_min': .15, 'grid_relaxed_single': True,
+        # grid_relaxed_single: 가로선이 하나만 보여도 그 옆에 칸을 가정. 11/18 녹화 재생(redecide_1118_03·04)에서 주차 줄 시작 전
+        #   바닥을 빈 칸으로 고름 → 끔. 아래 template_enabled가 켜져 있으면 도색 칸 경로(_observe_grid) 자체가 안 돎
+        'grid_relaxed': True, 'grid_relaxed_visible_min': .15, 'grid_relaxed_single': False,
         # 11/18 실차: 가로 흰 선으로 구간을 arm하고 황색→흰색 세로선 전환점에서 3칸 생성.
         # 이 모드에서는 장애물 두 개 사이 gap이 목표를 선택하지 않는다.
         'template_enabled': True, 'template_slot_count': 3,
