@@ -241,12 +241,27 @@ class Driver:
             return False
         if f.late or (f.running and f.direction and f.sign_near):
             return True
-        entrance = self.c['lane_change'].get('request_entrance_distance')
         if not self.c['dash_lane'].get('exit_by_distance', True):
             return False
+        left = self.dash_entrance_left()
+        return left is not None and left <= self.c['dash_lane'].get('exit_distance', 1.2)
+
+    def dash_entrance_left(self):
+        """S2 주행 거리 기준 남은 분기 입구 거리(m). dash_lane.entrance_distance(없으면 lane_change.request_entrance_distance) − 지금 거리"""
+        entrance = self.c['dash_lane'].get('entrance_distance')
+        if entrance is None:
+            entrance = self.c['lane_change'].get('request_entrance_distance')
         if entrance is None or not self.c['sections']['enabled'] or self.sections.index != START_SECTION['lane_change']:
+            return None
+        return float(entrance)-self.sections.distance
+
+    def dash_center_now(self):
+        """점선 추종: 표지판 확정 전인데 입구가 dash_lane.center_distance(m) 안 → 가운데 차로 중앙에서 표지판을 기다림"""
+        d = self.c['dash_lane']
+        if not d.get('center_before_sign', True) or (self.fork.running and self.fork.direction) or self.fork.entered:
             return False
-        return float(entrance)-self.sections.distance <= self.c['dash_lane'].get('exit_distance', 1.2)
+        left = self.dash_entrance_left()
+        return left is not None and left <= d.get('center_distance', 2.5)
 
     def dash_in_corner(self):
         """점선 추종용 코너 판단: 코너 유지 중이거나 S2에서 오른쪽으로 dash_lane.corner_turn(°) 넘게 돎
@@ -952,7 +967,8 @@ class Driver:
                 self.dash.index_hint = self.lane_change.index
                 dash = self.dash.update(lane, scan, velocity, dt, self.road_heading(), dash_enabled,
                                         direction=self.fork.direction if self.fork.running else 0,
-                                        exit_now=self.dash_exit_now(), tracking=dash_tracking)
+                                        exit_now=self.dash_exit_now(), tracking=dash_tracking,
+                                        center_now=self.dash_center_now())
                 if self.dash.active:
                     # 기존 코드(갈림길 목적 차로 도착·입구 판단, 끝난 뒤 차선 변경)가 쓰는 차로 번호를 점선 추종 위치로 맞춤
                     self.lane_change.index = self.dash.lane_index()

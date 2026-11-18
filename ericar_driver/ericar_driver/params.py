@@ -578,6 +578,9 @@ ANSWER_CONFIG = {
         'lane_tolerance': 0.12,      # 차로 중앙에서 이 거리 안이면 '그 차로에 있음' (갈림길 입구 판단용)
         'exit_slope': 0.6,           # 입구 앞 반 칸·반대쪽 이동 기울기 (0.5는 extend_right 늦은 표지판에서 섬 기둥 반대쪽, 0.7은 reverse_right 기둥 접촉)
         'exit_distance': 1.2,        # 분기 입구까지 이 거리(m) 안이면 목적 바깥 차로 중앙으로 반 칸 이동
+        # 표지판 확정 전 입구 center_distance(m) 안이면 가운데 차로 중앙으로 (어느 쪽 표지판이든 0.52 m만 옮기면 됨, 11/19 사용자 제안)
+        'center_before_sign': True, 'center_distance': 2.5,
+        'entrance_distance': None,   # S2 시작 ~ 분기 입구 거리(m). None이면 lane_change.request_entrance_distance (현장 실측값)
         'exit_by_distance': True,    # 입구 거리를 S2 주행 거리(lane_change.request_entrance_distance)로도 판단 (합성 시험은 끔: 장면 길이가 다름)
         'safety_horizon': 0.3, 'safety_margin': 0.02,
     },

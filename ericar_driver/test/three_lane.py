@@ -324,6 +324,10 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
         params.ANSWER_CONFIG['lane_change'].update(json.loads(os.environ['LC_SET']))
     # 점선 추종(dash_lane, 3lane_chu_js): 합성 장면은 3차로가 실제보다 길어 입구 거리 기준 반 칸 이동은 끔 (표지판 기준만)
     params.ANSWER_CONFIG.setdefault('dash_lane', {})['exit_by_distance'] = False
+    # 섬 기둥(분기 입구)까지 S2 거리 = 기둥 s − 출발 s (구간 거리는 출발부터 셈). 표지판 전 가운데 대기(center_before_sign)용
+    # 기둥 없는 사례는 입구가 없음 → 아주 먼 값 (기본 lane_change.request_entrance_distance 5.2는 실제 트랙 값이라 장면과 안 맞음)
+    params.ANSWER_CONFIG['dash_lane']['entrance_distance'] = (case['post'][0]-case.get(
+        'start_s', ZONE_START + 0.3 if case.get('start_zone') else 0.0)) if case.get('post') else 99.0
     params.ANSWER_CONFIG['dash_lane'].update(case.get('dash_lane', {}))
     if os.environ.get('DASH_SET'):       # dash_lane 설정 덮어쓰기 (JSON). 기존 방식 비교: DASH_SET='{"enabled": false}'
         params.ANSWER_CONFIG['dash_lane'].update(json.loads(os.environ['DASH_SET']))

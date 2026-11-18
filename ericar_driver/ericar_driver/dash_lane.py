@@ -101,9 +101,13 @@ class DashLane:
         centre = (self.lane_index()-self.count//2)*self.width
         return abs(self.y-centre) > self.c.get('lane_tolerance', .12)
 
-    def preferred(self, direction, exit_now):
+    def preferred(self, direction, exit_now, center_now=False):
         """선호 위치: 표지판 전 default_side 쪽 점선, 표지판 확정 뒤 그쪽 점선, 입구 앞(exit_now)이면 그쪽 바깥 차로 중앙
-        표지판 없이 입구 앞이면 지금 점선 쪽 바깥 차로 (가운데 차로로 입구에 가면 manual 정지)"""
+        표지판 없이 입구 앞이면 지금 점선 쪽 바깥 차로 (가운데 차로로 입구에 가면 manual 정지)
+        center_now: 입구가 가까운데 표지판이 아직 없음 → 가운데 차로 중앙(0)에서 대기. 어느 쪽이 나와도 0.52 m만 옮기면 됨
+        (점선에서 반대쪽 바깥 차로는 0.78 m → 늦은 표지판이면 못 건넘, 합성 시험 reverse_right)"""
+        if center_now and not direction and not exit_now:
+            return 0.0
         side = direction or self.c.get('default_side', 1)
         if exit_now:
             if not direction:
@@ -203,7 +207,8 @@ class DashLane:
             return False
         return True
 
-    def update(self, lane, scan, velocity, dt, heading, enabled, direction=0, exit_now=False, tracking=True):
+    def update(self, lane, scan, velocity, dt, heading, enabled, direction=0, exit_now=False, tracking=True,
+               center_now=False):
         """반환 (속도, 조향) 또는 None(기존 제어에 맡김). heading: 차에서 본 도로 방향(rad, + 왼쪽), None이면 카메라 차선 방향
         tracking: S2 안이라 위치 추정을 이어 갈지 (enabled가 잠깐 꺼져도 추정은 유지 → 다시 켜질 때 그 위치로 이어 감)"""
         c = self.c
@@ -234,7 +239,7 @@ class DashLane:
         forward, lateral = forward[keep], lateral[keep]
         limit = c.get('y_max', .52)
         candidates = np.arange(-limit, limit+1e-9, c.get('step', .005))
-        want = self.preferred(direction, exit_now)
+        want = self.preferred(direction, exit_now, center_now)
         slope = c.get('exit_slope', .5) if exit_now else c.get('slope', .35)
         # 여유 단계: 넉넉(soft_margin) → 보통(margin) → 좁음(tight_margin, 천천히). 앞 단계에 비는 위치가 있으면 그 단계에서 고름
         tier, ok = None, np.zeros(len(candidates), bool)
@@ -250,7 +255,7 @@ class DashLane:
         self.debug = dict(reason='tracking', y=round(self.y, 3), want=round(want, 3), front=round(front, 2),
                           fixes=self.fixes, unfixed=round(self.unfixed, 2), lane_index=self.lane_index(),
                           straddling=self.straddling, feasible=int(ok.sum()), tier=tier, points=int(len(forward)),
-                          fix_error=self.debug.get('fix_error'), exit=bool(exit_now))
+                          fix_error=self.debug.get('fix_error'), exit=bool(exit_now), center=bool(center_now))
         if tier is None and c.get('handoff', True) and (front <= c.get('stop_distance', .6) or c.get('handoff_early', True)):
             # 비는 위치 없음: 기존 방식(짧은 S자·서행 접근·후진 재시도 BackUp)에 이번 주기를 맡김. 기존 방식이 이동을 시작하면
             # 끝날 때까지 기존 방식 (driver: lane_change.active면 점선 추종 끔), 끝나면 점선 추종이 그 위치에서 이어 감
