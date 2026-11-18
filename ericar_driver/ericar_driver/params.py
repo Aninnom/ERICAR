@@ -344,6 +344,15 @@ ANSWER_CONFIG = {
         'template_anchor_after_start': .10, 'template_start_track_distance': .25, 'template_start_lane_half': .45,
         # 기준 선분 방향이 차 진행 방향에서 이만큼(기울기) 넘게 틀어져 있으면 제외. 2 m 밖 짧은 선분은 방향이 20° 넘게 틀려 칸이 차로 쪽으로 그려짐
         'template_anchor_max_slope': .12,
+        # 줄 시작을 시작선 + template_start_to_row(m)로 잡음 (parking_start_anchor.py, 11/18 혁준). 끄면 색 전환 기준점 방식
+        # 0.45 = 연습 매트 값: 0.43으로 재현한 여섯 주행(03·04·06·07·08·15)에서 라이다상 표지판 받침보다 평균 0.02~0.03 m 짧아 올림
+        # **경기장에서 시작선 ~ 주차 줄 시작(표지판) 거리를 줄자로 확인**
+        # 시작선이 template_start_fix_distance(m) 안에 들어와 template_start_frames_min번 넘게 보였을 때 틀 확정
+        # 0.65: 카메라 바닥 거리 추정이 1 m 밖에서는 10~20% 짧게 나옴(라이다 대조, 1.1 m에서 틀이 0.12~0.24 m 앞당겨짐) → 가까울 때만
+        'template_anchor_from_start': True, 'template_start_to_row': .45,
+        'template_start_fix_distance': .65, 'template_start_frames_min': 3,
+        'template_row_lateral': -.26, 'template_row_lateral_window': .12, 'template_row_line_far': 1.6,
+        'template_row_line_band': .08, 'template_row_fit_slope': False, 'template_row_fit_length': .30,
         'template_transition_tolerance': .24,
         # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
         'template_selected_occupied_frames': 2,

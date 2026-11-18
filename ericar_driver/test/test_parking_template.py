@@ -127,7 +127,7 @@ def _feed(p,items):
 
 def test_anchor_before_start_line_is_ignored():
     """옅은 노란 차로 선이 흰색으로 읽혀 시작선보다 앞(가까운 쪽)에 생긴 기준점은 버림 (11/18 redecide_1118_12 17.3 s)"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    c=config();c['answer']['parking']['template_enabled']=True;c['answer']['parking']['template_anchor_from_start']=False;p=Parking(c);p.start(0.)
     _feed(p,[_landmarks_at(.88,1.73)]*4)
     assert p.template_armed and not p.template_slots and p.template_debug['anchors_rejected']==1
     assert abs(p.template_debug['start_x']-1.73)<1e-6
@@ -137,14 +137,46 @@ def test_anchor_before_start_line_is_ignored():
 
 def test_start_line_track_ignores_later_transverse_lines():
     """시작선을 지나친 뒤 더 앞에 보이는 다른 가로 흰 선이 시작선 자리를 차지하지 않음"""
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    _feed(p,[_landmarks_at(5.,.70,slope=9.)]*2)     # 기준 후보는 방향 조건으로 제외, 시작선만 기록
+    c=config();c['answer']['parking']['template_enabled']=True;c['answer']['parking']['template_anchor_from_start']=False;p=Parking(c);p.start(0.)
+    _feed(p,[_landmarks_at(5.,.70,slope=9.)]*3)     # 기준 후보는 방향 조건으로 제외, 시작선만 기록 (3번 봐야 굳음)
     assert abs(p.template_debug['start_x']-.70)<1e-6
     _feed(p,[_landmarks_at(.95,1.80)]*2)            # 1.1 m 더 앞의 가로선은 무시 → 시작선 0.70 기준으로 0.95는 인정
     assert abs(p.template_debug['start_x']-.70)<1e-6 and len(p.template_slots)==3
 
 
 def test_skewed_far_anchor_is_ignored():
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    c=config();c['answer']['parking']['template_enabled']=True;c['answer']['parking']['template_anchor_from_start']=False;p=Parking(c);p.start(0.)
     _feed(p,[_landmarks_at(2.08,1.66,slope=.45)]*4)
     assert not p.template_slots and p.template_debug['anchors_rejected']==1
+
+
+def test_row_start_comes_from_start_line_when_close():
+    """줄 시작 = 시작선 + 0.45 m. 시작선이 0.65 m 안에 들어와 3번 보인 뒤 확정, 색 전환 기준점은 쓰지 않음 (11/18 redecide_1118_15)"""
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    far=dict(_landmarks_at(.95,1.10),right_ground=[[[.4,-.24],[1.2,-.24]]])
+    _feed(p,[far]*4)                                 # 시작선이 아직 멂: 색 전환 후보(0.95)가 있어도 확정 안 함
+    assert not p.template_slots
+    p=Parking(c);p.start(0.)
+    near=dict(_landmarks_at(.74,.60),right_ground=[[[.4,-.24],[1.2,-.24]]])
+    _feed(p,[near]*2)
+    assert not p.template_slots                      # 시작선을 3번 보기 전
+    _feed(p,[near]*3)
+    assert len(p.template_slots)==3
+    assert np.allclose(p.template_slots[0]['entrance'],[.60+.45+.25,-.24],atol=.02),p.template_slots[0]['entrance']
+    assert p.template_debug['anchors'][0]['confidence']=='START_LINE_OFFSET' if p.template_debug['anchors'] else True
+
+
+def test_selected_cell_is_kept_during_turn_even_if_it_reads_occupied():
+    """회전 중에는 선택 칸을 버리지 않음 (redecide_1118_15: 회전 중 selected가 None이 되어 주행 노드 종료)"""
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    image=np.zeros((480,640,3),np.uint8)
+    state=dict(value='FREE')
+    def occupancy(slot,*_):return (state['value'] if slot['slot_index']==0 else 'OCCUPIED'),dict(reason='TEST')
+    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
+         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
+        for step in range(3):p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
+        assert p.selected is not None and p.selected['slot_index']==0
+        p.state='parking_turn';state['value']='OCCUPIED'
+        for step in range(3,7):p._observe_template(image,1.+.1*step,{},1.+.1*step,1.+.1*step,0.,0.)
+    assert p.selected is not None and 0 not in p.rejected_template_slots
+

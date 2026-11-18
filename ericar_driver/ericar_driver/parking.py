@@ -7,6 +7,7 @@ from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
 from .parking_grid import parking_grid_candidates,move_ground_segments
 from .parking_template import parking_template_landmarks,slots_from_anchor
 from .parking_fusion import fuse_template_slots
+from .parking_start_anchor import anchor_from_start_line
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
 from .parking_sign import SignPassage,slow_distance
@@ -362,9 +363,12 @@ class Parking:
         seen_start=landmarks.get('start_x')
         if seen_start is not None:
             tracked=None if self.template_start_track is None else self.template_start_track['entrance'][0]
-            if tracked is None or abs(seen_start-tracked)<=self.c.get('template_start_track_distance',.25):
+            near=tracked is not None and abs(seen_start-tracked)<=self.c.get('template_start_track_distance',.25)
+            count=self.template_start_track['count']+1 if near else 1
+            # 추적 위치 근처의 관측만 반영. 단 아직 3번 못 본 추적은 잘못 잡은 것일 수 있어 새 관측으로 다시 시작
+            if tracked is None or near or self.template_start_track['count']<3:
                 self.template_start_track=dict(entrance=[seen_start,0.],polygon=[[seen_start,0.]],
-                                               tangent=[1.,0.],normal=[0.,-1.])
+                                               tangent=[1.,0.],normal=[0.,-1.],count=count)
         start_x=None if self.template_start_track is None else float(self.template_start_track['entrance'][0])
         # 기준점은 시작선보다 template_anchor_after_start(m) 넘게 앞쪽일 때만 인정
         # (redecide_1118_12: 옅은 노란 차로 선이 흰색으로 읽혀 시작선 0.85 m 전에 기준점이 잡힘 → 주차 구역 전에 우회전.
@@ -374,6 +378,12 @@ class Parking:
         candidates=[item for item in landmarks['anchors']
                     if (after is None or start_x is None or item['anchor'][0]>=start_x+after) and
                     (slope is None or abs(item['tangent'][1])<=slope)]
+        # 줄 시작 = 시작선 + 고정 거리 (template_anchor_from_start, parking_start_anchor.py). 색 전환 기준점은 조명에 따라 어긋남
+        # 시작선이 template_start_fix_distance 안에 들어와 3번 넘게 확인됐을 때부터 사용. 시작선을 한 번도 못 봤으면 색 전환 기준으로
+        if self.c.get('template_anchor_from_start',False) and start_x is not None:
+            ready=(start_x<=self.c.get('template_start_fix_distance',1.2) and
+                   self.template_start_track.get('count',0)>=self.c.get('template_start_frames_min',3))
+            candidates=[anchor_from_start_line(start_x,landmarks.get('right_ground',[]),self.c)] if ready else []
         anchor_observations=[]
         if self.template_armed and not self.template_slots and candidates:
             anchor=candidates[0]
@@ -411,7 +421,10 @@ class Parking:
                     rejection='TURN_START_ALREADY_PASSED' if late and status=='FREE' else None,
                     control_applied=False))
             selected_index=None if self.selected is None else self.selected.get('slot_index')
-            if self.selected is not None and self.selected.get('source')=='parking_template':
+            # 회전을 시작한 뒤에는 선택 칸을 다시 판정하지 않음 (11/18 혁준, redecide_1118_15: 회전 중 2프레임 OCCUPIED로
+            # selected가 None이 됐는데 상태는 parking_turn에 남아 다음 주기 _move_target(None) 예외 → 주행 노드 종료)
+            if (self.selected is not None and self.selected.get('source')=='parking_template' and
+                    self.state!='parking_turn'):
                 selected_evaluation=next((item for item in evaluations
                                           if item['slot_index']==selected_index),None)
                 occupied=selected_evaluation is not None and selected_evaluation['state']=='OCCUPIED'
@@ -425,7 +438,7 @@ class Parking:
                     self.selected=None;selected_index=None
                     if self.state=='parking_approach':
                         self.state='parking_scan';self.entry_stable_since=None
-            if self.selected is None:
+            if self.selected is None and self.state!='parking_turn':
                 reach=self.c.get('template_select_max_remaining')
                 usable=[index for index,item in enumerate(evaluations)
                         if item['state']=='FREE' and item['rejection'] is None and
@@ -522,6 +535,7 @@ class Parking:
             elif late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             elif self.reason!='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP':self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
         else:
+            if self.selected is None:return self.fail('TURN_TARGET_LOST')
             self._move_target(self.selected,dt,velocity,rate)
             self.turn_distance+=abs(velocity)*dt;self.turn_angle=max(0.,self.turn_angle-rate*dt)
             new_image=self._white(image,image_stamp)

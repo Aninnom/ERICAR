@@ -77,6 +77,7 @@ def parking_template_landmarks(image,robot,config):
                 start_segments=[item['pixel'] for item in transverse[:12]],
                 white_longitudinal=[item['pixel'] for item in white_long[:24]],
                 yellow_longitudinal=[item['pixel'] for item in yellow_long[:24]],
+                right_ground=[item['points'].tolist() for item in (white_long+yellow_long)[:40]],
                 reason='ANCHOR_FOUND' if anchors else 'WAITING_FOR_WHITE_SIDE')
 
 
