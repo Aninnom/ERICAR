@@ -106,3 +106,44 @@ def test_far_free_cell_waits_until_within_reach():
         for slot in p.template_slots:p._move_target(slot,1.,.2,0.)     # 0.2 m 전진: 셋째 칸 회전 시작까지 1.135 → 0.935 m
         assert p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
     assert p.selected['slot_index']==2
+
+
+def _approach_until(p,c,point,steps=40):
+    """선택한 틀 칸으로 0.12 m/s 접근. point(차체 좌표, 첫 주기 기준)가 있으면 차가 가는 만큼 뒤로 밀려 보이게 함. 반환: 주기별 상태"""
+    lidar=np.array([c['robot']['lidar']['x'],c['robot']['lidar'].get('y',0.)]);states=[];now=10.
+    p.state='parking_approach';p.approach_started=now;p.approach_distance=0.;p.last_tick=now
+    for step in range(steps):
+        now+=.05
+        points=np.zeros((0,2)) if point is None else np.array([[point[0]-.006*(step+1),point[1]]])-lidar
+        p._approach(now,.05,.12,0.,dict(points=points))
+        states.append(p.state)
+        if p.state!='parking_approach':break
+    return states
+
+
+def _selected_first_cell(c,ahead):
+    """회전 시작까지 ahead(m) 남은 첫 칸"""
+    p=Parking(c);lead=p._turn_lead()
+    p.selected=slots_from_anchor([lead+ahead-.25,-.38],[1.,0.],[0.,-1.],.5,.59,3)[0]
+    return p
+
+
+def test_sign_base_at_near_corner_does_not_block_measured_radius_arc():
+    """첫 칸 가까운 모서리의 주차 표지판 받침 (11/18 redecide_1118_07 146.5 s 라이다 점): 실측 반경으로 검사하면 통과"""
+    c=config();p=_selected_first_cell(c,0.)
+    lidar=np.array([c['robot']['lidar']['x'],c['robot']['lidar'].get('y',0.)])
+    assert p._turn_path_clear(dict(points=np.array([[.37,-.39]])-lidar)),p.path_debug
+    assert not p._turn_path_clear(dict(points=np.array([[.60,-.30]])-lidar))      # 경로 한가운데 물체는 그대로 막힘
+
+
+def test_blocked_turn_waits_then_turns_when_near_corner_object_clears():
+    """0.1 s 전 스캔의 받침 점(0.43, -0.38)으로 막혀도 칸을 버리지 않고 조금 더 가서 회전 시작 (redecide_1118_08 22.8 s)"""
+    c=config();c['answer']['parking']['template_enabled']=True;p=_selected_first_cell(c,.03)
+    states=_approach_until(p,c,(.45,-.38))
+    assert states[-1]=='parking_turn' and 0 not in p.rejected_template_slots,(states,p.path_debug)
+
+
+def test_blocked_turn_rejects_cell_when_obstacle_stays_on_arc():
+    c=config();c['answer']['parking']['template_enabled']=True;p=_selected_first_cell(c,.03)
+    states=_approach_until(p,c,(.75,-.45))
+    assert states[-1]=='parking_scan' and 0 in p.rejected_template_slots and p.reason=='SELECTED_SLOT_TURN_PATH_BLOCKED',(states,p.reason)

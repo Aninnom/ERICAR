@@ -348,6 +348,8 @@ ANSWER_CONFIG = {
         'template_fusion_cluster_min_points': 3, 'template_fusion_offset_penalty': .2,
         'template_fusion_obstacle_front_depth': .08,
         'turn_path_check_distance': .90, 'turn_path_margin': .03,
+        # 회전 경로가 막혔을 때 칸을 버리기 전에 더 가 보는 거리(m). approach_passed_tolerance(0.06)보다 작게
+        'turn_path_wait_distance': .05,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
