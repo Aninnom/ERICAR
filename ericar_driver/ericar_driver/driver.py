@@ -65,6 +65,7 @@ class Driver:
         self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
         self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
         self.entry_gate = None        # 3차선 진입 흰 선 통과 전 차선 변경 금지 상태 (entry_gate_open)
+        self.entry_from_corner = False   # 다른 구간에서 달려와 S2에 들어왔는지 (S2에서 바로 시작한 경우는 제한 없음)
         self.signs_lost = 0.0         # 표지판 검출이 끊긴 누적 시간(s)
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
 
@@ -95,7 +96,11 @@ class Driver:
         - 어느 경우든 entry_max_distance(m)를 넘으면 허용 (선 추적이 틀려도 회피 판단이 영영 막히지 않게)
         진행 중인 이동에는 영향 없음. 끄기: lane_change.entry_gate False"""
         lc = self.c['lane_change']
-        if not lc.get('entry_gate', False) or self.sections.index != START_SECTION['lane_change']:
+        if self.sections.index != START_SECTION['lane_change']:
+            self.entry_gate, self.entry_from_corner = None, True
+            return True
+        # S2에서 바로 시작한 주행(start_stage fork·단위 시험)은 코너를 돌아 들어온 것이 아니므로 제한하지 않음
+        if not lc.get('entry_gate', False) or not self.entry_from_corner:
             self.entry_gate = None
             return True
         gate = self.entry_gate
