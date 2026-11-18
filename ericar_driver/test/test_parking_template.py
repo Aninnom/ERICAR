@@ -106,3 +106,45 @@ def test_far_free_cell_waits_until_within_reach():
         for slot in p.template_slots:p._move_target(slot,1.,.2,0.)     # 0.2 m 전진: 셋째 칸 회전 시작까지 1.135 → 0.935 m
         assert p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
     assert p.selected['slot_index']==2
+
+
+def _landmarks_at(anchor_x,start_x,slope=0.):
+    norm=(1+slope*slope)**.5
+    anchors=[dict(anchor=[anchor_x,-.25],tangent=[1/norm,slope/norm],normal=[slope/norm,-1/norm],
+                  confidence='COLOR_TRANSITION',length=.5,pixel=[0,0,1,1],support_pixel=[0,0,1,1])]
+    return dict(start_seen=True,anchors=anchors,start_x=start_x,start_segments=[],white_longitudinal=[],
+                yellow_longitudinal=[],reason='ANCHOR_FOUND')
+
+
+def _feed(p,items):
+    image=np.zeros((480,640,3),np.uint8)
+    def unknown(slot,*_):return 'UNKNOWN',dict(reason='TEST')
+    for index,item in enumerate(items):
+        with patch('ericar_driver.parking.parking_template_landmarks',return_value=item), \
+             patch('ericar_driver.parking.classify_camera_slot',side_effect=unknown):
+            p._observe_template(image,1.+.1*index,{},1.+.1*index,1.+.1*index,0.,0.)
+
+
+def test_anchor_before_start_line_is_ignored():
+    """옅은 노란 차로 선이 흰색으로 읽혀 시작선보다 앞(가까운 쪽)에 생긴 기준점은 버림 (11/18 redecide_1118_12 17.3 s)"""
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    _feed(p,[_landmarks_at(.88,1.73)]*4)
+    assert p.template_armed and not p.template_slots and p.template_debug['anchors_rejected']==1
+    assert abs(p.template_debug['start_x']-1.73)<1e-6
+    _feed(p,[_landmarks_at(2.15,1.73)]*2)           # 시작선 0.42 m 뒤의 진짜 기준점
+    assert len(p.template_slots)==3 and abs(p.template_slots[0]['entrance'][0]-2.40)<.02
+
+
+def test_start_line_track_ignores_later_transverse_lines():
+    """시작선을 지나친 뒤 더 앞에 보이는 다른 가로 흰 선이 시작선 자리를 차지하지 않음"""
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    _feed(p,[_landmarks_at(5.,.70,slope=9.)]*2)     # 기준 후보는 방향 조건으로 제외, 시작선만 기록
+    assert abs(p.template_debug['start_x']-.70)<1e-6
+    _feed(p,[_landmarks_at(.95,1.80)]*2)            # 1.1 m 더 앞의 가로선은 무시 → 시작선 0.70 기준으로 0.95는 인정
+    assert abs(p.template_debug['start_x']-.70)<1e-6 and len(p.template_slots)==3
+
+
+def test_skewed_far_anchor_is_ignored():
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    _feed(p,[_landmarks_at(2.08,1.66,slope=.45)]*4)
+    assert not p.template_slots and p.template_debug['anchors_rejected']==1

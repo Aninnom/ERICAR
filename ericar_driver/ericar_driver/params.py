@@ -315,6 +315,8 @@ ANSWER_CONFIG = {
         'grid_stable_frames': 3, 'grid_track_distance': .15, 'grid_track_alignment': .90,
         'grid_occupancy_padding': .03, 'grid_free_clearance': .02,
         'grid_yellow_min': [18,40,50], 'grid_yellow_max': [40,255,255],
+        # 흰색 채도 상한은 85 유지 (11/18 혁준 측정). 45로 낮추면 노출 300 녹화(06·07·08·12)는 좋아지지만 노출 600 녹화(03·04)에서는
+        # 기준점을 놓치고 더 뒤 지점에 틀이 놓임 → 노출에 따라 달라지는 값이라 손대지 않고, 아래 template_anchor_after_start로 거름
         'grid_white_min': [0,0,95], 'grid_white_max': [179,85,255],
         'grid_right_midpoint_max': .15, 'grid_history_frames': 6,
         'grid_maximum_extrapolation': .14,
@@ -338,6 +340,10 @@ ANSWER_CONFIG = {
         # 회전 시작까지 이 거리(m) 안에 든 칸만 선택 (approach_distance_limit 1.2보다 작게). 멀리서 고르면 접근 한계에 걸려 실패
         # (06: 1.26 m 전 선택 → 0.07 m 남기고 APPROACH_DISTANCE_LIMIT). 그 전까지는 parking_scan 속도로 계속 전진
         'template_select_max_remaining': 1.0,
+        # 기준점은 시작선(차로 안 가로 흰 선)보다 이 거리(m) 넘게 앞쪽일 때만 인정. 시작선 추적은 template_start_track_distance 안의 관측만 반영
+        'template_anchor_after_start': .10, 'template_start_track_distance': .25, 'template_start_lane_half': .45,
+        # 기준 선분 방향이 차 진행 방향에서 이만큼(기울기) 넘게 틀어져 있으면 제외. 2 m 밖 짧은 선분은 방향이 20° 넘게 틀려 칸이 차로 쪽으로 그려짐
+        'template_anchor_max_slope': .12,
         'template_transition_tolerance': .24,
         # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
         'template_selected_occupied_frames': 2,

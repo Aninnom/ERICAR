@@ -36,12 +36,16 @@ def parking_template_landmarks(image,robot,config):
     yellow=_mask(image,config.get('grid_yellow_min',[18,40,50]),config.get('grid_yellow_max',[40,255,255]),top)
     white_lines=_segments(white,image,robot,config);yellow_lines=_segments(yellow,image,robot,config)
     ratio=config.get('template_orientation_ratio',1.8)
-    transverse=[];white_long=[];yellow_long=[]
+    transverse=[];white_long=[];yellow_long=[];start_positions=[]
     for record in white_lines:
         dx,dy=np.abs(record['delta'])
         midpoint=record['points'].mean(axis=0)
         if dy>=dx*ratio and record['length']>=config.get('template_start_min_length',.35):
             transverse.append(record)
+            # 시작선 위치(차 앞 거리): 차로 안에 놓인 가로 흰 선 중 가장 가까운 것 (11/18 혁준, 기준점 위치 검사용)
+            half=config.get('template_start_lane_half',.45)
+            if record['points'][:,1].min()>=-half and record['points'][:,1].max()<=half:
+                start_positions.append(float(midpoint[0]))
         if dx>=dy*ratio and config.get('template_right_min',-1.1)<=midpoint[1]<=config.get('template_right_max',-.05):
             white_long.append(record)
     for record in yellow_lines:
@@ -69,7 +73,7 @@ def parking_template_landmarks(image,robot,config):
                             confidence=confidence,length=white_line['length'],pixel=white_line['pixel'],
                             support_pixel=None if support is None else support['pixel']))
     anchors.sort(key=lambda item:(item['confidence']!='COLOR_TRANSITION',item['anchor'][0],-item['length']))
-    return dict(start_seen=bool(transverse),anchors=anchors,
+    return dict(start_seen=bool(transverse),anchors=anchors,start_x=min(start_positions) if start_positions else None,
                 start_segments=[item['pixel'] for item in transverse[:12]],
                 white_longitudinal=[item['pixel'] for item in white_long[:24]],
                 yellow_longitudinal=[item['pixel'] for item in yellow_long[:24]],

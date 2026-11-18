@@ -27,7 +27,7 @@ class Parking:
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
-        self.template_alignment=None;self.fusion_debug={}
+        self.template_alignment=None;self.fusion_debug={};self.template_start_track=None
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -51,7 +51,7 @@ class Parking:
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
-        self.template_alignment=None;self.fusion_debug={}
+        self.template_alignment=None;self.fusion_debug={};self.template_start_track=None
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -348,6 +348,7 @@ class Parking:
         if self.template_anchor_track is not None:
             self._move_target(self.template_anchor_track['target'],elapsed,velocity,rate)
         for slot in self.template_slots:self._move_target(slot,elapsed,velocity,rate)
+        if self.template_start_track is not None:self._move_target(self.template_start_track,elapsed,velocity,rate)
         try:landmarks=parking_template_landmarks(image,self.robot,self.c)
         except Exception as error:
             self.template_debug=dict(reason='TEMPLATE_DETECTOR_ERROR',error=type(error).__name__,
@@ -356,9 +357,26 @@ class Parking:
         if not self.template_armed:
             self.template_start_frames=self.template_start_frames+1 if landmarks['start_seen'] else 0
             if self.template_start_frames>=self.c.get('template_start_frames',2):self.template_armed=True
+        # 시작선 위치 추적 (11/18 혁준): 처음 본 값으로 잡고 주행 거리만큼 당김. 이후 관측은 추적 위치 근처일 때만 반영
+        # (주차 줄 너머의 다른 가로 흰 선이 시작선을 대신하지 않게)
+        seen_start=landmarks.get('start_x')
+        if seen_start is not None:
+            tracked=None if self.template_start_track is None else self.template_start_track['entrance'][0]
+            if tracked is None or abs(seen_start-tracked)<=self.c.get('template_start_track_distance',.25):
+                self.template_start_track=dict(entrance=[seen_start,0.],polygon=[[seen_start,0.]],
+                                               tangent=[1.,0.],normal=[0.,-1.])
+        start_x=None if self.template_start_track is None else float(self.template_start_track['entrance'][0])
+        # 기준점은 시작선보다 template_anchor_after_start(m) 넘게 앞쪽일 때만 인정
+        # (redecide_1118_12: 옅은 노란 차로 선이 흰색으로 읽혀 시작선 0.85 m 전에 기준점이 잡힘 → 주차 구역 전에 우회전.
+        #  정상 기준점은 시작선 뒤 0.22~0.45 m, 03·04·06·07·08 녹화)
+        after=self.c.get('template_anchor_after_start')
+        slope=self.c.get('template_anchor_max_slope')
+        candidates=[item for item in landmarks['anchors']
+                    if (after is None or start_x is None or item['anchor'][0]>=start_x+after) and
+                    (slope is None or abs(item['tangent'][1])<=slope)]
         anchor_observations=[]
-        if self.template_armed and not self.template_slots and landmarks['anchors']:
-            anchor=landmarks['anchors'][0]
+        if self.template_armed and not self.template_slots and candidates:
+            anchor=candidates[0]
             observed=slots_from_anchor(anchor['anchor'],anchor['tangent'],anchor['normal'],
                 self.c.get('grid_slot_width',.50),self.c.get('grid_slot_depth',.59),
                 self.c.get('template_slot_count',3))
@@ -423,6 +441,7 @@ class Parking:
                                  armed=self.template_armed,start_seen=landmarks['start_seen'],
                                  start_frames=self.template_start_frames,anchors=anchor_observations,
                                  anchor_candidates=landmarks['anchors'][:6],slot_count=len(self.template_slots),
+                                 start_x=start_x,anchors_rejected=len(landmarks['anchors'])-len(candidates),
                                  slots=self.template_slots,rejected_slots=sorted(self.rejected_template_slots),
                                  evaluations=evaluations,start_segments=landmarks.get('start_segments',[]),
                                  white_longitudinal=landmarks.get('white_longitudinal',[]),
