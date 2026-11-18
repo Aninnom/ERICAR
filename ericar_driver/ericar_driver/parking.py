@@ -6,6 +6,7 @@ from .lidar import body_points,path_clearance
 from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
 from .parking_grid import parking_grid_candidates,move_ground_segments
 from .parking_template import parking_template_landmarks,slots_from_anchor
+from .parking_fusion import fuse_template_slots
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
 from .parking_sign import SignPassage,slow_distance
@@ -26,6 +27,7 @@ class Parking:
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
+        self.template_alignment=None;self.fusion_debug={}
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -49,6 +51,7 @@ class Parking:
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
+        self.template_alignment=None;self.fusion_debug={}
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -68,9 +71,10 @@ class Parking:
         feedback=dict(self.pd.debug)
         if self.state in ('parked','parking_failed','parking_cancelled'):
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None,steering_rad=0.)
-        self.debug=dict(mode='parking_real2',state=self.state,reason=self.reason,gap=self.gap_debug,
+        self.debug=dict(mode='parking_real2_fusion1',state=self.state,reason=self.reason,gap=self.gap_debug,
                         parking_grid=self.grid_debug,
                         parking_template=self.template_debug,
+                        parking_fusion=self.fusion_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         turn_path=self.path_debug,
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
@@ -373,9 +377,15 @@ class Parking:
             if count>=self.c.get('template_anchor_frames',2):self.template_slots=observed
         evaluations=[];selected_now=False
         if self.template_slots:
-            for slot in self.template_slots:
+            fused_slots,assigned,self.fusion_debug,self.template_alignment=fuse_template_slots(
+                self.template_slots,scan,self.robot,self.c,self.template_alignment)
+            lidar_origin=np.array([self.robot['lidar']['x'],self.robot['lidar'].get('y',0.)])
+            for slot,slot_points in zip(fused_slots,assigned):
                 at_scan=dict(slot);self._move_target(at_scan,scan_stamp-now,velocity,rate)
-                status,evidence=classify_camera_slot(at_scan,scan,self.robot,self.c)
+                slot_scan=dict(scan);slot_scan['parking_points']=slot_points-lidar_origin
+                status,evidence=classify_camera_slot(at_scan,slot_scan,self.robot,self.c)
+                evidence=dict(evidence,fused_assigned_points=len(slot_points),
+                              fusion_offset=self.template_alignment.tolist())
                 remaining=float(slot['entrance'][0]-self._turn_lead())
                 late=remaining < -self.c['approach_passed_tolerance']
                 evaluations.append(dict(slot_index=slot['slot_index'],state=status,evidence=evidence,
@@ -402,8 +412,8 @@ class Parking:
                         if item['state']=='FREE' and item['rejection'] is None and
                         item['slot_index'] not in self.rejected_template_slots]
                 if usable:
-                    chosen=min(usable,key=lambda index:self.template_slots[index]['entrance'][0])
-                    self.selected=dict(self.template_slots[chosen]);evaluations[chosen]['control_applied']=True
+                    chosen=min(usable,key=lambda index:fused_slots[index]['entrance'][0])
+                    self.selected=dict(fused_slots[chosen]);evaluations[chosen]['control_applied']=True
                     selected_now=True
         self.template_debug=dict(reason=('TEMPLATE_ACTIVE' if self.template_slots else
                                          'WAITING_FOR_SIDE_ANCHOR' if self.template_armed else

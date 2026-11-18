@@ -384,6 +384,12 @@ def draw_parking(img, control, live=None):
             put(img, f"{state} {evidence.get('covered_samples', 0)}/12", *lp(*candidate['entrance']),
                 colors.get(state, GREY), 0.4)
         template=park.get('parking_template') or {}
+        fusion=park.get('parking_fusion') or {}
+        for box in fusion.get('clusters',[]):
+            polygon(box.get('points',[]),CYAN,1)
+            centre=box.get('centroid',[0.,0.]);slot=box.get('slot_index')
+            put(img,f"L{box.get('id','?')} -> S{'-' if slot is None else slot+1}",
+                *lp(*centre),CYAN,.35)
         for result in template.get('evaluations', []):
             state=result.get('state','UNKNOWN');slot=result.get('slot_index','?')
             color=colors.get(state,GREY);states.append(state)
@@ -409,7 +415,8 @@ def draw_parking(img, control, live=None):
         return f"PARK live (driver off) {','.join(states) or 'no gap'}"[:64]
     if park.get('state')=='parking_cruise':
         sign=park.get('sign') or {}
-        return f"PARK CRUISE LiDAR ON near {sign.get('near_seen')} missing {sign.get('missing_results',0)}"
+        offset=(park.get('parking_fusion') or {}).get('offset',[0.,0.])
+        return f"PARK CRUISE fusion {offset[0]:+.2f},{offset[1]:+.2f} near {sign.get('near_seen')}"
     if park.get('state')=='parking_approach':
         approach=park.get('approach') or {}
         return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
