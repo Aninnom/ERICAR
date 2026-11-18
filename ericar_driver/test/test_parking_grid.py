@@ -2,7 +2,8 @@
 import math
 import numpy as np
 
-from ericar_driver.parking_grid import grid_slots_from_ground_segments,reachable_right_slots
+from ericar_driver.parking_grid import (grid_slots_from_ground_segments,partial_grid_slots_from_ground_segments,
+                                        reachable_right_slots)
 
 
 def grid_segments(angle=0.,missing=()):
@@ -50,6 +51,16 @@ def test_irregular_cell_size_is_rejected():
     segments[-1]=[2.35,-.20,2.35,-1.38]
     cells=grid_slots_from_ground_segments(segments)
     assert len(cells)==4
+
+
+def test_three_visible_sides_reconstruct_known_size_cell():
+    segments=[[.60,-.20,.60,-.79],[1.10,-.20,1.10,-.79],[.60,-.20,1.10,-.20]]
+    cells=partial_grid_slots_from_ground_segments(segments)
+    reachable=reachable_right_slots(cells)
+    assert len(reachable)==1
+    assert reachable[0]['source']=='painted_grid_partial'
+    assert np.allclose(reachable[0]['entrance'],[.85,-.20])
+    assert reachable[0]['normal'][1]<-.9
 
 
 if __name__=='__main__':

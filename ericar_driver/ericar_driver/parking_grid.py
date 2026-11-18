@@ -10,9 +10,6 @@ import cv2
 import numpy as np
 
 from .parking_control import ground_points
-from .parking_white import white_mask
-
-
 def _angle_difference(first, second):
     difference=abs(first-second)%math.pi
     return min(difference,math.pi-difference)
@@ -126,10 +123,72 @@ def grid_slots_from_ground_segments(segments, slot_width=.50, slot_depth=.59,
     return kept
 
 
-def reachable_right_slots(candidates, minimum_forward=.30, right_normal_y=-.55):
+def partial_grid_slots_from_ground_segments(segments,slot_width=.50,slot_depth=.59,
+                                            size_tolerance=.12,angle_tolerance=.18,
+                                            merge_distance=.045,extrapolation=.14):
+    """Infer a known-size cell from two side lines and one entrance line."""
+    segments=np.asarray(segments,float).reshape(-1,4)
+    if not len(segments):return []
+    starts=segments[:,:2];ends=segments[:,2:];delta=ends-starts
+    lengths=np.linalg.norm(delta,axis=1)
+    valid=np.isfinite(segments).all(axis=1)&(lengths>.10)
+    if np.count_nonzero(valid)<3:return []
+    starts,ends,delta,lengths=starts[valid],ends[valid],delta[valid],lengths[valid]
+    angles=np.arctan2(delta[:,1],delta[:,0])
+    axis_angle=math.atan2(float(np.sum(lengths*np.sin(4*angles))),
+                          float(np.sum(lengths*np.cos(4*angles))))/4
+    axes=(np.array([math.cos(axis_angle),math.sin(axis_angle)]),
+          np.array([-math.sin(axis_angle),math.cos(axis_angle)]))
+    families=([],[])
+    for start,end,length,angle in zip(starts,ends,lengths,angles):
+        errors=(_angle_difference(angle,axis_angle),_angle_difference(angle,axis_angle+math.pi/2))
+        family=0 if errors[0]<=errors[1] else 1
+        if errors[family]>angle_tolerance:continue
+        direction=axes[family];perpendicular=axes[1-family]
+        projection=sorted((float(start@direction),float(end@direction)))
+        families[family].append(dict(offset=float(((start+end)/2)@perpendicular),
+                                             projection_min=projection[0],projection_max=projection[1],
+                                             length=float(length)))
+    merged=(_cluster_lines(families[0],merge_distance),_cluster_lines(families[1],merge_distance))
+    candidates=[]
+    for side_index in (0,1):
+        direction=axes[side_index];across=axes[1-side_index]
+        side_lines=merged[side_index];cross_lines=merged[1-side_index]
+        for left,right in zip(side_lines,side_lines[1:]):
+            width=right['offset']-left['offset']
+            if abs(width-slot_width)>size_tolerance:continue
+            for entrance_line in cross_lines:
+                if not _covers(entrance_line,left['offset'],right['offset'],extrapolation):continue
+                entrance=direction*entrance_line['offset']+across*(left['offset']+right['offset'])/2
+                # The cell interior is the side farther from the vehicle.
+                options=(direction,-direction)
+                normal=max(options,key=lambda value:np.linalg.norm(entrance+value*slot_depth))
+                far=float(entrance_line['offset']+np.dot(normal,direction)*slot_depth)
+                if not (_covers(left,min(entrance_line['offset'],far),max(entrance_line['offset'],far),extrapolation) and
+                        _covers(right,min(entrance_line['offset'],far),max(entrance_line['offset'],far),extrapolation)):
+                    continue
+                tangent=across
+                corners=np.array([entrance-width/2*tangent,entrance+width/2*tangent,
+                                  entrance+width/2*tangent+slot_depth*normal,
+                                  entrance-width/2*tangent+slot_depth*normal])
+                center=entrance+normal*slot_depth/2
+                candidates.append(dict(entrance=entrance.tolist(),tangent=tangent.tolist(),normal=normal.tolist(),
+                    width=float(width),depth=float(slot_depth),polygon=corners.tolist(),center=center.tolist(),
+                    source='painted_grid_partial',requires_measured_rays=True,geometry_score=.75))
+    kept=[]
+    for candidate in candidates:
+        if any(np.linalg.norm(np.asarray(candidate['center'])-np.asarray(other['center']))<merge_distance*2
+               for other in kept):continue
+        kept.append(candidate)
+    return kept
+
+
+def reachable_right_slots(candidates, minimum_forward=.30, right_normal_y=-.55,
+                          entrance_right_min=-.85,entrance_right_max=-.05):
     """Keep the nearest right-facing row reachable by the existing right turn."""
     usable=[candidate for candidate in candidates
-            if candidate['entrance'][0]>=minimum_forward and candidate['normal'][1]<=right_normal_y]
+            if (candidate['entrance'][0]>=minimum_forward and candidate['normal'][1]<=right_normal_y and
+                entrance_right_min<=candidate['entrance'][1]<=entrance_right_max)]
     result=[]
     for candidate in usable:
         tangent=np.asarray(candidate['tangent']);center=np.asarray(candidate['center'])
@@ -144,12 +203,28 @@ def reachable_right_slots(candidates, minimum_forward=.30, right_normal_y=-.55):
     return sorted(result,key=lambda item:item['entrance'][0])
 
 
-def parking_grid_candidates(image, robot, parking):
-    """Detect painted metric cells from one image; occupancy remains LiDAR's job."""
-    mask=white_mask(image)
-    if mask is None:return [],dict(reason='NO_IMAGE',segments=[])
-    h,w=mask.shape;roi=mask.copy();roi[:int(h*parking.get('grid_roi_top',.42))]=0
-    raw=cv2.HoughLinesP(roi,1,np.pi/180,parking.get('grid_hough_votes',18),
+def move_ground_segments(segments,dt,velocity,angular_velocity):
+    """Move stored body-frame line segments to the current vehicle frame."""
+    values=np.asarray(segments,float).reshape(-1,4)
+    if not len(values):return []
+    yaw=angular_velocity*dt;travel=velocity*dt
+    x=travel if abs(yaw)<1e-8 else travel*math.sin(yaw)/yaw
+    y=0. if abs(yaw)<1e-8 else travel*(1-math.cos(yaw))/yaw
+    c,s=math.cos(yaw),math.sin(yaw);rotation=np.array([[c,-s],[s,c]])
+    points=(values.reshape(-1,2)-[x,y])@rotation
+    return points.reshape(-1,4).tolist()
+
+
+def _paint_mask(image,low,high,roi_top):
+    hsv=cv2.cvtColor(image,cv2.COLOR_BGR2HSV)
+    mask=cv2.inRange(hsv,np.asarray(low,np.uint8),np.asarray(high,np.uint8))
+    mask[:int(image.shape[0]*roi_top)]=0
+    return cv2.morphologyEx(mask,cv2.MORPH_OPEN,np.ones((2,2),np.uint8))
+
+
+def _ground_segments(mask,image,robot,parking):
+    h,w=mask.shape
+    raw=cv2.HoughLinesP(mask,1,np.pi/180,parking.get('grid_hough_votes',18),
                         minLineLength=int(w*parking.get('grid_min_length_fraction',.08)),maxLineGap=18)
     ground=[];pixels=[]
     if raw is not None:
@@ -159,9 +234,49 @@ def parking_grid_candidates(image, robot, parking):
             length=float(np.linalg.norm(points[1]-points[0]))
             if length<.10 or points[:,0].min()<.15 or points[:,0].max()>3.:continue
             if np.max(np.abs(points[:,1]))>1.8:continue
+            # Parking is on the right.  Reject left-side lane/background lines
+            # before they can dominate the orthogonal grid-axis estimate.
+            if float(points[:,1].mean())>parking.get('grid_right_midpoint_max',.15):continue
             ground.append([*points[0],*points[1]]);pixels.append(line.tolist())
-    cells=grid_slots_from_ground_segments(ground,parking.get('grid_slot_width',.50),
-        parking.get('grid_slot_depth',.59),parking.get('grid_size_tolerance',.12))
-    reachable=reachable_right_slots(cells,parking.get('view_near',.30))
+    return ground,pixels
+
+
+def parking_grid_candidates(image, robot, parking, prior_segments=None):
+    """Detect yellow/white metric cells; occupancy remains LiDAR's job."""
+    if image is None:return [],dict(reason='NO_IMAGE',segments=[])
+    top=parking.get('grid_roi_top',.42)
+    yellow=_paint_mask(image,parking.get('grid_yellow_min',[18,40,50]),
+                       parking.get('grid_yellow_max',[40,255,255]),top)
+    white=_paint_mask(image,parking.get('grid_white_min',[0,0,95]),
+                      parking.get('grid_white_max',[179,85,255]),top)
+    current={};pixels={}
+    current['yellow'],pixels['yellow']=_ground_segments(yellow,image,robot,parking)
+    current['white'],pixels['white']=_ground_segments(white,image,robot,parking)
+    prior=prior_segments or {}
+    sources={color:list(prior.get(color,[]))+current[color] for color in ('yellow','white')}
+    sources['combined']=sources['yellow']+sources['white']
+    all_cells=[];chosen_color=None;chosen_segments=[]
+    # Actual 11/18 course cells are yellow.  White and combined remain fallback
+    # for the earlier official layout without letting stop lines dominate first.
+    for color in ('yellow','white','combined'):
+        cells=grid_slots_from_ground_segments(sources[color],parking.get('grid_slot_width',.50),
+            parking.get('grid_slot_depth',.59),parking.get('grid_size_tolerance',.12),
+            extrapolation=parking.get('grid_maximum_extrapolation',.14))
+        if not cells:
+            cells=partial_grid_slots_from_ground_segments(sources[color],parking.get('grid_slot_width',.50),
+                parking.get('grid_slot_depth',.59),parking.get('grid_size_tolerance',.12),
+                extrapolation=parking.get('grid_maximum_extrapolation',.14))
+        reachable=reachable_right_slots(cells,parking.get('view_near',.30),
+            entrance_right_min=parking.get('grid_entrance_right_min',-.85),
+            entrance_right_max=parking.get('grid_entrance_right_max',-.05))
+        all_cells.extend(cells)
+        if reachable:
+            chosen_color=color;chosen_segments=sources[color];break
+    flat_pixels=(pixels['yellow']+pixels['white'])[:160]
+    flat_colors=(['yellow']*len(pixels['yellow'])+['white']*len(pixels['white']))[:160]
+    debug_segments=(chosen_segments or sources['combined'])[-120:]
     return reachable,dict(reason='GRID_SLOTS_FOUND' if reachable else 'NO_REACHABLE_GRID_SLOT',
-                          segments_px=pixels,segments_ground=ground,all_cells=cells)
+                          color=chosen_color,segments_px=flat_pixels,
+                          segment_colors=flat_colors,
+                          segments_ground=debug_segments,all_cells=all_cells[:24],
+                          current_segments_by_color=current)
