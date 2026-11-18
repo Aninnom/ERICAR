@@ -5,6 +5,7 @@ from .common import clip
 from .lidar import body_points
 from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
 from .parking_grid import parking_grid_candidates,move_ground_segments
+from .parking_template import parking_template_landmarks,slots_from_anchor
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
 from .parking_sign import SignPassage,slow_distance
@@ -22,6 +23,8 @@ class Parking:
         self.state='idle';self.reason='WAITING_FOR_PARKING_SIGN';self.debug={};self.stable_since=None
         self.selected=None;self.gap_debug={};self.line_debug={};self.last_scan=None
         self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
+        self.template_debug={};self.template_armed=False;self.template_start_frames=0
+        self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -42,6 +45,8 @@ class Parking:
         self.loss_frames=0;self.search_distance=self.turn_distance=0.;self.motion_since=None
         self.gap_debug={};self.line_debug={}
         self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
+        self.template_debug={};self.template_armed=False;self.template_start_frames=0
+        self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -63,6 +68,7 @@ class Parking:
             feedback.update(active=False,reason=self.reason,pixel_segments=[],reference_pixel=None,steering_rad=0.)
         self.debug=dict(mode='parking_real2',state=self.state,reason=self.reason,gap=self.gap_debug,
                         parking_grid=self.grid_debug,
+                        parking_template=self.template_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
@@ -299,6 +305,71 @@ class Parking:
                              segments_ground=details.get('segments_ground',[]),evaluations=evaluations)
         return selected_now
 
+    def _observe_template(self,image,image_stamp,scan,scan_stamp,now,velocity,rate):
+        """Latch a three-cell metric lot from the start and side white lines."""
+        if image_stamp==self.last_template_image:return False
+        previous=self.last_template_image;self.last_template_image=image_stamp
+        elapsed=0. if previous is None else max(0.,min(.5,image_stamp-previous))
+        if self.template_anchor_track is not None:
+            self._move_target(self.template_anchor_track['target'],elapsed,velocity,rate)
+        for slot in self.template_slots:self._move_target(slot,elapsed,velocity,rate)
+        try:landmarks=parking_template_landmarks(image,self.robot,self.c)
+        except Exception as error:
+            self.template_debug=dict(reason='TEMPLATE_DETECTOR_ERROR',error=type(error).__name__,
+                                     armed=self.template_armed,evaluations=[])
+            return False
+        if not self.template_armed:
+            self.template_start_frames=self.template_start_frames+1 if landmarks['start_seen'] else 0
+            if self.template_start_frames>=self.c.get('template_start_frames',2):self.template_armed=True
+        anchor_observations=[]
+        if self.template_armed and not self.template_slots and landmarks['anchors']:
+            anchor=landmarks['anchors'][0]
+            observed=slots_from_anchor(anchor['anchor'],anchor['tangent'],anchor['normal'],
+                self.c.get('grid_slot_width',.50),self.c.get('grid_slot_depth',.59),
+                self.c.get('template_slot_count',3))
+            for slot in observed:self._move_target(slot,now-image_stamp,velocity,rate)
+            first=observed[0];count=1
+            if self.template_anchor_track is not None:
+                old=self.template_anchor_track['target']
+                distance=float(np.linalg.norm(np.asarray(old['entrance'])-np.asarray(first['entrance'])))
+                alignment=float(np.dot(old['tangent'],first['tangent']))
+                if (distance<=self.c.get('template_anchor_distance',.18) and
+                        alignment>=self.c.get('template_anchor_alignment',.94)):
+                    count=self.template_anchor_track['count']+1
+            self.template_anchor_track=dict(target=dict(first),count=count)
+            anchor_observations.append(dict(confidence=anchor['confidence'],entrance=first['entrance'],
+                                            observations=count))
+            if count>=self.c.get('template_anchor_frames',2):self.template_slots=observed
+        evaluations=[];selected_now=False
+        if self.template_slots:
+            for slot in self.template_slots:
+                at_scan=dict(slot);self._move_target(at_scan,scan_stamp-now,velocity,rate)
+                status,evidence=classify_camera_slot(at_scan,scan,self.robot,self.c)
+                remaining=float(slot['entrance'][0]-self._turn_lead())
+                late=remaining < -self.c['approach_passed_tolerance']
+                evaluations.append(dict(slot_index=slot['slot_index'],state=status,evidence=evidence,
+                    entrance=slot['entrance'],polygon=slot['polygon'],turn_start_remaining_m=remaining,
+                    rejection='TURN_START_ALREADY_PASSED' if late and status=='FREE' else None,
+                    control_applied=False))
+            if self.selected is None:
+                usable=[index for index,item in enumerate(evaluations)
+                        if item['state']=='FREE' and item['rejection'] is None]
+                if usable:
+                    chosen=min(usable,key=lambda index:self.template_slots[index]['entrance'][0])
+                    self.selected=dict(self.template_slots[chosen]);evaluations[chosen]['control_applied']=True
+                    selected_now=True
+        self.template_debug=dict(reason=('TEMPLATE_ACTIVE' if self.template_slots else
+                                         'WAITING_FOR_SIDE_ANCHOR' if self.template_armed else
+                                         'WAITING_FOR_START_LINE'),
+                                 armed=self.template_armed,start_seen=landmarks['start_seen'],
+                                 start_frames=self.template_start_frames,anchors=anchor_observations,
+                                 anchor_candidates=landmarks['anchors'][:6],slot_count=len(self.template_slots),
+                                 evaluations=evaluations,start_segments=landmarks.get('start_segments',[]),
+                                 white_longitudinal=landmarks.get('white_longitudinal',[]),
+                                 yellow_longitudinal=landmarks.get('yellow_longitudinal',[]),
+                                 control_applied=selected_now)
+        return selected_now
+
     def step(self,now,image,image_stamp,scan,scan_stamp,pose,pose_stamp,history,velocity,lane,
              camera_info=None,search_command=None,angular_velocity=0.,detections=(),detection_stamp=-1e9,
              measured_turn_rate=None):
@@ -311,7 +382,9 @@ class Parking:
         if image is None or not 0<=now-image_stamp<self.c['sensor_timeout']:
             self.pause(now);return self._output()
         self.sign.observe(detections,detection_stamp,now)
-        grid_selected=self._observe_grid(image,image_stamp,scan,scan_stamp,now,velocity,rate)
+        if self.c.get('template_enabled',False):
+            target_selected=self._observe_template(image,image_stamp,scan,scan_stamp,now,velocity,rate)
+        else:target_selected=self._observe_grid(image,image_stamp,scan,scan_stamp,now,velocity,rate)
         late=False
         if self.state=='parking_cruise':
             self.cruise_distance+=abs(velocity)*dt
@@ -320,8 +393,10 @@ class Parking:
             if self.selected is not None:
                 # A freshly fused grid target is already expressed at ``now``.
                 # Moving it again here would advance the turn point twice.
-                if not grid_selected:self._move_target(self.selected,dt,velocity,rate)
+                if not target_selected:self._move_target(self.selected,dt,velocity,rate)
                 self.nearest_start=self.selected['entrance'][0]-self._turn_lead()
+            elif self.c.get('template_enabled',False):
+                if self.template_armed:self.nearest_start=0.
             else:late=self._find_gap(scan,scan_stamp,now,velocity,rate)
             cap=self.c['trial_cruise_max_speed'] if self.c.get('test_drive_until_sign') else self.c['cruise_max_speed']
             requested=0. if search_command is None else min(cap,max(0.,search_command[0]))
@@ -344,7 +419,8 @@ class Parking:
             self.search_distance+=abs(velocity)*dt
             if now-self.slow_started>self.c['search_timeout']:return self.fail('NO_FREE_GAP_BEFORE_TIMEOUT')
             if self.search_distance>self.c['search_distance_limit']:return self.fail('SEARCH_DISTANCE_LIMIT')
-            if self.selected is None:late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
+            if self.selected is None and not self.c.get('template_enabled',False):
+                late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
             if self.selected is not None:
                 self.state='parking_approach';self.approach_started=now;self.approach_distance=0.;dt=0.
         if self.state=='parking_approach':

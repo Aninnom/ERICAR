@@ -310,6 +310,17 @@ ANSWER_CONFIG = {
         'grid_right_midpoint_max': .15, 'grid_history_frames': 6,
         'grid_maximum_extrapolation': .14,
         'grid_entrance_right_min': -.85, 'grid_entrance_right_max': -.05,
+        # 11/18 실차: 가로 흰 선으로 구간을 arm하고 황색→흰색 세로선 전환점에서 3칸 생성.
+        # 이 모드에서는 장애물 두 개 사이 gap이 목표를 선택하지 않는다.
+        'template_enabled': True, 'template_slot_count': 3,
+        'template_start_frames': 2, 'template_anchor_frames': 2,
+        'template_anchor_distance': .18, 'template_anchor_alignment': .94,
+        'template_roi_top': .40, 'template_hough_votes': 18,
+        'template_min_length_fraction': .07, 'template_max_line_gap_px': 18,
+        'template_min_ground_length': .18, 'template_start_min_length': .35,
+        'template_ground_far': 2.5, 'template_orientation_ratio': 1.8,
+        'template_right_min': -1.1, 'template_right_max': -.05,
+        'template_transition_tolerance': .24,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
