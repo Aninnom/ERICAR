@@ -81,6 +81,8 @@ class DashLane:
     def reset(self):
         self.active = False
         self.known = False      # 위치 추정이 살아 있음 (조향을 안 맡은 동안에도 S2 안이면 적분·보정 계속)
+        self.zone_ahead = None  # 3차로 구간 시작(첫 흰 점선)까지 앞 거리 (m, 뒷축 기준). 지나면 음수
+        self.entry_centre = 0.0 # 들어온 1차로 중앙의 옆 위치 (노란 선 = 이 값 ± 차로 폭/2)
         self.y = 0.0            # 차(뒷축) 도로 기준 옆 위치 (m, 가운데 차로 중앙 0, + 왼쪽)
         self.y_cmd = 0.0        # 지금 고른 목표 옆 위치
         self.seen_stamp = None
@@ -129,6 +131,9 @@ class DashLane:
         self.y = (index-self.count//2)*self.width-centre
         self.y_cmd = self.y
         self.unfixed, self.fixes, self.seen_stamp = 0.0, 0, None
+        self.entry_centre = (index-self.count//2)*self.width
+        nearest = [line['nearest'] for line in lane.get('dash_lines') or [] if 'nearest' in line]
+        self.zone_ahead = min(nearest) if nearest else None
 
     def fix(self, lane, heading):
         """새 영상의 흰 점선으로 y 보정. 반환: 이번 프레임에 보정했는지"""
@@ -185,6 +190,23 @@ class DashLane:
         hit = (lateral[None, :] > lo) & (lateral[None, :] < hi)
         return ~hit.any(axis=1)
 
+    def entry_walls(self, forward, lateral):
+        """3차로 구간 시작 전 1차로 노란 선(들어온 차로 중앙 ± 차로 폭/2)을 가상 점으로 더함 (11/19 사용자: 진입 때 너무 일찍
+        조향해 노란 선을 밟거나 넘음, 합성 시험에서 6~8 cm 넘음). 차체 뒤끝까지 구간 시작을 지나면 없음
+        경로 검사가 이 점을 피하므로 옆 이동은 차체가 1차로를 다 빠져나가는 만큼 늦게 시작함"""
+        if self.zone_ahead is None or not self.c.get('entry_wall', True):
+            return forward, lateral
+        rear = self.robot['length']-self.robot.get('front_bumper_x', self.robot['length'])
+        if self.zone_ahead < -rear-.02:
+            return forward, lateral
+        f = np.arange(-rear-.05, self.zone_ahead, .02)
+        if not len(f):
+            return forward, lateral
+        half = self.width/2
+        wall_f = np.concatenate((f, f))
+        wall_y = np.concatenate((np.full(len(f), self.entry_centre+half), np.full(len(f), self.entry_centre-half)))
+        return np.concatenate((forward, wall_f)), np.concatenate((lateral, wall_y))
+
     def track(self, lane, velocity, dt, heading):
         """위치 추정만 (조향 안 맡음). 반환: 추정이 살아 있는지"""
         if not self.known:
@@ -198,6 +220,12 @@ class DashLane:
             self.known = True
         # 추측 항법: 차가 도로보다 오른쪽을 보면(heading > 0) 오른쪽(− y)으로 감
         self.y -= velocity*math.sin(heading)*dt
+        if self.zone_ahead is not None:
+            self.zone_ahead -= velocity*math.cos(heading)*dt
+            # 구간 시작이 아직 화면(앞 near 0.6 m 넘게)에 보이면 가장 가까운 점선 끝으로 다시 맞춤. 그 안은 주행 거리로만
+            nearest = [line['nearest'] for line in lane.get('dash_lines') or [] if 'nearest' in line]
+            if nearest and self.zone_ahead > self.c.get('zone_refresh', .7):
+                self.zone_ahead = min(nearest)
         self.unfixed += abs(velocity)*dt
         self.fix(lane, heading)
         if self.unfixed > self.c.get('dash_memory', 2.0):
@@ -237,6 +265,7 @@ class DashLane:
         rear = self.robot['length']-self.robot.get('front_bumper_x', self.robot['length'])
         keep = (forward > -rear-.05) & (forward < c.get('window', 1.4)) & (np.abs(lateral) < c.get('wall_y', .72))
         forward, lateral = forward[keep], lateral[keep]
+        forward, lateral = self.entry_walls(forward, lateral)
         limit = c.get('y_max', .52)
         candidates = np.arange(-limit, limit+1e-9, c.get('step', .005))
         want = self.preferred(direction, exit_now, center_now)
@@ -255,7 +284,8 @@ class DashLane:
         self.debug = dict(reason='tracking', y=round(self.y, 3), want=round(want, 3), front=round(front, 2),
                           fixes=self.fixes, unfixed=round(self.unfixed, 2), lane_index=self.lane_index(),
                           straddling=self.straddling, feasible=int(ok.sum()), tier=tier, points=int(len(forward)),
-                          fix_error=self.debug.get('fix_error'), exit=bool(exit_now), center=bool(center_now))
+                          fix_error=self.debug.get('fix_error'), exit=bool(exit_now), center=bool(center_now),
+                          zone_ahead=None if self.zone_ahead is None else round(self.zone_ahead, 2))
         if tier is None and c.get('handoff', True) and (front <= c.get('stop_distance', .6) or c.get('handoff_early', True)):
             # 비는 위치 없음: 기존 방식(짧은 S자·서행 접근·후진 재시도 BackUp)에 이번 주기를 맡김. 기존 방식이 이동을 시작하면
             # 끝날 때까지 기존 방식 (driver: lane_change.active면 점선 추종 끔), 끝나면 점선 추종이 그 위치에서 이어 감

@@ -279,6 +279,12 @@ def run(name, case, odom_yaw_scale=1.07, duration=70.0, verbose=False):
             if ZONE_START <= sim['s'] < ZONE_END:
                 out['max_abs_y'] = max(out['max_abs_y'], abs(sim['y']))
                 out['max_y_signed'] = max(out.get('max_y_signed', 0.0), sim['y'], key=abs)
+            # 3차로 진입 전 1차로 구간(s < ZONE_START, 노란 선 ±0.26)에서 차체 모서리가 선 중심을 넘은 양 (11/19 실차: 진입 때 너무 일찍 조향)
+            for dx, dy in ((-0.286, -CAR_W/2), (-0.286, CAR_W/2), (0.044, -CAR_W/2), (0.044, CAR_W/2)):
+                cs = sim['s'] + dx*math.cos(sim['psi']) - dy*math.sin(sim['psi'])
+                cy = sim['y'] + dx*math.sin(sim['psi']) + dy*math.cos(sim['psi'])
+                if cs < ZONE_START and sim['s'] > 0.5:
+                    out['entry_over'] = max(out.get('entry_over', -1.0), abs(cy) - 0.26)
             if collides(sim['s'], sim['y'], sim['psi'], obstacles):
                 out['collision'] = True
                 out.setdefault('collision_at', (round(t, 1), round(sim['s'], 2), round(sim['y'], 2), round(sim['psi'], 2)))
@@ -353,7 +359,7 @@ def judge(case_name, r):
     ok = reached and not off and not r['collision'] and fork_ok
     info = dict(도달=reached, 이탈=off, 충돌=r['collision'], 최대정지_s=round(r['stuck'], 1),
                 끝차로=r['end_lane'], 갈림길=('-' if want is None else fork_ok), 끝=r['final'], 최대횡=round(r['max_abs_y'], 2),
-                시간=r.get('time'))
+                시간=r.get('time'), 진입침범=round(r.get('entry_over', -1.0), 3))
     if r.get('collision_at'):
         info['충돌지점'] = r['collision_at']      # (시각, s, y, 방향) 첫 접촉
     if 'post_clear' in r:
