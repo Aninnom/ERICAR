@@ -103,6 +103,7 @@ class LaneChange:
         # 11/16 anchor_1116_2313: 코너 출구에서 카메라 차선 방향이 실제와 45° 달라 차선 변경이 반대로 감 → 방향 기준은 IMU
         self.road_heading = None
         self.requested_move = False    # 지금 이동이 갈림길 요청인지 (pursuit 조향의 보는 거리)
+        self.dash_shift = 0.0           # 한 칸 회피 목표의 점선 방향 편차(m)
         self.hold_steering = 0.0       # 짧은 S자 중 마지막 안전 조향 (위험해 멈출 때 바퀴 고정)
         self.engaged, self.clear_since = False, None   # 앞 장애물 회피 판단 중인지, 앞이 빈 채 지난 시각 (front_clear_hold)
         self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
@@ -283,12 +284,24 @@ class LaneChange:
             self.walls[name] = (round(float(slope), 3), round(float(offset), 3))
         return points[keep]
 
+    def intermediate_dash_shift(self, lane, direction):
+        """바깥에서 가운데로 회피할 때 넘어가는 흰 점선 쪽으로 목표를 당기는 거리(m)."""
+        side = 'left' if direction > 0 else 'right'
+        if (self.c['lane_count'] != 3 or self.index+direction != 1
+                or lane.get('colors', {}).get(side) != 'white'
+                or lane.get('solid', {}).get(side) is not False):
+            return 0.0
+        return -direction*self.c.get('intermediate_dash_bias', 0.0)
+
+    def steering_shift(self):
+        return self.dash_shift if self.span == 1 and not self.requested_move else 0.0
+
     def steer(self, points, dt):
         """한 차로 이동 중: 목표 횡이동(target)까지 pure pursuit, 막히면 가까운 안전 조향"""
         c = self.c
         # 이동 중 벽 제거: 목적 차로 중앙(차 기준) = target − offset, 목적 차로 번호 = index + direction
         points = self.drop_walls(points, self.heading, self.target-self.offset, self.index+self.direction*self.span)
-        error = self.target-self.offset
+        error = self.target-self.offset+self.steering_shift()
         if self.short or c.get('steer_mode', 'arc') == 'arc':
             # 짧은 S자(앞 장애물 short_front 안)도 원호–직선–원호로, 각도만 short_arc_angle로 크게 (소민 11/16)
             desired = self.arc_steering(error)
@@ -320,6 +333,8 @@ class LaneChange:
             #  오른쪽 −0.05~−0.21로 0.53 m 더 감, 방향 12.7°·차체가 노란 선 밖, 장애물 옆에 낌) → 따르지 않고 이동을 끝냄 (update)
             self.debug['back_end'] = round(float(steering), 3)
         self.debug.update(desired=desired, safe=safe, error=error, walls=self.walls)
+        if self.steering_shift():
+            self.debug['dash_shift'] = self.dash_shift
         short = self.short
         self.debug['reason'] = ('changing_short' if short else 'changing') if safe else 'no_safe_steering'
         if short:
@@ -401,13 +416,13 @@ class LaneChange:
         # 오른쪽 6.9° 틀어진 채 오차 −0.03 → '중앙'으로 보고 종료했으나 실제는 중앙에서 0.10 m 못 미침.
         # → 방향을 보정한 차로 중앙값(camera_correct와 같은 식)으로 판정. 끄기: camera_finish_center False
         middle = lane.get('error', 0.0)
-        if c.get('camera_finish_center', False) and lane.get('valid'):
+        if lane.get('valid') and (c.get('camera_finish_center', False) or self.steering_shift()):
             heading = lane.get('heading', 0.0)
             middle = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
         return (self.seen_lane == self.index+self.direction*self.span and self.seen_count >= 2 and lane.get('valid') and
                 self.camera_trusted(lane) and
                 abs(self.offset) > c['lane_width']*c.get('camera_finish_progress', .6) and
-                abs(middle) < c.get('camera_finish_error', .06) and
+                abs(middle+self.steering_shift()) < c.get('camera_finish_error', .06) and
                 abs(lane['heading']) < c.get('camera_finish_heading', .12))
 
     def camera_correct(self, lane):
@@ -458,12 +473,20 @@ class LaneChange:
                 if not self.try_reverse(points, fork_lanes, request_limit):
                     self.redecide(points, fork_lanes)
             self.camera_correct(lane)
-            error = self.target-self.offset
+            error = self.target-self.offset+self.steering_shift()
             if self.c.get('steer_mode', 'arc') == 'arc':
                 # 복귀 원호가 끝나 도로 방향과 나란해지면 종료 (남은 횡오차는 차선 주행이 처리)
                 done = self.back and abs(self.heading) < self.c.get('arc_finish_heading', .05)
             else:
                 done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
+            shift = self.steering_shift()
+            if shift:
+                # 복귀 원호의 조향 여유 때문에 점선을 아직 밟는 위치에서 종료되는 경우 방지
+                inset = self.c['lane_width']/2-self.direction*(self.target-self.offset)
+                room = self.robot['width']/2+self.c['margin']
+                if (inset >= room and abs(error) < self.c['finish_error']
+                        and abs(self.heading) < self.c.get('camera_finish_heading', .12)):
+                    done = True
             done = done or self.camera_finished(lane)
             # 지나침 방지: 목표보다 overshoot(m) 넘게 갔으면 바로 차선 주행으로 (바깥 노란 선 넘음 방지, 소민)
             done = done or abs(self.offset) > abs(self.target)+self.c.get('overshoot', .08)
@@ -554,13 +577,24 @@ class LaneChange:
         if not requested:
             self.engaged = True
         direction = self.choose_direction(free, lane, requested, preferred)
+        dash_shift = 0.0
         if direction and not requested and self.c.get('avoid_plan', False):
             # 일반 회피 경로 확인: 이 이동이 쓸 각도(앞이 short_front 안이면 short_arc_angle)로 경로를 그려 여유가 모자라면 아직 출발 안 함
             short = free[0] < self.c.get('short_front', 1.0)
             angle = self.c.get('short_arc_angle', 45.0) if short else self.c.get('arc_angle', 30.0)
             plan_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
-            gap = self.path_gap(forward, left, direction*self.c['lane_width']+plan_center, angle,
-                                -self.start_heading(heading), self.c.get('avoid_plan_tail', .2))
+            dash_shift = self.intermediate_dash_shift(lane, direction)
+            tail = self.c.get('avoid_plan_tail', .2)
+            yaw = -self.start_heading(heading)
+            target = direction*self.c['lane_width']+plan_center
+            margin = self.c.get('arc_margin', .03)
+            if dash_shift and short:
+                margin = self.c.get('short_arc_margin', margin)
+            gap = self.path_gap(forward, left, target+dash_shift, angle, yaw, tail,
+                                margin=margin)
+            if dash_shift and gap < self.c.get('avoid_plan_margin', .04):
+                dash_shift = 0.0
+                gap = self.path_gap(forward, left, target, angle, yaw, tail)
             self.debug['avoid_gap'] = round(min(gap, 9.9), 3)
             if gap < self.c.get('avoid_plan_margin', .04):
                 blocked, direction = direction, 0
@@ -693,6 +727,7 @@ class LaneChange:
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.span, self.move_angle = 1, None
+        self.dash_shift = dash_shift
         if cross is not None:
             self.span, self.move_angle, self.short = 2, cross['angle'], False     # 두 칸 직선 가로지르기 (보통 속도)
         if plan is not None:
@@ -854,12 +889,14 @@ class LaneChange:
         self.plan = self.debug['plan'] = info
         return True
 
-    def path_gap(self, forward, left, target, angle, yaw0, tail):
+    def path_gap(self, forward, left, target, angle, yaw0, tail, margin=None):
         """원호–직선–원호 경로(목표 횡거리 target m, 각도 angle °)를 따라갈 때 차체와 라이다 점 사이 최소 여유(m)"""
         robot = self.robot
         points = np.column_stack((forward, left)) if len(forward) else np.zeros((0, 2))
         radius = robot['wheelbase']/math.tan(robot['max_steering'])
-        path, _ = arc_path(target, yaw0, math.radians(angle), radius, self.c.get('arc_margin', .03), tail=tail)
+        if margin is None:
+            margin = self.c.get('arc_margin', .03)
+        path, _ = arc_path(target, yaw0, math.radians(angle), radius, margin, tail=tail)
         body = path.copy()
         body[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
         body[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])

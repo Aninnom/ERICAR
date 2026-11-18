@@ -515,6 +515,8 @@ ANSWER_CONFIG = {
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
         'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        # 가운데로 한 칸 피할 때 넘어온 흰 점선 쪽으로 목표를 당기는 거리(m). 끄기: 0
+        'intermediate_dash_bias': 0.05,
         # 흔들림 방지 (11/16 소민): 회피 판단 중 앞이 front_clear_hold(s) 동안 계속 비어야 판단을 놓음.
         # no_side_wait: 갈림길 확정 전 양쪽 '차로 없음'이어도 차선 주행으로 넘기지 않고 천천히 다가가며 다시 판단
         'front_clear_hold': 0.5, 'no_side_wait': True,
