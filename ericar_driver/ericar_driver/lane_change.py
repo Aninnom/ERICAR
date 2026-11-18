@@ -104,6 +104,7 @@ class LaneChange:
         self.road_heading = None
         self.requested_move = False    # 지금 이동이 갈림길 요청인지 (pursuit 조향의 보는 거리)
         self.dash_shift = 0.0           # 한 칸 회피 목표의 점선 방향 편차(m)
+        self.dash_hold = 0.0            # 가운데 차로에서 다음 회피까지 유지할 편차(m)
         self.hold_steering = 0.0       # 짧은 S자 중 마지막 안전 조향 (위험해 멈출 때 바퀴 고정)
         self.engaged, self.clear_since = False, None   # 앞 장애물 회피 판단 중인지, 앞이 빈 채 지난 시각 (front_clear_hold)
         self.ended_clock = -1e9        # 마지막 이동이 끝난 시각 (self.clock 기준)
@@ -287,14 +288,31 @@ class LaneChange:
     def intermediate_dash_shift(self, lane, direction):
         """바깥에서 가운데로 회피할 때 넘어가는 흰 점선 쪽으로 목표를 당기는 거리(m)."""
         side = 'left' if direction > 0 else 'right'
-        if (self.c['lane_count'] != 3 or self.index+direction != 1
-                or lane.get('colors', {}).get(side) != 'white'
-                or lane.get('solid', {}).get(side) is not False):
+        color = lane.get('colors', {}).get(side)
+        if (self.c['lane_count'] != 3 or self.index+direction != 1 or not direction
+                or not (color == 'white' or color is None and lane.get('white_lane'))):
             return 0.0
         return -direction*self.c.get('intermediate_dash_bias', 0.0)
 
     def steering_shift(self):
         return self.dash_shift if self.span == 1 and not self.requested_move else 0.0
+
+    def dash_follow(self, lane, points, speed):
+        """가운데 차로에서 직전에 넘은 점선 옆을 유지하며 새 회피를 기다림."""
+        side = 'left' if self.dash_hold > 0 else 'right'
+        if (not self.dash_hold or self.index != 1 or self.fork_running or lane.get('abnormal')
+                or lane.get('colors', {}).get(side) != 'white'):
+            return None
+        target = lane.get('dash_targets', {}).get(side)
+        if target is None:
+            return None
+        forward, lateral = target
+        heading = lane['heading']
+        desired = pursuit_steering(forward-self.dash_hold*math.sin(heading),
+                                   lateral+self.dash_hold*math.cos(heading), self.robot)
+        steering, safe = clear_steering(points, desired, self.robot, self.c['safety_horizon'], self.c['margin'])
+        self.debug.update(reason='dash_follow', dash_hold=self.dash_hold, safe=safe)
+        return (speed if safe else 0.0), steering
 
     def steer(self, points, dt):
         """한 차로 이동 중: 목표 횡이동(target)까지 pure pursuit, 막히면 가까운 안전 조향"""
@@ -447,6 +465,8 @@ class LaneChange:
     def update(self, lane, scan, velocity, yaw_rate, dt, enabled, requested=0, preferred=0, avoid_only=False,
                request_lanes=1, request_limit=None, request_only=False, road_heading=None, fork_lanes=None):
         self.waiting = False
+        if not enabled or preferred:
+            self.dash_hold = 0.0
         self.clock += dt
         points = body_points(scan, self.robot)
         self.heading -= yaw_rate*dt
@@ -481,12 +501,12 @@ class LaneChange:
                 done = abs(error) < self.c['finish_error'] and abs(self.heading) < self.c['finish_heading']
             shift = self.steering_shift()
             if shift:
-                # 복귀 원호의 조향 여유 때문에 점선을 아직 밟는 위치에서 종료되는 경우 방지
+                # 차체가 점선을 충분히 넘으면 남은 방향 오차를 다음 조향에 인계
                 inset = self.c['lane_width']/2-self.direction*(self.target-self.offset)
                 room = self.robot['width']/2+self.c['margin']
-                if (inset >= room and abs(error) < self.c['finish_error']
-                        and abs(self.heading) < self.c.get('camera_finish_heading', .12)):
-                    done = True
+                rolling = (self.back and inset >= room and abs(error) < self.c['finish_error']
+                           and abs(self.heading) <= self.c.get('start_align', .21))
+                done = done or rolling
             done = done or self.camera_finished(lane)
             # 지나침 방지: 목표보다 overshoot(m) 넘게 갔으면 바로 차선 주행으로 (바깥 노란 선 넘음 방지, 소민)
             done = done or abs(self.offset) > abs(self.target)+self.c.get('overshoot', .08)
@@ -494,10 +514,21 @@ class LaneChange:
                 # 이동 거리 초과: 영구 정지 대신 차선 주행으로 돌아간다. 반 차로 넘게 갔으면 옮긴 것으로 본다.
                 # 두 칸 이동이 거리 초과로 끝나면 실제로 넘어간 칸 수만 반영
                 lanes = self.span if done else min(self.span, int(abs(self.offset)/self.c['lane_width']+0.5))
+                hold = shift
+                if not hold and done and self.span == 1 and not self.requested_move and self.index+self.direction == 1:
+                    # 거리 판단으로 먼저 시작한 회피도 도착 차로에서 점선을 확인하면 추종 가능
+                    side = 'right' if self.direction > 0 else 'left'
+                    if lane.get('colors', {}).get(side) == 'white':
+                        hold = -self.direction*self.c.get('intermediate_dash_bias', 0.0)
                 self.active = False
                 self.index += self.direction*lanes
                 self.seen_lane, self.seen_count = None, 0   # 이동 중 본 차로 기억은 다음 판단에 안 씀
                 self.ended_clock = self.clock
+                if hold and done and enabled and not preferred:
+                    self.dash_hold = hold
+                    # 같은 주기에 새 장애물 경로를 판단해 중간 중앙 정렬 생략
+                    return self.update(lane, scan, 0.0, 0.0, 0.0, enabled, requested, preferred, avoid_only,
+                                       request_lanes, request_limit, request_only, road_heading, fork_lanes)
                 return None
             result = self.steer(points, dt)
             if self.debug.get('back_end') is not None:
@@ -571,7 +602,7 @@ class LaneChange:
             if not self.engaged or self.clock-self.clear_since >= self.c.get('front_clear_hold', 0.0):
                 self.engaged, self.clear_since = False, None
                 self.debug['reason'] = 'front_clear'
-                return None
+                return self.dash_follow(lane, points, self.c['speed'])
         else:
             self.clear_since = None
         if not requested:
@@ -674,6 +705,9 @@ class LaneChange:
                    free[direction_] < self.c.get('beside_free', .3) for direction_, side in ((1, 'left'), (-1, 'right'))):
                 stop = min(stop, self.c.get('stop_distance_beside', .45))
             if not requested and free[0] > stop:
+                following = self.dash_follow(lane, points, self.c['approach_speed'])
+                if following is not None:
+                    return following
                 desired = pursuit_steering(lane.get('forward', .65), lane['error'], self.robot)
                 steering, safe = clear_steering(points, desired, self.robot,
                                                 self.c['safety_horizon'], self.c['margin'])
@@ -727,6 +761,7 @@ class LaneChange:
         # 차가 크게 틀어진 상태에서 목표가 한 차로 넘게 튀지 않도록 center는 반 차로 안으로 제한 (소민)
         center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, center))
         self.span, self.move_angle = 1, None
+        self.dash_hold = 0.0
         self.dash_shift = dash_shift
         if cross is not None:
             self.span, self.move_angle, self.short = 2, cross['angle'], False     # 두 칸 직선 가로지르기 (보통 속도)
@@ -740,6 +775,7 @@ class LaneChange:
 
     def cancel(self):
         """진행 중인 이동·대기를 접음 (후진 재시도 직전). 반 차로 넘게 갔으면 옮긴 것으로 봄 (거리 초과 종료와 같은 규칙)"""
+        self.dash_hold = 0.0
         if self.active:
             lanes = min(self.span, int(abs(self.offset)/self.c['lane_width']+0.5))
             self.active = False

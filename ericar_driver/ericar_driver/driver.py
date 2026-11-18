@@ -46,6 +46,7 @@ class Driver:
                                 outer_distance=m.get('fork_outer_distance', .8))
         self.hold_section = 0        # 지금(또는 마지막) 코너 유지가 시작된 구간 번호 (코너 유지 누적 회전 상한용)
         self.signs_fresh = True      # 표지판 검출이 최신인지 (update의 signs_ok)
+        self.pending_fork_sign = None
         self.sync_fork()
         self.traffic_stop_completed = False
         self.cone_exit_left = 0.0    # 라바콘 직후 저속 유지 남은 거리(m)
@@ -493,7 +494,17 @@ class Driver:
             self.slow_zone.sign = True
         self.fork.step(self.lane_change.index, self.lane_change.active, velocity, dt,
                        left_section=self.c['sections']['enabled'] and self.sections.index > START_SECTION['fork'])
-        if self.allowed('fork') and self.fork.lock(ready, detection_stamp):
+        decision_at = m.get('fork_decision_distance')
+        decision_open = (decision_at is None or not c['sections']['enabled']
+                         or self.sections.distance >= decision_at)
+        fork_allowed = self.allowed('fork')
+        arrows_ready = ready & {'left', 'right'}
+        if decision_at is None or not fork_allowed or {'left', 'right'} <= {d['name'] for d in detections}:
+            self.pending_fork_sign = None
+        elif arrows_ready:
+            self.pending_fork_sign = (arrows_ready, detection_stamp)
+        signs, sign_stamp = self.pending_fork_sign or (arrows_ready, detection_stamp)
+        if decision_open and fork_allowed and self.fork.lock(signs, sign_stamp):
             self.advance('fork')
             self.cooldowns['left'] = self.cooldowns['right'] = now + m['sign_cooldown']
         elif self.fork.running:

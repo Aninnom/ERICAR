@@ -283,6 +283,8 @@ ANSWER_CONFIG = {
         # (그 녹화: follow가 끝까지 유지돼 fork_remaining 2.5 → 라바콘 모드 차단, 콘 앞 정지). 11/16 녹화의 입구 5.2~5.6 m
         # None이면 끔. 합성 시험 장면은 3차선이 더 길어 끔 (three_lane.py, lane_change_max_distance와 같은 이유)
         'fork_enter_distance': 5.4,
+        # S2 주행 거리(m). 앞쪽 장애물 구간에서는 화살표 검출만 누적하고 후반부터 분기 방향 확정
+        'fork_decision_distance': 3.5,
         # 반대편 끝 차로에 있을 때는 표지판이 이 거리(m) 넘게 안 보여야 그 길로 진행 (가운데 차로는 기존 점선 판정)
         'fork_wrong_lane_distance': 0.4,
         # 분기 입구 뒤 이 거리(m)까지만 바깥선 하나 추종 (교통섬 앞머리의 비스듬한 선 구간). 뒤에는 두 선 모두 사용

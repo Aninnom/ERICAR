@@ -14,9 +14,10 @@ from ericar_driver.params import ANSWER_CONFIG
 from ericar_driver.lane_vision import LaneVision
 
 
-def driver():
+def driver(decision_distance=None):
     c = copy.deepcopy(ANSWER_CONFIG)
     c['missions']['start_stage'] = 'fork'
+    c['missions']['fork_decision_distance'] = decision_distance
     robot = yaml.safe_load((HERE.parent / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
     return Driver({'answer': c, 'robot': robot})
 
@@ -31,6 +32,16 @@ def test_conflicting_arrows():
     for t in (0., .1, .2):
         signs(d, ['left', 'right'], t)
     assert 'fork' not in d.done, '동시 화살표로 방향 확정'
+
+
+def test_decision_waits_for_course_distance():
+    d = driver(decision_distance=3.0)
+    for stamp in (0., .1, .2):
+        signs(d, ['left'], stamp)
+    assert d.fork_goal == 0
+    d.sections.distance = 3.0
+    signs(d, [], .3)
+    assert d.fork_goal == 1 and d.fork_sign == 'left'
 
 
 def test_both_directions():
@@ -207,6 +218,7 @@ def test_follow_enter_distance():
 
 if __name__ == '__main__':
     test_conflicting_arrows()
+    test_decision_waits_for_course_distance()
     test_both_directions()
     test_immediate_and_memory()
     test_fork_boundaries()
