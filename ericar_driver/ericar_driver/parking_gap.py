@@ -91,3 +91,54 @@ def classify_gap(bay,scan,robot,config):
                    no_return_or_invalid_samples=int(np.count_nonzero(inside&~usable)))
     free=hits==0 and covered.sum()>=details['required_samples']
     return ('FREE' if free else 'UNKNOWN'),dict(details,reason='COVERAGE_CONFIRMED' if free else 'INSUFFICIENT_VISIBLE_DEPTH')
+
+
+def classify_camera_slot(bay,scan,robot,config):
+    """Classify a camera-defined cell without requiring obstacle clustering.
+
+    Raw measured returns inside an expanded cell are occupancy evidence.  A
+    valid no-return ray (YDLidar 0 normalized to range_max, or +inf) is useful
+    FREE evidence because it passed through the requested sample depth.  Truly
+    invalid NaN/negative rays remain UNKNOWN.
+    """
+    entrance=np.asarray(bay['entrance'],float)
+    tangent=np.asarray(bay['tangent'],float);normal=np.asarray(bay['normal'],float)
+    points=np.asarray(scan.get('parking_points',scan.get('points',[])),float).reshape(-1,2)
+    points+=np.array([robot['lidar']['x'],robot['lidar'].get('y',0.)])
+    delta=points-entrance;u=delta@tangent;v=delta@normal
+    padding=float(config.get('grid_occupancy_padding',.03))
+    inside=(np.abs(u)<bay['width']/2+padding)&(v>-padding)&(v<bay['depth']+padding)
+    hits=int(np.count_nonzero(inside))
+    hit_points=points[inside]
+    total_samples=12;required=math.ceil(total_samples*config['free_ray_fraction'])
+    details=dict(interior_hits=hits,interior_points=hit_points[:24].tolist(),
+                 total_samples=total_samples,covered_samples=0,required_samples=required)
+    if hits>=config['occupancy_min_hits']:
+        return 'OCCUPIED',dict(details,reason='RAW_INTERIOR_RETURNS')
+    # Even one real return inside the cell contradicts FREE.  More frames may
+    # turn it into OCCUPIED, but it must never trigger the one-shot latch now.
+    if hits:
+        return 'UNKNOWN',dict(details,reason='SPARSE_INTERIOR_RETURNS')
+    rays=scan.get('parking_rays',{});angles=np.asarray(rays.get('angles',[]),float)
+    distances=np.asarray(rays.get('distances',[]),float);valid_rays=np.asarray(rays.get('valid',[]),bool)
+    increment=float(rays.get('increment',0.))
+    if (not len(angles) or len(distances)!=len(angles) or len(valid_rays)!=len(angles) or
+            not math.isfinite(increment) or increment==0):
+        return 'UNKNOWN',dict(details,reason='NO_USABLE_RAYS')
+    samples=np.array([entrance+x*tangent+y*normal
+                      for x in np.linspace(-bay['width']*.35,bay['width']*.35,3)
+                      for y in np.linspace(.08,bay['depth']-.08,4)])
+    samples-=np.array([robot['lidar']['x'],robot['lidar'].get('y',0.)])
+    bearing=np.arctan2(samples[:,1],samples[:,0]);needed=np.linalg.norm(samples,axis=1)
+    covered=np.zeros(total_samples,bool);in_scan=np.zeros(total_samples,bool);usable=np.zeros(total_samples,bool)
+    clearance=float(config.get('grid_free_clearance',.02))
+    for wrap in (-2*math.pi,0.,2*math.pi):
+        indices=np.rint((bearing+wrap-angles[0])/increment).astype(int)
+        valid_index=(indices>=0)&(indices<len(angles));at=np.flatnonzero(valid_index);ix=indices[valid_index]
+        in_scan[at]=True;usable[at]|=valid_rays[ix]
+        covered[at]|=valid_rays[ix]&(distances[ix]>needed[at]+clearance)
+    details.update(covered_samples=int(covered.sum()),
+                   invalid_samples=int(np.count_nonzero(in_scan&~usable)),
+                   blocked_or_short_samples=int(np.count_nonzero(in_scan&usable&~covered)))
+    free=covered.sum()>=required
+    return ('FREE' if free else 'UNKNOWN'),dict(details,reason='VALID_CLEAR_RAYS' if free else 'INSUFFICIENT_CLEAR_RAYS')

@@ -313,6 +313,7 @@ ANSWER_CONFIG = {
         'grid_slot_width': .50, 'grid_slot_depth': .59, 'grid_size_tolerance': .12,
         'grid_roi_top': .42, 'grid_hough_votes': 18, 'grid_min_length_fraction': .08,
         'grid_stable_frames': 3, 'grid_track_distance': .15, 'grid_track_alignment': .90,
+        'grid_occupancy_padding': .03, 'grid_free_clearance': .02,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
