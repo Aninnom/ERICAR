@@ -97,7 +97,7 @@ class Driver:
         진행 중인 이동에는 영향 없음. 끄기: lane_change.entry_gate False"""
         lc = self.c['lane_change']
         if self.sections.index != START_SECTION['lane_change']:
-            self.entry_gate, self.entry_from_corner = None, True
+            self.entry_gate = None
             return True
         # S2에서 바로 시작한 주행(start_stage fork·단위 시험)은 코너를 돌아 들어온 것이 아니므로 제한하지 않음
         if not lc.get('entry_gate', False) or not self.entry_from_corner:
@@ -709,6 +709,8 @@ class Driver:
         cone_ahead = (self.c['sections'].get('cone_advance', True) and self.cones.active
                       and self.sections.index == START_SECTION['cones']-1)
         self.sections.update(turn_rate, velocity, dt, hold=self.section_hold, advance=cone_ahead)
+        if self.sections.index != START_SECTION['lane_change']:
+            self.entry_from_corner = True      # 다른 구간을 달려옴 → S2 진입 때 흰 선 제한 적용 (entry_gate_open)
         self.signs_lost = 0.0 if signs_ok else self.signs_lost+dt
         self.signs_fresh = signs_ok
         self.update_stop_line(lane, velocity, now, dt)
@@ -812,10 +814,11 @@ class Driver:
             self.backup.record(velocity, turn_rate, dt)
             was_backing = self.backup.active
             change = self.backup.step(velocity, dt, self.road_heading()) if was_backing else None
+            entry_open = self.entry_gate_open()
             change_enabled = ((self.sections.allows('lane_change') or self.fork.running)
                               and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
                               and not cone_first and not in_corner and not self.three_lane_over()
-                              and self.entry_gate_open())
+                              and entry_open)
             if change is not None:
                 # 구간 거리는 절댓값으로 쌓임 → 후진한 만큼(이미 더해진 것 포함 2배) 되돌림
                 self.sections.distance = max(0.0, self.sections.distance-2*abs(velocity)*dt)
