@@ -266,6 +266,14 @@ def parking_grid_candidates(image, robot, parking, prior_segments=None):
             cells=partial_grid_slots_from_ground_segments(sources[color],parking.get('grid_slot_width',.50),
                 parking.get('grid_slot_depth',.59),parking.get('grid_size_tolerance',.12),
                 extrapolation=parking.get('grid_maximum_extrapolation',.14))
+        if not cells and parking.get('grid_relaxed',False):
+            # 11/18 혁준: 가로선이 일부만 보여도 칸으로 추정 (parking_grid_relaxed.py). 끄기: grid_relaxed False
+            from .parking_grid_relaxed import relaxed_partial_slots
+            cells=relaxed_partial_slots(sources[color],parking.get('grid_slot_width',.50),
+                parking.get('grid_slot_depth',.59),parking.get('grid_size_tolerance',.12),
+                visible_min=parking.get('grid_relaxed_visible_min',.15),
+                single=parking.get('grid_relaxed_single',False),
+                extrapolation=parking.get('grid_maximum_extrapolation',.14))
         reachable=reachable_right_slots(cells,parking.get('view_near',.30),
             entrance_right_min=parking.get('grid_entrance_right_min',-.85),
             entrance_right_max=parking.get('grid_entrance_right_max',-.05))
