@@ -18,7 +18,7 @@ def cell(x=.9):
 def observe(parking,stamp,status='FREE',x=.9):
     details=dict(reason='GRID_SLOTS_FOUND',segments_px=[[1,2,3,4]],segments_ground=[])
     with patch('ericar_driver.parking.parking_grid_candidates',return_value=([cell(x)],details)), \
-         patch('ericar_driver.parking.classify_gap',return_value=(status,dict(reason='TEST'))):
+         patch('ericar_driver.parking.classify_camera_slot',return_value=(status,dict(reason='TEST'))):
         return parking._observe_grid(np.zeros((480,640,3),np.uint8),stamp,{},stamp,stamp,0.,0.)
 
 
@@ -79,7 +79,7 @@ def test_new_grid_target_is_not_moved_twice_on_latch_frame():
     c=config();p=Parking(c);p.start(0.)
     details=dict(reason='GRID_SLOTS_FOUND',segments_px=[],segments_ground=[])
     with patch('ericar_driver.parking.parking_grid_candidates',return_value=([cell(.9)],details)), \
-         patch('ericar_driver.parking.classify_gap',return_value=('FREE',dict(reason='TEST'))):
+         patch('ericar_driver.parking.classify_camera_slot',return_value=('FREE',dict(reason='TEST'))):
         tick(p,c,t=.1,v=.2,command=(.2,0.))
         tick(p,c,t=.2,v=.2,command=(.2,0.))
         tick(p,c,t=.3,v=.2,command=(.2,0.))

@@ -3,7 +3,7 @@ import math
 import numpy as np
 from .common import clip
 from .lidar import body_points
-from .parking_gap import gap_candidates,classify_gap
+from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
 from .parking_grid import parking_grid_candidates
 from .parking_white import parking_straight_lines
 from .parking_control import ParkingPD
@@ -250,7 +250,7 @@ class Parking:
             # Express the camera candidate at the LiDAR timestamp for occupancy,
             # then at now for diagnostics.  This remains relative-odometry only.
             self._move_target(candidate,scan_stamp-image_stamp,velocity,rate)
-            status,evidence=classify_gap(candidate,scan,self.robot,self.c)
+            status,evidence=classify_camera_slot(candidate,scan,self.robot,self.c)
             displayed=dict(candidate);self._move_target(displayed,now-scan_stamp,velocity,rate)
             match=None
             for track in self.grid_tracks:
