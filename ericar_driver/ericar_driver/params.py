@@ -490,6 +490,11 @@ ANSWER_CONFIG = {
         # 0.45: 45° 원호로 꺾으면 앞 오른쪽 모서리가 옆 차로 장애물 선에 닿기까지 뒷축이 약 0.45 m 감. 합성(지그재그, 앞 장애물까지
         # 간격 0.58 m): 예전 기준·0.2는 앞 0.45 m에서 시작해 충돌·정지, 0.45는 앞 0.71 m에서 시작해 통과
         'avoid_side_ahead': 0.45, 'avoid_plan': True, 'avoid_plan_margin': 0.04, 'avoid_plan_tail': 0.2,
+        # 3차선 진입 흰 선 전 차선 변경 금지 (11/18 혁준, driver.entry_gate_open). 끄기: entry_gate False
+        # entry_line_start: 앞축이 흰 선 이 거리(m) 전에 오면 허용 (차선 변경은 시작 뒤 약 0.4 m를 가야 차로 가장자리를 넘음)
+        # entry_min_distance: 흰 선을 못 봤을 때 S2 주행 거리 기준(m). entry_max_distance: 이 거리부터는 무조건 허용
+        'entry_gate': True, 'entry_line_start': 0.30, 'entry_line_range': 1.3,
+        'entry_min_distance': 0.25, 'entry_max_distance': 1.0,
         # 이동 중 재판단 (11/18 혁준, lane_change.redecide, 합성 시험만·실차 전). 끄기: redecide False
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄

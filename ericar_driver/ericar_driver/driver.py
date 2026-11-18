@@ -64,6 +64,7 @@ class Driver:
         self.stall_time = 0.0         # 의도하지 않은 정지 누적 시간(s)
         self.stall_moved = 0.0        # 정지가 풀린 뒤 주행 거리(m). stall.reset_distance 넘으면 stall_time 초기화
         self.lane_change_off = 0.0    # 차선 변경 대기·막힘 강제 해제 뒤 차선 변경을 끄는 남은 거리(m)
+        self.entry_gate = None        # 3차선 진입 흰 선 통과 전 차선 변경 금지 상태 (entry_gate_open)
         self.signs_lost = 0.0         # 표지판 검출이 끊긴 누적 시간(s)
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
 
@@ -83,6 +84,33 @@ class Driver:
         early = s.get('cone_early_turn')
         return bool(s['enabled'] and early is not None and 'cones' not in s.get('off', ()) and
                     self.sections.index == START_SECTION['cones']-1 and self.sections.turned >= early)
+
+    def entry_gate_open(self):
+        """3차선 진입 흰 선 전에는 새 차선 변경을 시작하지 않음 (11/18 사용자 지시, 실차 redecide_1118_03·04)
+        코너를 돌자마자(S2 거리 0.13~0.22 m) 차선 변경이 시작돼, 앞축이 흰 선 0.82~0.88 m 전인데 옆으로 나가 한 차로
+        구간에서 이탈함. 차선 변경은 시작 뒤 약 0.4 m를 가야 옆으로 0.15 m(차로 가장자리)를 넘으므로,
+        앞축이 선 entry_line_start(m) 전에 왔을 때부터 허용하면 차로를 벗어나는 시점에는 앞바퀴가 선을 지난 뒤임.
+        - 흰 선을 따라가는 중(update_stop_line의 line_distance, 앞축 기준): 선까지 entry_line_start 이하면 허용
+        - 선을 못 봄(어두운 조명 등): S2 주행 거리 entry_min_distance(m)부터 허용
+        - 어느 경우든 entry_max_distance(m)를 넘으면 허용 (선 추적이 틀려도 회피 판단이 영영 막히지 않게)
+        진행 중인 이동에는 영향 없음. 끄기: lane_change.entry_gate False"""
+        lc = self.c['lane_change']
+        if not lc.get('entry_gate', False) or self.sections.index != START_SECTION['lane_change']:
+            self.entry_gate = None
+            return True
+        gate = self.entry_gate
+        if gate is None:
+            gate = self.entry_gate = dict(open=False, open_at=None, line=None)
+        if gate['open']:
+            return True
+        travelled, line = self.sections.distance, self.line_distance
+        if line is not None and 0.0 < line <= lc.get('entry_line_range', 1.3):
+            # 선까지 남은 거리로 '열릴 지점'을 계속 갱신 (선을 놓쳐도 마지막 추정으로 엶)
+            gate['line'], gate['open_at'] = round(float(line), 3), travelled+float(line)-lc.get('entry_line_start', .30)
+        open_at = gate['open_at'] if gate['open_at'] is not None else lc.get('entry_min_distance', .25)
+        if travelled >= min(open_at, lc.get('entry_max_distance', 1.0)):
+            gate['open'] = True
+        return gate['open']
 
     def three_lane_over(self):
         """3차선 구간이 끝났는지 → 차선 변경 판단(회피·정렬·저속 접근) 자체를 끔 (11/15 사용자 지시)
@@ -781,7 +809,8 @@ class Driver:
             change = self.backup.step(velocity, dt, self.road_heading()) if was_backing else None
             change_enabled = ((self.sections.allows('lane_change') or self.fork.running)
                               and (self.fork.allows_change(self.lane_change.active) or bool(late_request))
-                              and not cone_first and not in_corner and not self.three_lane_over())
+                              and not cone_first and not in_corner and not self.three_lane_over()
+                              and self.entry_gate_open())
             if change is not None:
                 # 구간 거리는 절댓값으로 쌓임 → 후진한 만큼(이미 더해진 것 포함 2배) 되돌림
                 self.sections.distance = max(0.0, self.sections.distance-2*abs(velocity)*dt)
@@ -861,7 +890,7 @@ class Driver:
                           yaw_deg=self.sections.yaw*57.29578, yaw_source='odom' if yaw_rate is None else 'imu',
                           slow_zone=self.slow_zone.state, slow_tilt_deg=self.slow_zone.tilt_deg,
                           slow_bump_at=self.slow_zone.bump_at, slow_boost=self.slow_zone.boost,
-                          stall_time=self.stall_time, lane_change_off=self.lane_change_off, signs_ok=signs_ok,
+                          stall_time=self.stall_time, lane_change_off=self.lane_change_off, entry_gate=None if self.entry_gate is None else dict(self.entry_gate), signs_ok=signs_ok,
                           front=scan['front'], rear=scan['rear'],
                           lane_index=self.lane_change.index, lane_change_target=self.lane_change.target,
                           lane_change_debug=dict(self.lane_change.debug),
