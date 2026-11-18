@@ -45,6 +45,27 @@ class SectionManager:
             return False
         return not self.c['enabled'] or mission in self.missions()
 
+    def carry(self, yaw_rate, dt):
+        """조종기 수동(SWB 아래): 차를 손으로 옮기는 동안 회전만 적분. 구간·거리는 그대로"""
+        self.yaw += yaw_rate*dt
+
+    def relocate(self):
+        """재출발: 차가 놓인 방향으로 구간을 다시 고름. 반환: (구간 번호, 그 구간 직선 방향과의 차 °). 값은 바꾸지 않음
+
+        직선 4개 방향이 모두 달라 방향만 알면 구간이 정해짐. 후보는 지금·다음·이전 구간뿐 (S0과 S4는 방향이 같음)
+        - 같은 미션 재출발 = 지금 구간, 포기 후 다음 미션 = 지금 또는 다음 구간, 코너에서 이미 넘어간 뒤 재출발 = 이전 구간
+        - 가장 가까운 후보와도 restart_tolerance(°) 넘게 다르면 판단 불가 → 지금 구간 유지"""
+        heading = -math.degrees(self.yaw)
+        best, error = self.index, None
+        for k in (self.index, self.index+1, self.index-1):
+            if 0 <= k < len(SECTION_MISSIONS):
+                e = (heading-90.0*k+180.0) % 360.0-180.0
+                if error is None or abs(e) < abs(error):
+                    best, error = k, e
+        if abs(error) > self.c.get('restart_tolerance', 40.0):
+            best = self.index
+        return best, error
+
     def update(self, yaw_rate, velocity, dt, hold=False, advance=False):
         """hold: 이번 주기 구간 전환 보류 (driver.section_hold). 회전·거리 적분은 그대로
         advance: 회전 기준과 무관하게 지금 다음 구간으로 넘김 (driver: 라바콘이 앞 구간에서 시작됨, 11/16)"""

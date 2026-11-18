@@ -17,6 +17,11 @@ from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
+try:
+    from limo_msgs.msg import LimoStatus
+except ImportError:   # 맥 시험 등 limo_msgs 없는 환경: SWB 재출발만 꺼짐
+    LimoStatus = None
+
 from .common import clip
 from .traffic_lamp import NAMES as LAMP_NAMES, lamp_name
 from .lidar import scan_sectors
@@ -70,6 +75,8 @@ class DriverNode(Node):
         self.yaw_rate = 0.0
         self.tilt_rate = (0.0, 0.0)
         self.imu_stamp = -1e9
+        self.control_mode = None
+        self.status_stamp = -1e9
         self.detector_failures = 0
         self.detections = []
         self.detection_stamp = -1e9
@@ -87,6 +94,11 @@ class DriverNode(Node):
         # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
         self.create_subscription(Imu, topics.get('imu', '/imu'), self.on_imu, qos_profile_sensor_data)
         self.create_subscription(Bool, '/parking/cancel', self.on_parking_cancel, 10)
+        # 조종기 SWB 상태(수동·자동). 수동 → 자동 전환을 재출발로 처리 (loop.py, params.py restart)
+        if LimoStatus is not None and self.c['restart']['enabled']:
+            self.create_subscription(LimoStatus, topics.get('limo_status', '/limo_status'), self.on_status, 10)
+        else:
+            self.get_logger().warn('SWB 재출발 꺼짐 (limo_msgs 없음 또는 restart.enabled False)')
         self.timer = self.create_timer(1.0 / self.c['rate_hz'], self.control)
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
@@ -127,6 +139,16 @@ class DriverNode(Node):
         # 방지턱 감지용 x·y (slow_zone). 축 방향은 장착에 따라 달라 크기만 사용
         self.tilt_rate = (getattr(message.angular_velocity, 'x', 0.0), getattr(message.angular_velocity, 'y', 0.0))
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
+
+    def on_status(self, message):
+        self.control_mode = message.control_mode
+        self.status_stamp = self.now()   # 헤더 시각 비정상(sec: 1)이라 수신 시각 사용
+
+    def is_auto(self):
+        """수동으로 확인된 때만 False. 상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
+        r = self.c['restart']
+        fresh = self.now() - self.status_stamp < r['status_timeout']
+        return not (fresh and self.control_mode == r['manual_mode'])
 
     @staticmethod
     def detector_paused(state):
@@ -199,7 +221,7 @@ class DriverNode(Node):
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
                               yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
-                              tilt_rate=self.tilt_rate)
+                              tilt_rate=self.tilt_rate, auto=self.is_auto())
         out = self.loop.step(sensors)
         elapsed=self.now()-sensors.now
         fresh=0<=elapsed<self.c['parking']['command_deadline']

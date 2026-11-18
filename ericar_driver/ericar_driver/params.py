@@ -30,6 +30,13 @@ ANSWER_CONFIG = {
                     # 유지 중·끝난 뒤 after_seconds 동안 기억 없는 한 선은 가까운 끝이 오른쪽 corner_left_limit(m) 안이면 왼쪽 선
                     'after_seconds': 1.5, 'corner_left_limit': 0.1},
 
+    # 재출발 (노트북 없이, 노드 켜 둔 채): 조종기 SWB 수동(아래) → 차를 미션 시작 지점에 놓음 → SWB 자동(위)
+    # 수동이 min_manual(s) 넘게 이어진 뒤 자동으로 돌아오면 드라이버를 새로 만들고(미션 상태 전부 초기화),
+    # 놓인 방향으로 구간을 다시 정해 그 구간의 start_stage로 시작한 것과 같게 함 (driver.restart, section.relocate)
+    # 노드를 켠 뒤 첫 자동 전환은 출발로 봄: start_stage 그대로
+    # /limo_status control_mode: manual_mode(0) = 수동, 1 = 자동 (11/8 lane_1108_1618: 0인 동안 명령 0.2에도 정지, 1부터 주행)
+    # 상태가 status_timeout(s) 넘게 안 오면 자동으로 봄 (예전 동작). 약 2 Hz 토픽. 끄기: enabled False
+    'restart': {'enabled': True, 'min_manual': 1.0, 'manual_mode': 0, 'status_timeout': 3.0},
     # 구간 관리자 (section.py): 누적 회전이 다음 직선 방향(−90°씩)까지 margin(°) 안으로 들어오면 구간 +1
     # margin 25 → −65°·−155°·−245°·−335°에서 전환. 갈림길 꺾임 45°·차선 변경 흔들림은 못 미침
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
@@ -40,7 +47,7 @@ ANSWER_CONFIG = {
     # 진입 → 4번 코너 이탈)로 꺼 뒀다가 11/12 다시 켬 (유경): 단독 시험 corn_test_1112_193257 통과 (모드 3.1 m, 충돌 없음).
     # 꺼져 있으면 S3에서 콘 사이를 차선 주행·코너 유지(고정 조향)로 지나감 (11/12 cone_lane_1). 전환 실차 확인 필요
     'sections': {'enabled': True, 'margin': 25.0, 'odom_yaw_scale': 0.93, 'imu_timeout': 0.3,
-                 'hold_distance': 3.0, 'off': [],
+                 'hold_distance': 3.0, 'off': [], 'restart_tolerance': 40.0,
                  # S2에서 오른쪽으로 이만큼(°) 돈 뒤에는 붉은색이 보이면 라바콘 진입 허용 (S3 전환은 65°). None이면 끔 (11/14)
                  'cone_early_turn': 20.0,
                  # S2에서 라바콘 모드가 실제로 시작되면 회전 기준(65°)을 기다리지 않고 S3로 전환 (11/16). 끄기 False

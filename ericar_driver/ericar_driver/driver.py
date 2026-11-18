@@ -14,6 +14,8 @@ from .section import SectionManager, START_SECTION
 from .slow_zone import SlowZone
 
 # 정지 미션 시간 초과 후 같은 표지판에 바로 다시 반응하지 않도록 쿨다운을 거는 표지판
+# SWB 재출발 때 구간 번호 → start_stage (driver.restart). S4는 신호등을 끝냈으면 parking
+RESTART_STAGE = ['slow', 'pedestrian', 'lane_change', 'cones', 'traffic']
 MISSION_SIGNS = {
     'pedestrian': ['pedestrian'],
     'traffic': ['traffic_red', 'traffic_yellow', 'traffic_green'],
@@ -68,6 +70,8 @@ class Driver:
         self.entry_from_corner = False   # 다른 구간에서 달려와 S2에 들어왔는지 (S2에서 바로 시작한 경우는 제한 없음)
         self.signs_lost = 0.0         # 표지판 검출이 끊긴 누적 시간(s)
         self.cooldowns, self.sign_counts, self.debug = {}, {}, {}
+        self.restarts = 0             # SWB 재출발 횟수 (디버그 표시용)
+        self.restart_error = None     # 마지막 재출발 때 놓인 방향과 구간 직선 방향의 차(°). 출발은 None
 
     @property
     def avoiding(self):
@@ -232,6 +236,30 @@ class Driver:
         if state == 'parking_scan':
             self.parking.start(now)
             self.state=self.parking.state
+
+    def manual(self, now, angular_velocity=0.0, yaw_rate=None):
+        """조종기 수동(SWB 아래)인 주기: 명령이 차에 안 먹으므로 판단은 멈추고 회전만 적분
+        차를 손으로 들어 옮겨도 IMU는 회전을 잼 → 자동으로 돌아올 때 놓인 방향을 알 수 있음 (restart)"""
+        dt = .05 if self.last_time is None else clip(now-self.last_time, .001, .2)
+        self.last_time = now
+        self.sections.carry(angular_velocity*self.c['sections']['odom_yaw_scale'] if yaw_rate is None else yaw_rate, dt)
+
+    def restart(self, now, relocate=True):
+        """수동 → 자동 전환: 드라이버를 새로 만들어 미션 상태를 전부 처음으로 되돌림 (노드 재시작 + start_stage와 같은 상태)
+        relocate True(재출발): 놓인 방향으로 구간을 다시 정하고 그 구간의 start_stage로 시작 (구간 거리 0)
+        - S4는 미션이 둘: 신호등을 이미 끝냈으면(통과·포기) 주차 지점, 아니면 신호등 지점 재출발로 봄
+        relocate False(노드를 켠 뒤 첫 출발): start_stage 그대로, 출발 전 차를 들고 돌린 회전은 버림"""
+        restarts, error = self.restarts, None
+        if relocate:
+            index, error = self.sections.relocate()
+            stage = RESTART_STAGE[index]
+            if stage == 'traffic' and index == self.sections.index and 'traffic' in self.done:
+                stage = 'parking'
+            self.c['missions']['start_stage'] = stage
+            restarts += 1
+        self.parking.close()
+        self.__init__({'answer': self.c, 'robot': self.robot})
+        self.last_time, self.restarts, self.restart_error = now, restarts, error
 
     def sensor_failure(self, now):
         self.stopped_since = self.parking.stable_since = None
@@ -895,6 +923,7 @@ class Driver:
                           pid=dict(self.pid.terms), pid_feedback_gain=self.c['pid']['feedback_gain'],
                           stage=self.stage(), section=self.sections.index,
                           section_distance=self.sections.distance, section_turned=self.sections.turned,
+                          restarts=self.restarts, restart_error=self.restart_error,
                           yaw_deg=self.sections.yaw*57.29578, yaw_source='odom' if yaw_rate is None else 'imu',
                           slow_zone=self.slow_zone.state, slow_tilt_deg=self.slow_zone.tilt_deg,
                           slow_bump_at=self.slow_zone.bump_at, slow_boost=self.slow_zone.boost,

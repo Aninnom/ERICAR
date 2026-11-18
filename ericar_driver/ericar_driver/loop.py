@@ -75,6 +75,7 @@ class Sensors:
     camera_info: object = None   # 주차 BEV의 K/D. 없으면 기존 camera hfov 모델 사용
     pose_history: object = ()    # 이미지/스캔 시각 보간용 짧은 기록
     tilt_rate: tuple = (0.0, 0.0)   # IMU 자이로 x·y (rad/s). 방지턱 감지용 (slow_zone)
+    auto: bool = True            # 조종기 SWB 자동(위)인지. False = 수동이라 명령이 차에 안 먹음 (node.py /limo_status)
 
 
 @dataclass
@@ -102,6 +103,8 @@ class ControlLoop:
         self.started = None          # 첫 제어 주기 시각 (YOLO 첫 검출 대기 기준)
         self.detector_seen = False   # 최신 검출을 한 번이라도 받음
         self.cone_hint = None        # 직전 주기의 라바콘 차선 힌트 (켜지는 순간 차선 기억 비우기용)
+        self.manual_since = None     # 조종기 수동이 시작된 시각. 자동이면 None
+        self.ever_auto = False       # 노드를 켠 뒤 자동이었던 적이 있는지 (첫 자동 전환 = 출발, 그 뒤 = 재출발)
 
     def step(self, s):
         c, now = self.c, s.now
@@ -123,7 +126,29 @@ class ControlLoop:
         # 회전 속도: IMU가 최신이면 IMU, 아니면 odom × 보정 (driver.update에서 처리)
         imu_ok = 0 <= now - s.imu_stamp < c['sections']['imu_timeout'] and math.isfinite(s.yaw_rate)
         tilt_ok = imu_ok and all(math.isfinite(rate) for rate in s.tilt_rate)
-        if (not sensor_ready or waiting_detector or
+        # 재출발: 수동이 min_manual 넘게 이어진 뒤 자동으로 돌아오면 미션 상태 초기화 + 놓인 방향으로 구간 재결정
+        # 짧은 끊김(조종기 신호 튐)은 무시하고 하던 동작 계속
+        if s.auto and self.manual_since is not None:
+            if now - self.manual_since >= c['restart']['min_manual']:
+                self.driver.restart(now, relocate=self.ever_auto)
+                self.vision.memory = {}
+                self.vision.previous_center = None
+                self.lane_stamp = self.lane_bias = self.cone_hint = None   # 다음 주기에 차선 다시 계산
+                # 이번 주기는 정지 명령만 내고 다음 주기부터 새 상태로 판단 (센서 준비 판단도 새 상태 기준이어야 함)
+                sensor_ready = False
+            self.manual_since = None
+        self.ever_auto = self.ever_auto or s.auto
+        if not s.auto:
+            # 수동: 명령이 차에 안 먹음. 판단을 멈추고 회전만 적분 (차를 들어 옮기는 동안 방향 추적)
+            if self.manual_since is None:
+                self.manual_since = now
+            self.driver.manual(now, s.angular_velocity if math.isfinite(s.angular_velocity) else 0.0,
+                               s.yaw_rate if imu_ok else None)
+            self.driver.debug.update(published_speed=0.0, speed=0.0, section=self.driver.sections.index,
+                                     yaw_deg=math.degrees(self.driver.sections.yaw))
+            speed, steering = 0.0, 0.0
+            state = 'manual (SWB)'
+        elif (not sensor_ready or waiting_detector or
                 not math.isfinite(s.velocity) or not math.isfinite(s.angular_velocity)):
             self.driver.debug['published_speed'] = 0.0
             self.driver.debug['speed'] = 0.0
