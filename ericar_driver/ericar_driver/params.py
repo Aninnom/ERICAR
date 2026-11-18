@@ -8,7 +8,15 @@ ANSWER_CONFIG = {
     'base_speed': 0.6, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
     # 코너 속도 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
     # 11/18 유경: 0.2 -> 0.25 (0.4 접촉과 사이, 차로 폭 0.77 m에 여유 남김). 0.3 이상은 실차 확인 전까지 금지
-    'corner_speed': 0.25,
+    # 11/19 유경: 0.25 -> 0.4 (랩타임, 사용자 지시). 위 "0.3 이상 금지"를 넘는 값이라 실차 확인 전까지는 시험용.
+    #   같이 내린 corner_hold.steering 0.38 -> 0.35가 바깥으로 벌어지는 쪽이라 접촉이 더 쉬워질 수 있음 →
+    #   첫 주행은 1·2번 코너에서 바깥 선 여유부터 보고, 접촉이 나면 0.3으로 되돌릴 것
+    #   (1118 녹화 4개 실측 코너 속도는 0.19~0.22라 0.4는 두 배. 실차 근거 없음)
+    # 현장 조정 순서 (11/19). 아래 두 값은 서로 반대 방향이라 한 번에 하나씩만 움직일 것:
+    #   corner_speed         : 0.4(지금, 바깥선 위험) -> 0.3(바깥 접촉 나면 먼저 여기로) -> 0.35(둘 다 여유 있으면 튜닝)
+    #   corner_hold.steering : 0.35(지금) -> 0.33(속도를 내려도 안쪽 선 밟으면) -> 0.38(바깥으로 벌어지면 되돌림)
+    # 첫 주행은 1·2번 코너에서 바깥 선 여유부터 확인 (조향을 줄인 것도, 속도를 올린 것도 바깥으로 미는 쪽)
+    'corner_speed': 0.4,
     # 선 곡률(1/m) 이 구간에서 base_speed → corner_speed 보간 (lane_driving)
     # 11/18 유경: [2.0, 3.5] -> [1.6, 3.0]. base_speed가 0.6이면 같은 곡률에서 보간 중 속도가 전보다 높고
     # 줄여야 하는 폭도 커져 코너 진입이 늦음 -> 감속 시작을 약간 앞으로 (곡률 1.6 ≈ 코너 약 0.7 m 전)
@@ -27,9 +35,16 @@ ANSWER_CONFIG = {
     'lost_search': {'speed': 0.15, 'distance': 2.0, 'seconds': 20.0, 'straighten_distance': 0.5},
     'corner_hold': {'enabled': True, 'arm_seconds': 3.0, 'start_steering': 0.15,
                     # 시작 시 곡률 sharp_curvature 이상이면 steering, 아니면 gentle_steering (11/9 lap3, 1번 코너 0.31이면 바깥 이탈)
-                    'steering': 0.38, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
+                    # 11/19 유경: steering 0.38 -> 0.35 (안쪽 선 밟음). 회전 반경 = 축거 0.2 / tan(조향)이라
+                    #   0.38은 0.50 m, 0.35는 0.56 m. 코너 차로 중앙 반경은 (안쪽 590 + 바깥 660)/2 = 0.625 m.
+                    #   gentle 0.31(= 0.625 m)은 기하학적으로 맞는 값이라 그대로 둠
+                    #   조정 순서는 위 corner_speed 주석의 "현장 조정 순서" 참고 (0.35 -> 0.33 -> 0.38)
+                    'steering': 0.35, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
                     # 유지 중 조향 = 시작 값 + error_gain × (시작 오차 − 현재 오차), steering_min~max_steering 제한
-                    'error_gain': 0.4, 'steering_min': 0.2,
+                    # 11/19 유경: steering_min 0.2 -> 0.14. 1118 녹화 19·20번에서 차가 코너 안쪽으로 0.09~0.15 m
+                    #   치우친 순간 조향이 정확히 0.200에 멈춰 있었음 = 하한에 막혀 보정이 더 펴 주지 못함.
+                    #   0.14는 반경 1.4 m라 코너 안에서도 계속 돌기는 함 (0.1 아래로 내리면 유지가 사실상 풀림)
+                    'error_gain': 0.4, 'steering_min': 0.14,
                     # 시작 순간 가까운 선이 왼쪽으로 skip_near_curvature(1/m) 넘게 휘면 이번 코너는 유지 없이 pursuit (비스듬한 진입)
                     'skip_near_curvature': 0.1, 'skip_window': 0.6,
                     'angle': 65.0, 'max_distance': 1.3,
