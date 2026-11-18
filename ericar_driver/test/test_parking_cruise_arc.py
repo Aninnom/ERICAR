@@ -168,12 +168,15 @@ def test_align_requires_distinct_frames_and_release_requires_enough_rotation():
     assert p.arc_released and result[1]<=p.c['turn_steering']  # auto2는 진단 단계와 무관하게 기본 우회전 유지
 
 
-def test_white_loss_stops_without_rotation_or_entry_gate():
+def test_white_loss_waits_for_minimum_rotation_gate():
     c,p,image=turn_fixture(.5);tick(p,c,1.1,image=image)
     result=tick(p,c,1.2,image=picture(False))
+    assert result[2]=='parking_turn' and not p.line_debug['stop_armed']
+    p.turn_angle=p.c['white_loss_min_angle']
+    result=tick(p,c,1.3,image=picture(False))
     assert result==(0.,0.,'parked')
     assert p.reason=='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
-    assert tick(p,c,1.3,image=image)==(0.,0.,'parked')
+    assert tick(p,c,1.4,image=image)==(0.,0.,'parked')
 
 
 def render_bay(c,pose,center,paint_end=-.84):
@@ -232,7 +235,7 @@ def test_camera_bicycle_turn_stops_on_first_acquired_line_loss(bias):
     assert p.state=='parked'
     assert p.reason=='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
     assert not trace[-1]['line_present']
-    assert all(t['line_present'] for t in trace[:-1])
+    assert trace[-1]['angle']>=p.c['white_loss_min_angle']
     assert trace[-1]['speed']==0
     assert all(t['steering']<=-p.c['pd']['arc_min_steering'] for t in trace if t['state']=='parking_turn' and t['phase']=='arc')
     # 전체 주차 성공·선 미침범을 주장하는 장면 아님. 첫 소실 프레임 정지가 이 시험의 목적

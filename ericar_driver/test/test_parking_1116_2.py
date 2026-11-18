@@ -41,6 +41,7 @@ def test_close_horizontal_line_does_not_add_a_new_stop_rule():
     a=picture();cv2.line(a,(50,450),(590,450),(255,255,255),8)
     assert frame(p,c,image=a)[0]==.12
     assert p.state=='parking_turn'
+    p.turn_angle=p.c['white_loss_min_angle']
     assert frame(p,c,1.1,present=False)==(0.,0.,'parked')
 
 
