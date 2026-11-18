@@ -674,11 +674,11 @@ class LaneChange:
             near_fork = request_only or lane.get('colors', {}).get(other) == 'yellow'
             if near_fork and self.debug['rejected'].get(side) == 'yellow_boundary':
                 if scan.get('valid_fraction', 1.) >= .5:
-                    plan = self.plan_fork_detour(lane, body_points(scan, self.robot), heading, requested, request_limit)
+                    plan = self.plan_fork_boundary_route(lane, body_points(scan, self.robot), heading, requested, request_limit)
                 if plan is None:
                     self.debug['reason'] = 'fork_boundary_hold'
                     return 0.0, 0.0
-                direction = -requested
+                direction = requested if plan.get('fork_direct') else -requested
                 self.debug['choice'] = direction
         if direction == 0 and requested and request_only:
             # 늦은 지점 요청: 목적 쪽 이동만 허용된 상태 → 일반 회피로 넘기지 않음.
@@ -792,13 +792,13 @@ class LaneChange:
         self.target = direction*self.span*self.c['lane_width']+center
         return self.update(lane, scan, 0.0, 0.0, dt, enabled)
 
-    def plan_fork_detour(self, lane, lidar, heading, requested, limit):
-        """섬 앞 반대 차로 회피와 원래 출구 복귀를 한 경로로 검사."""
+    def plan_fork_boundary_route(self, lane, lidar, heading, requested, limit):
+        """섬 앞에서 경계 사이 직접 진입을 먼저, 반대 차로 우회는 그다음 검사."""
         c, v, robot = self.c, self.vision, self.robot
         yaw = -self.start_heading(heading)
         if not c.get('request_plan', False) or abs(yaw) > c.get('start_align', .21) or lane.get('abnormal'):
             return None
-        samples = [lidar]
+        edges = []
         row_m = (v['far']-v['near'])/(v['height_px']-1)
         scale = v['width_px']/v['view_width']
         for side in ('left', 'right'):
@@ -815,14 +815,30 @@ class LaneChange:
             near_rows = np.arange(last, (v['far']-robot['front_axle_x'])/row_m, .02/row_m)
             pixels = np.r_[np.polyval(fit, rows),
                            np.polyval(fit, last)+np.polyval(np.polyder(fit), last)*(near_rows-last)]
-            samples.append(np.column_stack((v['far']-np.r_[rows, near_rows]*row_m,
-                                             (v['width_px']/2-pixels)/scale)))
-        forward, left = to_road(np.vstack(samples), heading)
-        obstacles = np.column_stack((forward, left))
+            edge = np.column_stack((v['far']-np.r_[rows, near_rows]*row_m,
+                                    (v['width_px']/2-pixels)/scale))
+            road = np.column_stack(to_road(edge, heading))
+            edges.append(road[np.argsort(road[:, 0])])
+        obstacles = np.vstack((np.column_stack(to_road(lidar, heading)), *edges))
         radius = robot['wheelbase']/math.tan(robot['max_steering'])
         angle = float(min(c.get('request_angles', [45.])))
         margin = c.get('arc_margin', .03)
         width = c['lane_width']
+        clearance = c.get('request_plan_margin', .04)
+        direct, direct_reach = arc_path(requested*width, yaw, math.radians(angle), radius, margin,
+                                        tail=c.get('request_plan_tail', .3))
+        # 도착 차체와 앞쪽 추종 구간을 두 경계가 함께 감싸야 함
+        end = int(np.argmin(np.abs(direct[:, 0]-direct_reach)))
+        direct[:, 0] += robot['wheelbase']/2*np.cos(direct[:, 2])
+        direct[:, 1] += robot['wheelbase']/2*np.sin(direct[:, 2])
+        entry = direct[end:]
+        bounds = [np.interp(entry[:, 0], edge[:, 0], edge[:, 1], left=np.nan, right=np.nan)
+                  for edge in edges]
+        inside = bool(np.all((entry[:, 1] < bounds[0]) & (entry[:, 1] > bounds[1])))
+        direct_gap = footprint_clearance(obstacles, direct, robot)
+        self.debug['fork_direct'] = dict(inside=inside, gap=round(min(direct_gap, 9.9), 3))
+        if inside and direct_gap >= clearance:
+            return dict(span=1, angle=angle, fork_direct=True, gap=round(min(direct_gap, 9.9), 3))
         tail = c.get('request_reverse_tail', 1.1)
         outbound, reach = arc_path(-requested*width, yaw, math.radians(angle), radius, margin, tail=tail)
         end = int(np.argmin(np.abs(outbound[:, 0]-reach)))
@@ -834,7 +850,6 @@ class LaneChange:
         for path in (outbound, back):
             path[:, 0] += robot['wheelbase']/2*np.cos(path[:, 2])
             path[:, 1] += robot['wheelbase']/2*np.sin(path[:, 2])
-        clearance = c.get('request_plan_margin', .04)
         return_gap = footprint_clearance(obstacles, back, robot)
         return_length = (reach+back_reach)*c.get('request_plan_stretch', 1.1)
         gap = footprint_clearance(obstacles, outbound, robot)
