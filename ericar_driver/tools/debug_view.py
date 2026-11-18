@@ -383,6 +383,16 @@ def draw_parking(img, control, live=None):
             polygon(candidate['polygon'], colors.get(state, GREY), 2)
             put(img, f"{state} {evidence.get('covered_samples', 0)}/12", *lp(*candidate['entrance']),
                 colors.get(state, GREY), 0.4)
+        template=park.get('parking_template') or {}
+        for result in template.get('evaluations', []):
+            state=result.get('state','UNKNOWN');slot=result.get('slot_index','?')
+            color=colors.get(state,GREY);states.append(state)
+            polygon(result.get('polygon',[]),color,2)
+            evidence=result.get('evidence') or {};hits=evidence.get('interior_hits',0)
+            label=f"S{slot+1 if isinstance(slot,int) else slot} {state} p={hits}"
+            put(img,label,*lp(*result.get('entrance',[0.,0.])),color,.38)
+        for point in (park.get('turn_path') or {}).get('points',[]):
+            cv2.circle(img,lp(point[0],point[1]),2,CYAN,-1)
         if park.get('selected_gap'):
             polygon(park['selected_gap']['polygon'], YELLOW, 2)
             approach=park.get('approach') or {}
@@ -390,6 +400,9 @@ def draw_parking(img, control, live=None):
                 target=lp(approach['remaining_m'],0.)
                 cv2.drawMarker(img,target,CYAN,cv2.MARKER_CROSS,12,2)
                 put(img,f"TURN IN {approach['remaining_m']:+.2f}m",target[0]+5,target[1]-8,CYAN,.45)
+                path=approach.get('turn_path') or []
+                if len(path)>1:
+                    cv2.polylines(img,[np.array([lp(item[0],item[1]) for item in path],np.int32)],False,CYAN,1)
     except Exception:
         pass
     if not park:

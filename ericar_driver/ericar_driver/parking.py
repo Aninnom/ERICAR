@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from .common import clip
-from .lidar import body_points
+from .lidar import body_points,path_clearance
 from .parking_gap import gap_candidates,classify_gap,classify_camera_slot
 from .parking_grid import parking_grid_candidates,move_ground_segments
 from .parking_template import parking_template_landmarks,slots_from_anchor
@@ -25,6 +25,7 @@ class Parking:
         self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
+        self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
         self.approach_distance=0.;self.approach_debug={}
         self.last_image=None;self.line_seen=False;self.line_present=False
         self.loss_frames=0;self.search_distance=0.;self.turn_distance=0.;self.motion_since=None
@@ -47,6 +48,7 @@ class Parking:
         self.grid_debug={};self.grid_tracks=[];self.grid_segment_frames=[];self.last_grid_image=None
         self.template_debug={};self.template_armed=False;self.template_start_frames=0
         self.template_anchor_track=None;self.template_slots=[];self.last_template_image=None
+        self.template_occupied_frames={};self.rejected_template_slots=set();self.path_debug={}
         self.approach_distance=0.;self.approach_debug={}
 
     def close(self):pass
@@ -70,6 +72,7 @@ class Parking:
                         parking_grid=self.grid_debug,
                         parking_template=self.template_debug,
                         selected_gap=self.selected,approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
+                        turn_path=self.path_debug,
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
                         approach_speed_cap_m_s=self.approach_speed_cap,
@@ -135,6 +138,26 @@ class Parking:
         radius=self.c.get('turn_radius') or self.robot['wheelbase']/abs(math.tan(self.c['turn_steering']))
         return radius+self.c['approach_start_offset']
 
+    def _planned_turn_path(self,remaining=0.,samples=25):
+        """Rear-axle points for the fixed right arc, in the current body frame."""
+        radius=self.c.get('turn_radius') or self.robot['wheelbase']/abs(math.tan(self.c['turn_steering']))
+        distance=self.c.get('turn_path_check_distance',radius*math.pi/2)
+        travel=np.linspace(0.,distance,samples);angle=-travel/radius
+        return np.column_stack((remaining+radius*np.sin(-angle),-radius*(1-np.cos(angle)),angle))
+
+    def _turn_path_clear(self,scan,remaining=0.):
+        """Check the complete entry arc before committing to a latched cell."""
+        points=body_points(scan,self.robot)
+        distance=self.c.get('turn_path_check_distance',self._turn_lead())
+        clearance=path_clearance(points,self.c['turn_steering'],self.robot,distance)
+        required=self.c.get('turn_path_margin',.03)
+        path=self._planned_turn_path(remaining)
+        self.path_debug=dict(clear=bool(clearance>=required),clearance_m=clearance,
+                             required_m=required,points=path.tolist(),
+                             candidate_slot=None if self.selected is None else self.selected.get('slot_index'),
+                             rejected_slot=None)
+        return clearance>=required
+
     @staticmethod
     def _move_target(target,dt,velocity,angular_velocity):
         yaw=angular_velocity*dt;travel=velocity*dt
@@ -146,7 +169,7 @@ class Parking:
         for key in ('tangent','normal'):
             target[key]=(np.asarray(target[key])@rotation).tolist()
 
-    def _approach(self,now,dt,velocity,angular_velocity):
+    def _approach(self,now,dt,velocity,angular_velocity,scan):
         self.approach_distance+=abs(velocity)*dt
         self.search_distance+=abs(velocity)*dt
         if now-self.approach_started>self.c['approach_timeout']:return self.fail('APPROACH_TIMEOUT')
@@ -156,6 +179,7 @@ class Parking:
         remaining=float(self.selected['entrance'][0]-self._turn_lead())
         self.approach_debug=dict(target_entrance_body=self.selected['entrance'],turn_lead_m=self._turn_lead(),
                                  remaining_m=remaining,travel_m=self.approach_distance,source='relative_odom_twist')
+        self.approach_debug['turn_path']=self._planned_turn_path(max(0.,remaining)).tolist()
         if remaining < -self.c['approach_passed_tolerance']:
             self.selected=None;self.state='parking_scan'
             self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
@@ -171,6 +195,13 @@ class Parking:
         self.approach_debug.update(entry_speed_m_s=velocity,entry_stable_seconds=stable_age,
                                    entry_speed_ready=ready,waiting_for_slow_speed=remaining<=self.c['approach_start_tolerance'] and not ready)
         if remaining<=self.c['approach_start_tolerance'] and ready:
+            if self.selected.get('source')=='parking_template' and not self._turn_path_clear(scan,max(0.,remaining)):
+                slot=self.selected.get('slot_index')
+                if slot is not None:self.rejected_template_slots.add(slot)
+                self.path_debug['rejected_slot']=slot
+                self.selected=None;self.state='parking_scan';self.entry_stable_since=None
+                self.reason='SELECTED_SLOT_TURN_PATH_BLOCKED'
+                return None
             self.turn_angle=0.;self.turn_phase='arc';self.align_frames=0;self.arc_released=False
             self.state='parking_turn';self.turn_started=now;self.turn_distance=0.
             self.line_seen=False;self.last_image=None;self.pd.reset();self.reason='ALIGNED_START_FIXED_RIGHT_TURN'
@@ -351,9 +382,25 @@ class Parking:
                     entrance=slot['entrance'],polygon=slot['polygon'],turn_start_remaining_m=remaining,
                     rejection='TURN_START_ALREADY_PASSED' if late and status=='FREE' else None,
                     control_applied=False))
+            selected_index=None if self.selected is None else self.selected.get('slot_index')
+            if self.selected is not None and self.selected.get('source')=='parking_template':
+                selected_evaluation=next((item for item in evaluations
+                                          if item['slot_index']==selected_index),None)
+                occupied=selected_evaluation is not None and selected_evaluation['state']=='OCCUPIED'
+                count=self.template_occupied_frames.get(selected_index,0)+1 if occupied else 0
+                self.template_occupied_frames[selected_index]=count
+                if selected_evaluation is not None:selected_evaluation['selected_occupied_frames']=count
+                if count>=self.c.get('template_selected_occupied_frames',2):
+                    self.rejected_template_slots.add(selected_index)
+                    if selected_evaluation is not None:
+                        selected_evaluation['rejection']='SELECTED_SLOT_BECAME_OCCUPIED'
+                    self.selected=None;selected_index=None
+                    if self.state=='parking_approach':
+                        self.state='parking_scan';self.entry_stable_since=None
             if self.selected is None:
                 usable=[index for index,item in enumerate(evaluations)
-                        if item['state']=='FREE' and item['rejection'] is None]
+                        if item['state']=='FREE' and item['rejection'] is None and
+                        item['slot_index'] not in self.rejected_template_slots]
                 if usable:
                     chosen=min(usable,key=lambda index:self.template_slots[index]['entrance'][0])
                     self.selected=dict(self.template_slots[chosen]);evaluations[chosen]['control_applied']=True
@@ -364,6 +411,7 @@ class Parking:
                                  armed=self.template_armed,start_seen=landmarks['start_seen'],
                                  start_frames=self.template_start_frames,anchors=anchor_observations,
                                  anchor_candidates=landmarks['anchors'][:6],slot_count=len(self.template_slots),
+                                 slots=self.template_slots,rejected_slots=sorted(self.rejected_template_slots),
                                  evaluations=evaluations,start_segments=landmarks.get('start_segments',[]),
                                  white_longitudinal=landmarks.get('white_longitudinal',[]),
                                  yellow_longitudinal=landmarks.get('yellow_longitudinal',[]),
@@ -424,7 +472,7 @@ class Parking:
             if self.selected is not None:
                 self.state='parking_approach';self.approach_started=now;self.approach_distance=0.;dt=0.
         if self.state=='parking_approach':
-            stopped=self._approach(now,dt,velocity,rate)
+            stopped=self._approach(now,dt,velocity,rate,scan)
             if stopped is not None:return stopped
             if self.state=='parking_turn':self._white(image,image_stamp);dt=0.
         if self.state=='parking_cruise':
@@ -439,15 +487,18 @@ class Parking:
                    else self.c['scan_speed'])
             if self.state=='parking_approach':
                 self.reason='DECELERATING_BEFORE_TURN' if self.approach_debug.get('waiting_for_slow_speed') else 'APPROACHING_LATCHED_TURN_START'
+            elif self.reason=='SELECTED_SLOT_TURN_PATH_BLOCKED':pass
             elif late:self.reason='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP'
             elif self.reason!='TURN_START_PASSED_LOOKING_FOR_NEXT_GAP':self.reason='SLOW_SEARCH_UNTIL_FIRST_FREE'
         else:
             self._move_target(self.selected,dt,velocity,rate)
             self.turn_distance+=abs(velocity)*dt;self.turn_angle=max(0.,self.turn_angle-rate*dt)
             new_image=self._white(image,image_stamp)
-            if new_image and self.line_seen and self.loss_frames>=self.c['white_loss_frames']:
+            loss_armed=self.turn_angle>=self.c.get('white_loss_min_angle',0.)
+            self.line_debug['stop_armed']=loss_armed
+            if new_image and loss_armed and self.line_seen and self.loss_frames>=self.c['white_loss_frames']:
                 self.state='parked';self.reason='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP';return self._output()
-            # 흰 선 소실은 아래 방향·시간·거리·조향 조건보다 우선
+            # 흰 선 소실은 최소 회전각 이후에만 아래 종료 조건보다 우선
             slot_heading=math.atan2(self.selected['normal'][1],self.selected['normal'][0])
             done=self.c.get('turn_done_heading')
             if done is not None and slot_heading>=-done:

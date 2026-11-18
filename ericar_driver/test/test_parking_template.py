@@ -58,3 +58,34 @@ def test_template_mode_never_uses_obstacle_pair_gap_as_target():
          patch.object(p,'_clear',return_value=True):
         result=p.step(1.,image,1.,scan,1.,None,1.,[],0.,dict(valid=True),search_command=(.12,0.))
     assert result[2] in ('parking_cruise','parking_scan') and p.selected is None
+
+
+def test_selected_template_cell_is_rejected_after_two_occupied_frames():
+    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
+    image=np.zeros((480,640,3),np.uint8);current=['FREE']
+    def occupancy(slot,*_):
+        state=current[0] if slot['slot_index']==0 else 'UNKNOWN'
+        return state,dict(reason='TEST')
+    with patch('ericar_driver.parking.parking_template_landmarks',return_value=landmarks()), \
+         patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
+        p._observe_template(image,1.,{},1.,1.,0.,0.)
+        p._observe_template(image,1.1,{},1.1,1.1,0.,0.)
+        assert p._observe_template(image,1.2,{},1.2,1.2,0.,0.) and p.selected['slot_index']==0
+        current[0]='OCCUPIED';p._observe_template(image,1.3,{},1.3,1.3,0.,0.)
+        assert p.selected is not None
+        p._observe_template(image,1.4,{},1.4,1.4,0.,0.)
+    assert p.selected is None and 0 in p.rejected_template_slots
+
+
+def test_planned_turn_path_is_reported_for_three_cell_debug_view():
+    c=config();p=Parking(c);p.selected=slots_from_anchor([.5,-.2],[1.,0.],[0.,-1.],.5,.59,3)[0]
+    path=p._planned_turn_path(.1)
+    assert path.shape==(25,3) and np.allclose(path[0,:2],[.1,0.])
+
+
+def test_obstacle_on_planned_right_arc_blocks_commit():
+    c=config();p=Parking(c);p.selected=slots_from_anchor([.5,-.2],[1.,0.],[0.,-1.],.5,.59,3)[0]
+    lidar=np.array([c['robot']['lidar']['x'],c['robot']['lidar'].get('y',0.)])
+    scan=dict(points=np.array([[.6,-.3]])-lidar)
+    assert not p._turn_path_clear(scan)
+    assert not p.path_debug['clear'] and p.path_debug['clearance_m']<p.path_debug['required_m']

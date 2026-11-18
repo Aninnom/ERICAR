@@ -80,6 +80,7 @@ def test_search_rolls_even_when_lane_detector_is_invalid():
 def test_unknown_after_free_does_not_cancel_turn_and_white_loss_stops_once():
     c=config();p=Parking(c);p.start(0.);step(p,laser(c))
     assert step(p,laser(c,boxes=[]),1.1)[2]=='parking_turn'
+    p.turn_angle=p.c['white_loss_min_angle']
     speed,steering,state=step(p,laser(c,boxes=[]),1.2,present=False)
     assert speed==0 and steering==0 and state=='parked'
     assert step(p,laser(c),1.3)[0]==0
@@ -131,6 +132,7 @@ def test_main_driver_sign_to_right_turn_to_white_loss():
         result=d.update(lane,laser(c),[dict(name='parking',area=.1)],now,.12,now,parking_input=data)
         if d.state=='parking_turn':break
     assert d.state=='parking_turn' and result[0]>0 and result[1]<0
+    d.parking.turn_angle=d.parking.c['white_loss_min_angle']
     now+=.1;data.update(image=picture(False),image_stamp=now,scan_stamp=now,pose_stamp=now)
     result=d.update(lane,laser(c),[],now,.12,now,parking_input=data)
     assert d.state=='parked' and result[:2]==(0.,0.)
@@ -155,6 +157,7 @@ def test_ros_main_publisher_receives_turn_and_stop_commands():
             if node.loop.driver.state=='parking_turn':break
         commands=[m for topic,m in node.published if topic==c['topics']['drive']]
         assert commands[-1].speed>0 and commands[-1].steering_angle<0
+        node.loop.driver.parking.turn_angle=node.loop.driver.parking.c['white_loss_min_angle']
         fake_ros.Clock.now_s=round(fake_ros.Clock.now_s+.1,6);now=fake_ros.Clock.now_s
         node.image=picture(False);node.image_stamp=node.scan_stamp=node.odom_stamp=now
         node.control()

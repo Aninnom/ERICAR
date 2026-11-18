@@ -334,6 +334,9 @@ ANSWER_CONFIG = {
         'template_ground_far': 2.5, 'template_orientation_ratio': 1.8,
         'template_right_min': -1.1, 'template_right_max': -.05,
         'template_transition_tolerance': .24,
+        # 선택 후 2프레임 연속 점유되면 다른 칸으로 전환. 회전 직전에는 차량 폭을 포함한 원호 검사.
+        'template_selected_occupied_frames': 2,
+        'turn_path_check_distance': .90, 'turn_path_margin': .03,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
@@ -380,7 +383,8 @@ ANSWER_CONFIG = {
         'occupancy_edge_margin': .015, 'occupancy_min_hits': 3, 'free_ray_fraction': .65,
         'white_roi_top': .50, 'white_roi_side_margin': .02, 'white_hough_votes': 20,
         'white_min_length_fraction': .12, 'white_min_vertical_fraction': .12,
-        'white_loss_frames': 1, 'white_acquire_timeout': 1.5,
+        # 장애물 모서리를 흰 선으로 오인해 38도에서 멈춘 11/18 bag 대응.
+        'white_loss_frames': 1, 'white_loss_min_angle': 1.134, 'white_acquire_timeout': 1.5,
     },
     'max_image_travel': 0.04, 'curve_speed_gain': 0.6,
     # 차선 번호: 0=오른쪽, 1=가운데, 2=왼쪽 (진행 방향 기준)
