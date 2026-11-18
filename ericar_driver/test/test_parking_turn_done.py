@@ -14,6 +14,7 @@ from ericar_driver.parking import Parking
 def config():
     c = yaml.safe_load((Path(__file__).resolve().parents[1]/'config/robot.yaml').read_text())
     c['answer'] = copy.deepcopy(ANSWER_CONFIG)
+    c['answer']['parking']['template_enabled'] = False  # 기존 조향·감속 회귀와 새 템플릿을 분리
     return c
 
 
