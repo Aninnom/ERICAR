@@ -504,6 +504,11 @@ ANSWER_CONFIG = {
         #   칸을 고른 뒤에는 표지판 통과 서행(0.12 m/s 고정) 생략, 감속 거리에서 거리 비례 감속만
         #   11/19 breakfastv3_1119_12_b~17: 2·3번 칸은 표지판 통과 서행으로 접근 단계 약 8 s·0.12 m/s. 끄기: by_slot None, without_target_only False
         'template_cruise_max_speed_by_slot': [.30, .40, .45], 'template_sign_slow_without_target_only': True,
+        # 11/19 parking_1119_3 (시험): smooth_after_any_slow = 칸을 골랐으면 감속 이유와 상관없이 거리 비례 감속
+        #   (시작 상한 = 그때 속도, 다시 빨라지지 않음). 16·19: 표지판 통과로 0.12 고정, 2번 칸까지 1 m에 8 s
+        #   defer_to_nearest = 칸을 못 골랐어도 아직 안 지난 비점유 칸이 있으면 표지판 통과 서행 대신 그 칸 감속 거리로만.
+        #   15·20: 3번 칸 UNKNOWN @1.5 m에서 표지판 통과 → 0.18 서행 탐색 3~5 s. 끄기: 둘 다 False → parking_1119_2와 같음
+        'template_smooth_after_any_slow': True, 'template_sign_slow_defer_to_nearest': True,
         'template_cruise_armed_distance': 2.5, 'search_speed': .18,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,

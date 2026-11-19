@@ -285,12 +285,25 @@ class Parking:
         if by_slot and slot is not None and 0<=slot<len(by_slot):return float(by_slot[slot])
         return base
 
+    def _smooth_any(self):
+        return bool(self.c.get('template_enabled',False) and self.c.get('template_smooth_after_any_slow',False))
+
+    def _start_smooth_cap(self):
+        v=abs(getattr(self,'last_velocity',0.))
+        self.approach_speed_cap=max(self.c['scan_speed'],v)
+
     def _sign_slow(self):
         """표지판 통과 서행. template_sign_slow_without_target_only면 칸을 이미 골랐을 때는 생략하고
         감속 거리(TARGET_BRAKING_DISTANCE, 거리 비례 감속)로만 줄임 (11/19: 2·3번 칸이 0.12 m/s로 약 1 m·8 s)"""
         slow=self.sign.passed and (self.c['slow_on_sign_passed'] or
             (self.c.get('template_enabled',False) and self.c.get('template_slow_on_sign_passed',False)))
         if slow and self.selected is not None and self.c.get('template_sign_slow_without_target_only',False):
+            return False
+        # 11/19 parking_1119_3: 칸을 못 골랐어도 아직 안 지난 비점유(FREE·UNKNOWN) 칸이 있으면 표지판 통과 서행 대신
+        # 그 칸 회전점까지 감속 거리(TARGET_BRAKING_DISTANCE)로만 줄임. 3번 칸은 회전점 0.66~0.95 m 앞에서야 FREE
+        # (15·20: 표지판 통과 때 UNKNOWN @1.44~1.52 m → 0.18 서행 탐색 3~5 s). 비점유 칸이 없으면 기존대로 서행
+        if (slow and self.selected is None and self.c.get('template_enabled',False) and
+                self.c.get('template_sign_slow_defer_to_nearest',False) and self.nearest_start is not None):
             return False
         return slow
 
@@ -309,6 +322,10 @@ class Parking:
         # uses the original fixed scan speed and never invents a parking target.
         self.smooth_approach=bool(self.selected is not None and reason=='TARGET_BRAKING_DISTANCE')
         self.approach_speed_cap=None
+        if self.selected is not None and self._smooth_any():
+            # 11/19 parking_1119_3: 칸을 골랐으면 감속 이유(표지판 통과 등)와 상관없이 거리 비례 감속.
+            # 지금 속도보다 다시 빨라지지 않게 시작 상한 = 지금 속도 (16·19: 표지판 통과로 0.12 고정, 남은 1 m에 8 s)
+            self.smooth_approach=True;self._start_smooth_cap()
         if self.selected is not None:self.approach_started=now;self.approach_distance=0.
 
     def _approach_speed(self,requested):
@@ -658,6 +675,7 @@ class Parking:
         if self.state in ('parked','parking_failed','parking_cancelled'):return self._output()
         if now<self.last_tick:return self.fail('CLOCK_RESET')
         dt=min(max(now-self.last_tick,0.),.5);self.last_tick=now;self.selected_fresh=False
+        self.last_velocity=float(velocity)
         self.scan_stamp=scan_stamp
         rate=angular_velocity if measured_turn_rate is None else measured_turn_rate
         if not all(math.isfinite(v) for v in (velocity,angular_velocity,rate)) or scan is None or not 0<=now-scan_stamp<self.c['sensor_timeout']:
@@ -714,6 +732,9 @@ class Parking:
                 late|=self._find_gap(scan,scan_stamp,now,velocity,rate)
             if self.selected is not None:
                 self.state='parking_approach';self.approach_started=now;self.approach_distance=0.;dt=0.
+                if self._smooth_any():
+                    # 서행 탐색(0.18) 중 칸을 고른 경우(3번 칸 15·20)도 그 순간부터 거리 비례 감속, 시작 상한 = 지금 속도
+                    self.smooth_approach=True;self._start_smooth_cap()
         if self.state=='parking_approach':
             stopped=self._approach(now,dt,velocity,rate,scan)
             if stopped is not None:return stopped
