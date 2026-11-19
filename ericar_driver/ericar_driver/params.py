@@ -135,7 +135,8 @@ ANSWER_CONFIG = {
         'timeout': 1.5, 'minimum_area': 0.0006, 'confirm_frames': 2,
         # 작은 화살표부터 준비. 면적 0.15%·서로 다른 3프레임 확인 (실영상 조정 필요)
         # 빨강·노랑은 1프레임에 확정 → 녹색과 동시 검출(광고판 등)되면 바로 녹색 허가 차단 (PR #42 본문 내용, 11/14 반영)
-        'confirm_frames_by_class': {'left': 3, 'right': 3, 'traffic_red': 1, 'traffic_yellow': 1},
+        # 11/19 저녁 사용자 지시: 화살표 처음 확정 연속 3 → 4 (면적·신뢰도 인자를 써도 갈림길 실패, 시험 없이 반영)
+        'confirm_frames_by_class': {'left': 4, 'right': 4, 'traffic_red': 1, 'traffic_yellow': 1},
         # arrow_vote (11/18 소민, 녹화 재현만·실차 전): 화살표는 위 연속 3에 더해 '최근 window 프레임 중 count 이상 +
         # 반대 opposite_max 이하 + 이번 프레임도 같은 화살표'여도 확정 (driver.arrow_vote). 끄기: enabled False
         # 11/18 녹화 4개: 19는 1.8 s 앞당겨짐, 05·17·20은 그대로, 틀린 확정 0. 5중 3은 20을 right로 잘못 확정해서 안 씀
@@ -398,7 +399,8 @@ ANSWER_CONFIG = {
         # (driver.arrow_on_island). 차가 섬 옆 차로면 섬 쪽으로 −5~wide(°), 가운데 근처면 ±narrow(°). 끄기: False
         'fork_sign_bearing': True, 'fork_sign_fov': 71.0, 'fork_sign_bearing_wide': 40.0, 'fork_sign_bearing_narrow': 15.0,
         # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
-        'fork_relock_frames': 5,
+        # 11/19 저녁 사용자 지시: 방향 교체 연속 5 → 3 → 2 (시험 없이 반영)
+        'fork_relock_frames': 2,
         # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
         # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
         # 11/12: 0.3 → 0.45 (빈칸 + 화면 끝 잘린 조각 최소 길이 0.08 여유. 실제 점선 빈칸 실측 후 조정)
