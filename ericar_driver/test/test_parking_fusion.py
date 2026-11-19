@@ -52,9 +52,8 @@ def side_face(x,y0=-.34,y1=-.76,step=.02):
 
 
 def test_side_faces_pull_short_template_forward_without_depth_drift():
-    """실차: 템플릿이 실제보다 약 0.21 m 앞(차 쪽). 옛 상한 0.15·앞면 가정은 깊이로 -0.15 끌고 감
-    (융합 모델 시험이라 진행 방향 상한은 예전 0.20으로 둠. 11/19 경기장 기본값은 0.05)"""
-    c=config();p=c['answer']['parking'];p['template_fusion_max_offset']=.20
+    """실차: 템플릿이 실제보다 약 0.21 m 앞(차 쪽). 옛 상한 0.15·앞면 가정은 깊이로 -0.15 끌고 감"""
+    c=config();p=c['answer']['parking']
     slots=slots_from_anchor([.20,-.28],[1.,0.],[0.,-1.],.5,.59,3,p['template_slot_pitch'])
     origin=np.array([c['robot']['lidar']['x'],c['robot']['lidar'].get('y',0.)])
     # 실제 칸 0 왼쪽 경계 0.41 → 칸 1·2 LIMO 옆면 = 경계 + (0.513-0.225)/2

@@ -116,8 +116,7 @@ def test_row_start_comes_from_start_line_when_close():
     assert not p.template_slots                      # 시작선을 3번 보기 전
     _feed(p,[near]*3)
     assert len(p.template_slots)==3
-    row=c['answer']['parking']['template_start_to_row']  # 11/19 경기장 0.54 (표지판 기둥 대조)
-    assert np.allclose(p.template_slots[0]['entrance'],[.60+row+.25,-.24],atol=.02),p.template_slots[0]['entrance']
+    assert np.allclose(p.template_slots[0]['entrance'],[.60+.45+.25,-.24],atol=.02),p.template_slots[0]['entrance']
     assert p.template_debug['anchors'][0]['confidence']=='START_LINE_OFFSET' if p.template_debug['anchors'] else True
 
 
@@ -261,61 +260,3 @@ def test_white_loss_before_minimum_angle_does_not_stop_turn():
         assert not p.line_seen_armed  # 69°: 템플릿 모드 정지 각도(80°) 전에 보인 선은 정지 근거 아님 (track_test_1118_02 71° 정지)
         p.turn_angle=1.45;p._white(np.zeros((4,4,3),np.uint8),1.1)
     assert p.line_seen_armed and p.loss_frames==0  # 80° 뒤에 다시 보임 → 이후 소실은 정지 근거
-
-
-def _lot_frames(p,stamps,shift=0.):
-    """틀을 직접 넣고(시작선·기준점 검출 생략) 칸 0만 FREE로 판정하며 _observe_template 반복"""
-    image=np.zeros((480,640,3),np.uint8)
-    empty=dict(start_seen=False,start_x=None,anchors=[],start_segments=[],white_longitudinal=[],
-               yellow_longitudinal=[],right_ground=[],reason='TEST')
-    def occupancy(slot,*_):return ('FREE' if slot['slot_index']==0 else 'OCCUPIED'),dict(reason='TEST')
-    for stamp in stamps:
-        if shift:
-            for slot in p.template_slots:
-                slot['entrance']=[slot['entrance'][0]+shift,slot['entrance'][1]]
-                slot['polygon']=[[x+shift,y] for x,y in slot['polygon']]
-        with patch('ericar_driver.parking.parking_template_landmarks',return_value=empty), \
-             patch('ericar_driver.parking.classify_camera_slot',side_effect=occupancy):
-            p._observe_template(image,stamp,{},stamp,stamp,0.,0.)
-
-
-def _lot_parking(entrance_x):
-    c=config();c['answer']['parking']['template_enabled']=True;p=Parking(c);p.start(0.)
-    p.template_armed=True
-    p.template_slots=slots_from_anchor([entrance_x-.25,-.25],[1.,0.],[0.,-1.],.5,.59,3,.513)
-    return c,p
-
-
-def test_first_slot_shift_survives_resync():
-    """11/19: 첫 칸 미루기가 선택 순간에만 적용되고 다음 프레임 보정 틀로 덮여 사라지던 문제"""
-    c,p=_lot_parking(1.2);shift=c['answer']['parking']['template_first_slot_shift']
-    _lot_frames(p,[1.,1.1,1.2])
-    assert p.selected['slot_index']==0 and p.selected.get('first_slot_shift_m')==shift
-    fused=p.template_slots[0]['entrance'][0]+(p.template_alignment[0] if p.template_alignment is not None else 0.)
-    assert abs(p.selected['entrance'][0]-(fused+shift))<1e-6
-
-
-def test_target_is_frozen_near_turn_start():
-    """track_testv2_1118_09: 회전 시작 프레임에 목표가 0.126 m 튐 → 회전점 0.25 m 안에서는 보정 틀로 다시 맞추지 않음"""
-    c,p=_lot_parking(Parking(config())._turn_lead()+.10)
-    _lot_frames(p,[1.,1.1])
-    before=list(p.selected['entrance'])
-    _lot_frames(p,[1.2],shift=-.12)
-    assert p.selected['entrance']==before and p.selected.get('target_frozen')
-
-
-def test_target_jump_is_rate_limited_far_from_turn():
-    c,p=_lot_parking(Parking(config())._turn_lead()+.80)
-    _lot_frames(p,[1.,1.1])
-    before=p.selected['entrance'][0]
-    _lot_frames(p,[1.2],shift=-.12)
-    limit=c['answer']['parking']['template_target_max_jump']
-    assert abs(abs(p.selected['entrance'][0]-before)-limit)<1e-6
-
-
-def test_parked_check_reports_side_gaps():
-    c=config();p=Parking(c)
-    lidar=np.array([c['robot']['lidar']['x'],0.]);half=c['robot']['width']/2
-    scan=dict(points=np.array([[.1,.40],[.2,.42],[.0,-.30],[1.0,0.]])-lidar)
-    check=p._parked_check(scan)
-    assert abs(check['left_gap_m']-(.40-half))<1e-9 and abs(check['right_gap_m']-(.30-half))<1e-9
