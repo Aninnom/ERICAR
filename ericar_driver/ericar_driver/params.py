@@ -747,7 +747,7 @@ ANSWER_CONFIG = {
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
         # 11/19 다시 켬 (사용자 지시): 끈 상태로는 점선 추종이 넘겨준 뒤 기존 방식이 경기장 배치(합성 venue 6건)에서 75 s 멈춤,
         #   켜면 5/6 통과. 소민 test/dashed-line-avoidance(점선 쪽 당김·갈림길 우회)도 켬 전제
-        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # redecide_tail (11/18, track_test_1118_01~05): cross_two arrival must leave this much free distance ahead (m).
         # 0.2 -> 0.6: all five runs arrived 0.37 m behind an obstacle, then a 0.10 m/s short S (11~16 s).
         # synthetic 100 layouts: 0.2/0.6/1.0 identical (67/100). real car unverified. revert: remove key (falls back to avoid_plan_tail)
