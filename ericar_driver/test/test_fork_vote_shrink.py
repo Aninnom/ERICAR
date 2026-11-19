@@ -30,40 +30,8 @@ def fake_driver(config):
     """confirmed()·arrow_vote()만 쓰는 가짜 Driver (ROS·센서 없이)"""
     d = types.SimpleNamespace(c=config, sign_counts={}, last_detection_stamp=None, arrow_history=[])
     d.arrow_vote = types.MethodType(Driver.arrow_vote, d)
-    d.area_ok = types.MethodType(Driver.area_ok, d)
     d.confirmed = types.MethodType(Driver.confirmed, d)
     return d
-
-
-def test_arrow_area_confidence():
-    """화살표 집계 면적·작은 박스 신뢰도 (11/19, driver.area_ok)와 실행 인자 반영 (node.apply_arrow_options)"""
-    def ok(area, confidence, **detector):
-        c = copy.deepcopy(ANSWER_CONFIG)
-        c['detector'].update(detector)
-        return fake_driver(c).area_ok(dict(name='right', area=area, confidence=confidence))
-    assert ok(0.0045, 0.6) and not ok(0.002, 0.99)                       # 기본: 기존 최소 면적 0.003만 적용
-    assert not ok(0.0045, 0.99, arrow_area=0.006) and ok(0.0065, 0.5, arrow_area=0.006)   # 면적만: 작은 박스 버림
-    both = dict(arrow_area=0.006, arrow_small_confidence=0.85)
-    assert ok(0.0045, 0.9, **both) and not ok(0.0045, 0.8, **both) and ok(0.007, 0.5, **both)
-    assert not ok(0.002, 0.99, **both)                                    # 기존 최소 면적 미만은 신뢰도가 높아도 버림
-    c = copy.deepcopy(ANSWER_CONFIG)
-    c['detector'].update(both)
-    assert fake_driver(c).area_ok(dict(name='pedestrian', area=0.0045, confidence=0.5))   # 다른 표지판은 그대로
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import fake_ros
-    if "rclpy" not in sys.modules:
-        fake_ros.install(lambda node: None)   # rclpy 없이 node 모듈을 불러오기 위함
-    from ericar_driver.node import apply_arrow_options
-    d = apply_arrow_options(copy.deepcopy(ANSWER_CONFIG['detector']), {'--arrow-vote': 'false', '--arrow-area': '0.006', '--arrow-confidence': '0.85'})
-    assert d['arrow_vote']['enabled'] is False and d['arrow_area'] == 0.006 and d['arrow_small_confidence'] == 0.85
-    d = apply_arrow_options(copy.deepcopy(ANSWER_CONFIG['detector']), {'--arrow-vote': 'default', '--arrow-area': '', '--arrow-confidence': 'default'})
-    assert d['arrow_vote']['enabled'] is True and d['arrow_area'] is None and d['arrow_small_confidence'] is None
-    for bad in ({'--arrow-vote': 'maybe'}, {'--arrow-area': 'big'}, {'--arrow-confidence': '1.5'}):
-        try:
-            apply_arrow_options(copy.deepcopy(ANSWER_CONFIG['detector']), bad)
-        except SystemExit:
-            continue
-        raise AssertionError(bad)
 
 
 def first_confirm(frames, config):
@@ -232,7 +200,6 @@ def test_defaults():
 if __name__ == '__main__':
     test_defaults()
     test_arrow_vote()
-    test_arrow_area_confidence()
     test_shrink()
     test_redecide_fork_guard()
     test_shrink_drive()

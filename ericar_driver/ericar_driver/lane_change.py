@@ -470,14 +470,6 @@ class LaneChange:
         if not (lane.get('valid') and self.seen_lane == self.index+self.direction*self.span and
                 self.seen_count >= c.get('camera_fix_frames', 2) and self.camera_trusted(lane)):
             return False
-        # 이동 진행 조건 (11/19 track_test_1119_02·07 3.3 m): 왼쪽 끝 차로에서 오른쪽 이동을 막 시작한 순간(횡이동 0 m)
-        # 앞 LIMO 흰 차체가 왼쪽 흰 선으로 잡혀 흰/흰 2프레임 → 횡이동 0 → −0.59 m로 덮어써 '지나침' 종료·번호 2 → 1
-        # (실제는 2) → 이후 번호가 한 칸 어긋나 A 입구에서 fork_boundary_hold 정지. 목표의 camera_fix_progress 미만이면 보정 안 함
-        # (11/19 녹화 정상 보정 32건은 진행률 0.63~0.86, 오인 3건은 0.00~0.05). 끄기: 0
-        progress = c.get('camera_fix_progress', 0.0)
-        if progress and self.offset*(1 if self.target >= 0 else -1) < abs(self.target)*progress:
-            self.debug['camera_fix_early'] = round(self.offset, 3)
-            return False
         heading = lane['heading']
         center = lane['error']*math.cos(heading)-lane.get('forward', .65)*math.sin(heading)
         if abs(center) > c['lane_width']*c.get('camera_fix_range', .5):
@@ -603,16 +595,6 @@ class LaneChange:
         points = self.drop_walls(points, heading, camera_center, self.index, self.trusted_colors(lane))
         forward, left = to_road(points, heading)
         # 지금 차로 중앙이 차 기준 왼쪽으로 몇 m인지 (카메라 차선). 갈림길 요청은 차 기준
-        # 끝 차로인데 바깥쪽 선이 흰색 = 있을 수 없는 조합 → 한 선의 좌우 이름이 틀린 프레임. 그 차로 중앙값을 목표에 쓰지 않음
-        # (11/19 track_testv3_1119_13·15: 왼쪽 끝 차로에서 오른쪽 0.15~0.19 m의 흰 점선을 '왼쪽 선'으로 읽어 중앙 −0.36 m
-        #  → 두 칸 가로지르기 목표 −1.04 − 0.26 = −1.30 m → B 오른쪽 노란 선 넘음). 끄기: center_color_check False
-        center_rejected = None
-        if self.c.get('center_color_check', True):
-            colors = lane.get('colors') or {}
-            outer = 'left' if self.index >= self.c['lane_count']-1 else 'right' if self.index <= 0 else None
-            if outer is not None and colors.get(outer) == 'white':
-                center_rejected = round(camera_center, 3)
-                camera_center = 0.0
         center = 0.0 if requested else camera_center
         anchor_center = max(-self.c['lane_width']/2, min(self.c['lane_width']/2, camera_center))
         # 표지판 요청 이동: 옆 장애물이 뒷축 앞 request_side_ahead(m) 안까지 빠졌으면 시작 (조향해도 옆 차로에 들어가기까지 약 0.5 m 더 감)
@@ -629,8 +611,6 @@ class LaneChange:
         for side in (1, -1):
             free[side] = min(f[side] for _, f, a in self.free_log if a == ahead)
         self.debug = dict(free=free, index=self.index, walls=self.walls)
-        if center_rejected is not None:
-            self.debug['center_rejected'] = center_rejected     # 선 색 모순으로 버린 카메라 차로 중앙값
         if self.remembered:
             self.debug['lane_memory'] = True
         if self.c.get('anchor_enabled', True):
@@ -710,12 +690,6 @@ class LaneChange:
             if near_fork and self.debug['rejected'].get(side) == 'yellow_boundary':
                 if scan.get('valid_fraction', 1.) >= .5:
                     plan = self.plan_fork_boundary_route(lane, body_points(scan, self.robot), heading, requested, request_limit)
-                if plan is None and self.inside_branch(lane):
-                    # 번호는 가운데인데 실제로는 이미 분기 길 안 (11/19 track_test_1119_02·07: A 입구에서 14·22 s 정지)
-                    # → 번호를 목적 차로로 바로잡고 차선 주행에 넘김 (fork가 입구 도착을 목적 차로로 처리)
-                    self.index += requested
-                    self.debug['reason'] = 'fork_inside_branch'
-                    return None
                 if plan is None:
                     self.debug['reason'] = 'fork_boundary_hold'
                     return 0.0, 0.0
@@ -833,32 +807,6 @@ class LaneChange:
         self.plan = plan
         self.target = direction*self.span*self.c['lane_width']+center
         return self.update(lane, scan, 0.0, 0.0, dt, enabled)
-
-    def inside_branch(self, lane):
-        """분기 길(A·B) 안에 이미 들어와 있는지: 양쪽 노란 선이 차를 사이에 두고 나란하며 폭이 차로 폭, 섬 기둥이 가깝지 않음
-        가운데 차로에서 섬을 마주 보면 섬 테두리 두 선이 앞에서 모이거나 교차하고 기둥이 바로 앞 (11/19 09번 37.8 s:
-        먼 쪽 폭 −0.61 m·기둥 1.24 m). 분기 안은 가까운 쪽 0.48~0.58 m·먼 쪽 0.61~0.76 m·기둥 없음 (02·04·05·07·08·09번)
-        끄기: fork_inside_width None"""
-        c, v = self.c, self.vision
-        limits = c.get('fork_inside_width')
-        fits, spans, colors = lane.get('fits', {}), lane.get('fit_spans', {}), lane.get('colors', {})
-        if not limits or not lane.get('valid') or any(
-                colors.get(side) != 'yellow' or side not in fits or side not in spans for side in ('left', 'right')):
-            return False
-        if self.anchor_front is not None and self.anchor_front < c.get('fork_inside_anchor', 1.5):
-            return False
-        first = max(spans['left'][0], spans['right'][0])
-        last = min(spans['left'][1], spans['right'][1])
-        row_m = (v['far']-v['near'])/(v['height_px']-1)
-        if (last-first)*row_m < c.get('fork_inside_length', .3):
-            return False
-        scale = v['width_px']/v['view_width']
-        rows = np.linspace(first, last, 8)
-        left = (v['width_px']/2-np.polyval(fits['left'], rows))/scale      # 차 기준 왼쪽 +
-        right = (v['width_px']/2-np.polyval(fits['right'], rows))/scale
-        width = left-right
-        self.debug['fork_inside'] = [round(float(width[-1]), 2), round(float(width[0]), 2)]   # 가까운 쪽, 먼 쪽 폭
-        return bool(np.all((width >= limits[0]) & (width <= limits[1])) and left[-1] > 0 > right[-1])
 
     def plan_fork_boundary_route(self, lane, lidar, heading, requested, limit):
         """섬 앞에서 경계 사이 직접 진입을 먼저, 반대 차로 우회는 그다음 검사."""

@@ -149,11 +149,10 @@ class DriverNode(Node):
         self.status_stamp = self.now()   # 헤더 시각 비정상(sec: 1)이라 수신 시각 사용
 
     def is_auto(self):
-        """자동 값(1)이 아닌 것이 확인된 때만 False (SWB 아래 0·중립 조종기 운전 3 모두 수동).
-        상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
+        """수동으로 확인된 때만 False. 상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
         r = self.c['restart']
         fresh = self.now() - self.status_stamp < r['status_timeout']
-        return not (fresh and self.control_mode is not None and self.control_mode != r['auto_mode'])
+        return not (fresh and self.control_mode == r['manual_mode'])
 
     @staticmethod
     def detector_paused(state):
@@ -252,11 +251,9 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false] [--parking-profile a|b]
-    [--arrow-vote true|false] [--arrow-area 면적] [--arrow-confidence 신뢰도] (default·빈 값 = params.py 그대로). --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false] [--parking-profile a|b]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'b',
-               '--arrow-vote': '', '--arrow-area': '', '--arrow-confidence': ''}
+    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'b'}
     for flag in options:
         if flag in args:
             i = args.index(flag)
@@ -266,32 +263,7 @@ def parse_args(argv):
             args = args[:i] + args[i + 2:]
     yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
     parking_test=options['--parking-test'].lower() not in ('false','0','no','off')
-    ARROW_OPTIONS.update({k: options[k] for k in ('--arrow-vote', '--arrow-area', '--arrow-confidence')})
     return args, yolo, options['--start-stage'], parking_test, options['--parking-profile']
-
-
-ARROW_OPTIONS = {}
-
-
-def apply_arrow_options(detector, options):
-    """갈림길 화살표 확정 실행 인자 반영 (default·빈 값·없는 값은 params.py 그대로). 잘못된 값은 실행 중단"""
-    vote, area, confidence = (str(options.get(k, '') or '').strip() for k in ('--arrow-vote', '--arrow-area', '--arrow-confidence'))
-    vote, area, confidence = ('' if v.lower() == 'default' else v for v in (vote, area, confidence))
-    if vote:
-        if vote.lower() not in ('true', 'false', '1', '0', 'yes', 'no', 'on', 'off'):
-            raise SystemExit(f'arrow_vote "{vote}"는 true 또는 false여야 합니다')
-        detector.setdefault('arrow_vote', {})['enabled'] = vote.lower() in ('true', '1', 'yes', 'on')
-    for text, key, low, high in ((area, 'arrow_area', 0.0, 0.2), (confidence, 'arrow_small_confidence', 0.0, 1.0)):
-        if not text:
-            continue
-        try:
-            value = float(text)
-        except ValueError:
-            raise SystemExit(f'{key} "{text}"는 숫자여야 합니다')
-        if not low <= value <= high:
-            raise SystemExit(f'{key} {value}는 {low}~{high} 범위여야 합니다')
-        detector[key] = value
-    return detector
 
 
 def main(config_path=None):
@@ -306,9 +278,6 @@ def main(config_path=None):
             raise SystemExit(f'start_stage "{start_stage}"는 {list(START_SECTION)} 중 하나여야 합니다')
         c['missions']['start_stage'] = start_stage
     apply_parking_profile(c['parking'], parking_profile)
-    apply_arrow_options(c['detector'], ARROW_OPTIONS)
-    print(f"[fork] arrow_vote={c['detector'].get('arrow_vote', {}).get('enabled')} arrow_area={c['detector'].get('arrow_area')} "
-          f"arrow_small_confidence={c['detector'].get('arrow_small_confidence')}", flush=True)
     print(f"[parking] profile={c['parking']['profile']} start_to_row={c['parking']['template_start_to_row']} "
           f"fusion_max_offset={c['parking']['template_fusion_max_offset']}", flush=True)
     c['parking']['test_wait_for_sign']=parking_test

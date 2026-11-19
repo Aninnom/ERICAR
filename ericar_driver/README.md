@@ -141,9 +141,6 @@ ros2 launch ericar_driver bringup.launch.py
 | `record` | `false` | `true`면 `~/bags/run_<월일_시분>` 녹화 (`bag:=` 로 경로 지정) |
 | `exposure` | `600` | 카메라 수동 노출. 600에서 약 16.6 Hz, 300은 약 30 Hz |
 | `start_stage` | `slow` | 시작 구간 (아래 "재출발") |
-| `arrow_vote` | `default` | 갈림길 화살표 다수결 확정 `true`·`false` (`default` = `params.py` `detector.arrow_vote`) |
-| `arrow_area` | `default` | 화살표 확정 집계 최소 면적(화면 비율, 예 `0.006`). `default` = 기존 0.003만 적용 |
-| `arrow_confidence` | `default` | `arrow_area`보다 작은 박스를 세는 최소 신뢰도(예 `0.85`). `default` = 작은 박스 버림 |
 | `model`, `config` | `~/models/best.pt`, `config/robot.yaml` | 주행 노드로 전달 |
 
 예: 차선만 + 녹화 `ros2 launch ericar_driver bringup.launch.py yolo:=false record:=true`
@@ -204,7 +201,7 @@ ros2 launch ericar_driver bringup.launch.py record:=true start_stage:=fork
 
 주최 답변(11/18): 재출발 때 프로그램 종료 후 재실행 불가, 실행 중인 상태에서 차만 미션 구간 시작 지점으로 옮김.
 
-1. SWB 중립(수동 운전, 11/19 규정) → 조종기로 몰아 미션 시작 지점에 진행 방향으로 세움 (SWB 아래로 들어 옮겨도 동작)
+1. SWB 아래(수동) → 차를 미션 시작 지점에 진행 방향으로 놓음 (들어서 옮겨도, 조종기로 몰아도 됨)
 2. SWB 위(자동) → 바로 출발
 
 - 수동인 동안: 판단 멈춤, IMU 회전만 적분 (들어서 돌려도 측정됨). 상태 표시 `manual (SWB)`
@@ -214,7 +211,7 @@ ros2 launch ericar_driver bringup.launch.py record:=true start_stage:=fork
   - S4는 미션이 둘: 신호등을 끝낸 뒤(통과·포기)였으면 주차 지점(`parking`), 아니면 신호등 지점(`traffic`) 재출발로 봄
 - 수동이 `restart.min_manual`(1초)보다 짧으면 무시 (조종기 신호 튐)
 - 노드를 켠 뒤 첫 자동 전환은 출발로 봄: `start_stage` 그대로, 그 전에 차를 들고 돌린 회전은 버림
-- 수동·자동은 `/limo_status` `control_mode` (1 = 자동, 그 외 수동: SWB 아래 0·조종기 운전 3, 약 2 Hz). 상태가 3초 넘게 안 오면 자동으로 봄
+- 수동·자동은 `/limo_status` `control_mode` (0 = 수동, 1 = 자동, 약 2 Hz). 상태가 3초 넘게 안 오면 자동으로 봄
 - 확인: `/answer/detections` `control.restarts`(재출발 횟수)·`restart_error`(놓인 방향과 구간 방향의 차 °)·`section`
 - 주의: 차를 반대 방향으로 놓거나 옮기는 중 크게 기울이면 구간 판단이 틀릴 수 있음. 같은 방향을 유지하며 옮김
 - 주의: 신호등을 통과한 뒤 신호등 지점부터 다시 하면 신호등을 지난 것으로 봄 → 이 경우는 노트북 재시작 불가이므로 운영진 확인 필요

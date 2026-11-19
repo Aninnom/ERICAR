@@ -5,7 +5,7 @@ ANSWER_CONFIG = {
     'rate_hz': 20.0, 'debug_rate_hz': 5.0, 'sensor_timeout': 0.7, 'odometry_timeout': 0.7,
     # 11/18 유경: base_speed 0.4 -> 0.6 (랩타임). 감속 계열(slow_speed·minimum_curve_speed·zigzag·slow_zone)은 그대로
     # 규정 권고는 0.3~0.4라 육안 판정 미션(서행)에서 기본 속도가 빨라 보일 수 있음 -> 팀장 확인 필요
-    'base_speed': 0.8, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
+    'base_speed': 0.6, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
     # 코너 속도 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
     # 11/18 유경: 0.2 -> 0.25 (0.4 접촉과 사이, 차로 폭 0.77 m에 여유 남김). 0.3 이상은 실차 확인 전까지 금지
     # 11/19 유경: 0.25 -> 0.4 (랩타임, 사용자 지시). 위 "0.3 이상 금지"를 넘는 값이라 실차 확인 전까지는 시험용.
@@ -47,7 +47,7 @@ ANSWER_CONFIG = {
                     #   주의: 같은 날 breakfastv3_1119_06·09·10 분석(혁준)의 코너 출구 오차는 바깥쪽 -0.17 ~ -0.27 m로
                     #   방향이 반대임. corner_speed 0.4를 그대로 둔 조합에서는 바깥선 접촉이 더 쉬워질 수 있음 →
                     #   1·2번 코너 바깥 여유부터 확인하고, 벌어지면 0.38로 되돌리거나 corner_speed를 0.3으로 내릴 것
-                    'steering': 0.36, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
+                    'steering': 0.33, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
                     # 유지 중 조향 = 시작 값 + error_gain × (시작 오차 − 현재 오차), steering_min~max_steering 제한
                     # 11/19 유경: steering_min 0.2 -> 0.14. 1118 녹화 19·20번에서 차가 코너 안쪽으로 0.09~0.15 m
                     #   치우친 순간 조향이 정확히 0.200에 멈춰 있었음 = 하한에 막혀 보정이 더 펴 주지 못함.
@@ -64,10 +64,9 @@ ANSWER_CONFIG = {
     # 수동이 min_manual(s) 넘게 이어진 뒤 자동으로 돌아오면 드라이버를 새로 만들고(미션 상태 전부 초기화),
     # 놓인 방향으로 구간을 다시 정해 그 구간의 start_stage로 시작한 것과 같게 함 (driver.restart, section.relocate)
     # 노드를 켠 뒤 첫 자동 전환은 출발로 봄: start_stage 그대로
-    # /limo_status control_mode: auto_mode(1) = 자동, 그 외 전부 수동 (11/8 lane_1108_1618: 0인 동안 명령 0.2에도 정지, 1부터 주행)
-    # 11/19 규정 변경: 재출발 이동은 SWB 중립 수동 운전 → 조종기로 몰 때 3 (check_1118_01·lane 108 s) → 0만 수동으로 보면 자동으로 오인
+    # /limo_status control_mode: manual_mode(0) = 수동, 1 = 자동 (11/8 lane_1108_1618: 0인 동안 명령 0.2에도 정지, 1부터 주행)
     # 상태가 status_timeout(s) 넘게 안 오면 자동으로 봄 (예전 동작). 약 2 Hz 토픽. 끄기: enabled False
-    'restart': {'enabled': True, 'min_manual': 1.0, 'auto_mode': 1, 'status_timeout': 3.0},
+    'restart': {'enabled': True, 'min_manual': 1.0, 'manual_mode': 0, 'status_timeout': 3.0},
     # 구간 관리자 (section.py): 누적 회전이 다음 직선 방향(−90°씩)까지 margin(°) 안으로 들어오면 구간 +1
     # margin 25 → −65°·−155°·−245°·−335°에서 전환. 갈림길 꺾임 45°·차선 변경 흔들림은 못 미침
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
@@ -142,12 +141,6 @@ ANSWER_CONFIG = {
         # 반대 opposite_max 이하 + 이번 프레임도 같은 화살표'여도 확정 (driver.arrow_vote). 끄기: enabled False
         # 11/18 녹화 4개: 19는 1.8 s 앞당겨짐, 05·17·20은 그대로, 틀린 확정 0. 5중 3은 20을 right로 잘못 확정해서 안 씀
         'arrow_vote': {'enabled': True, 'window': 6, 'count': 4, 'opposite_max': 1},
-        # arrow_area·arrow_small_confidence (11/19 혁준, 녹화 대입만·실차 전, driver.area_ok): 화살표 확정 집계 면적 기준
-        #   arrow_area None = 아래 minimum_area_by_class 그대로(기존 동작). 값이 있으면 그 면적 이상만 셈
-        #   arrow_small_confidence: 그보다 작은 박스(minimum_area_by_class 이상)도 신뢰도가 이 값 이상이면 셈. None = 작은 박스 버림
-        #   경기장 통과 20회 대입: 0.006·0.85면 틀린 확정 3 → 0, 확정 없음·아침 주행 확정 지점 그대로. 0.006만 쓰면 확정이 늦어짐
-        #   실행 인자 arrow_vote:=true|false arrow_area:=0.006 arrow_confidence:=0.85 로 덮어씀 (node.py)
-        'arrow_area': None, 'arrow_small_confidence': None,
         'minimum_area_by_class': {
             # 신호등 0.025 → 0.003: 서행 시작 흰 선(정지선 약 1 m 앞)부터 빨강을 읽도록 (소민 11/12)
             'parking': 0.002, 'pedestrian': 0.004, 'traffic_red': 0.003, 'traffic_yellow': 0.003,
@@ -344,7 +337,7 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전 상한. 늦은 진입 완화
-        'fork_exit_speed': 0.5,      # 방향 확정 뒤 목적 차로에서 분기 통과 중 상한 (11/16, 실차 전)
+        'fork_exit_speed': 0.3,      # 방향 확정 뒤 목적 차로에서 분기 통과 중 상한 (11/16, 실차 전)
         # 표지판 확정 전 중앙 차로 정렬(fork.center_request). 11/16 끔: 회피 직후 장애물 1.7 m 앞 가운데 차로로 복귀하다 정지 (main_1116_1614 192.3 s)
         'fork_center_align': False,
         'sign_cooldown': 12.0, 'fork_bias': 0.55,
@@ -752,13 +745,8 @@ ANSWER_CONFIG = {
         # 3차선 진입 흰 선 전 차선 변경 금지 (11/18 혁준, driver.entry_gate_open). 끄기: entry_gate False
         # entry_line_start: 앞축이 흰 선 이 거리(m) 전에 오면 허용 (차선 변경은 시작 뒤 약 0.4 m를 가야 차로 가장자리를 넘음)
         # entry_min_distance: 흰 선을 못 봤을 때 S2 주행 거리 기준(m). entry_max_distance: 이 거리부터는 무조건 허용
-        # center_color_check (11/19 사용자 지시, 녹화 값 대입만·실차 전): 끝 차로인데 바깥쪽 선이 흰색이면 카메라 차로 중앙값을
-        #   이동 목표·경로 계산에 쓰지 않음 (lane_change.update). track_testv3_1119_13·15 두 칸 가로지르기 목표 −1.30 → −1.04
-        'center_color_check': True,
         'entry_gate': True, 'entry_line_start': 0.30, 'entry_line_range': 1.3,
-        # 11/19 저녁 사용자 지시: entry_min_distance 0.25 → 0.55 (race_1119_01: 흰 선 미검출로 S2 0.28 m에서 오른쪽 이동 시작
-        #   → 벌어지는 사선 구간에서 오른쪽 선 넘음. 합성 120건: 0.55까지 장애물 간격 유지, 0.70부터 충돌 위험. 실차 전)
-        'entry_min_distance': 0.5, 'entry_max_distance': 1.0,
+        'entry_min_distance': 0.25, 'entry_max_distance': 1.0,
         # 이동 중 재판단 (11/18 혁준, lane_change.redecide, 합성 시험만·실차 전). 끄기: redecide False
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄
@@ -825,11 +813,6 @@ ANSWER_CONFIG = {
         # 11/12: 이동 중 목적 차로 색이 camera_fix_frames번 연속이고 그 중앙이 차 기준 lane_width×range 안이면
         # 추측 항법 위치·방향을 카메라 값으로 교체 (odom·IMU 오차 누적 → 두 번 연속 변경 뒤 바깥선 이탈 대책)
         'camera_fix_frames': 2, 'camera_fix_range': 0.5,
-        # camera_fix_progress (11/19): 횡이동이 목표의 이 비율 미만이면 카메라 보정 안 함 (이동 시작 직후 흰 장애물을 흰 선으로 본
-        #   프레임으로 번호가 바뀌는 것 방지, lane_change.camera_correct). 끄기: 0
-        # fork_inside_width (11/19): fork_boundary_hold 정지 조건인데 양쪽 노란 선이 차를 사이에 두고 이 폭 범위(m)로 나란하고
-        #   섬 기둥이 fork_inside_anchor(m) 안에 없으면 이미 분기 길 안 → 번호를 목적 차로로 고치고 차선 주행 (lane_change.inside_branch). 끄기: None
-        'camera_fix_progress': 0.5, 'fork_inside_width': [0.40, 0.85], 'fork_inside_anchor': 1.5, 'fork_inside_length': 0.3,
         # 11/13 대회장 벽(노란 바깥선 위) 라이다 점 제거 (lane_change.drop_walls). 바깥선 ±wall_search(m) 안에서
         # 앞뒤 wall_min_length(m) 넘게 이어진 직선(점 wall_min_points개 이상, 기울기 wall_max_slope 이하) = 벽
         # → 그 선에서 wall_band(m) 안쪽 ~ 바깥 점 버림. 벽 없는 곳에서는 직선이 안 잡혀 아무것도 안 버림
