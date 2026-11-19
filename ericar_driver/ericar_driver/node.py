@@ -27,7 +27,7 @@ from .common import clip
 from .traffic_lamp import box_name, image_size, predict_confidence
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
-from .params import YOLO_CLASSES
+from .params import YOLO_CLASSES, apply_parking_profile
 from .section import START_SECTION
 
 
@@ -248,9 +248,9 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false]. --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false] [--parking-profile a|b]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false'}
+    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'a'}
     for flag in options:
         if flag in args:
             i = args.index(flag)
@@ -260,12 +260,12 @@ def parse_args(argv):
             args = args[:i] + args[i + 2:]
     yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
     parking_test=options['--parking-test'].lower() not in ('false','0','no','off')
-    return args, yolo, options['--start-stage'], parking_test
+    return args, yolo, options['--start-stage'], parking_test, options['--parking-profile']
 
 
 def main(config_path=None):
     # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용, 첫 구간(S0)부터 시작
-    args, yolo, start_stage, parking_test = parse_args(sys.argv)
+    args, yolo, start_stage, parking_test, parking_profile = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
@@ -274,6 +274,9 @@ def main(config_path=None):
         if start_stage not in START_SECTION:
             raise SystemExit(f'start_stage "{start_stage}"는 {list(START_SECTION)} 중 하나여야 합니다')
         c['missions']['start_stage'] = start_stage
+    apply_parking_profile(c['parking'], parking_profile)
+    print(f"[parking] profile={c['parking']['profile']} start_to_row={c['parking']['template_start_to_row']} "
+          f"fusion_max_offset={c['parking']['template_fusion_max_offset']}", flush=True)
     c['parking']['test_wait_for_sign']=parking_test
     c['parking']['test_drive_until_sign']=parking_test
     if parking_test:

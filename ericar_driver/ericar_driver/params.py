@@ -799,5 +799,25 @@ ANSWER_CONFIG = {
     },
 }
 
+# 주차 A/B 시험 (11/19 추추). 실행: driver.launch.py parking_profile:=a|b (기본 a)
+#   a: 지금 값 = 83b0474(3283a8d 되돌림) 기준. 시작선→줄 0.45, LiDAR 진행 방향 보정 ±0.20
+#   b: 3283a8d의 두 숫자만 다시 켬 (0.54, ±0.05). 목표 고정·첫 칸 밀기 유지 로직은 되돌림으로 빠져 b에도 없음
+#   b는 회전을 약 2~7 cm 일찍 시작. 같은 칸에서 번갈아 달리고 /debug의 parking.profile·reason을 비교
+PARKING_PROFILES = {
+    'a': {},
+    'b': {'template_start_to_row': .54, 'template_fusion_max_offset': .05},
+}
+
+
+def apply_parking_profile(parking, name):
+    """parking 설정 dict에 A/B 값을 덮어씀. 알 수 없는 이름이면 시작 시 종료"""
+    name = (name or 'a').lower()
+    if name not in PARKING_PROFILES:
+        raise SystemExit(f'parking_profile "{name}"는 {list(PARKING_PROFILES)} 중 하나여야 합니다')
+    parking.update(PARKING_PROFILES[name])
+    parking['profile'] = name
+    return parking
+
+
 YOLO_CLASSES = ['traffic_red', 'traffic_yellow', 'traffic_green', 'left', 'right', 'pedestrian', 'slow', 'parking']
 
