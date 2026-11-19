@@ -446,7 +446,9 @@ ANSWER_CONFIG = {
         # **경기장에서 시작선 ~ 주차 줄 시작(표지판) 거리를 줄자로 확인**
         # 시작선이 template_start_fix_distance(m) 안에 들어와 template_start_frames_min번 넘게 보였을 때 틀 확정
         # 0.65: 카메라 바닥 거리 추정이 1 m 밖에서는 10~20% 짧게 나옴(라이다 대조, 1.1 m에서 틀이 0.12~0.24 m 앞당겨짐) → 가까울 때만
-        'template_anchor_from_start': True, 'template_start_to_row': .45,
+        # 11/19 A/B(breakfastv3_1119_12~14): 0.45·±0.20은 3번 칸에서 LiDAR 보정 +0.19로 회전이 늦어 경로 막힘 2회 실패,
+        #   0.54·±0.05는 1·2·3번 칸 모두 선 안 밟고 주차 → 0.54로 결정 (2번 칸은 옆 선에 더 붙음, 반복 확인 필요)
+        'template_anchor_from_start': True, 'template_start_to_row': .54,
         # 첫 칸(0번)을 고르면 조향 목표를 다음 칸 쪽으로 이만큼(m) 옮김 (parking._observe_template, 11/18 혁준, 정윤에게 공유 필요)
         #   표지판 받침이 첫 칸 시작 모서리에 있어 회전 안쪽 옆면이 스침. 22번 재생: +0.05 여유 0.02(막힘), +0.08 여유 0.05(회전 시작), +0.11 여유 0.27
         #   0.08이면 차 옆면 ~ 0·1번 칸 경계선 약 0.06 m (칸 폭 0.50, 차 폭 0.225). 더 올리면 선을 밟음. 0이면 끔. 실차 미확인
@@ -469,7 +471,8 @@ ANSWER_CONFIG = {
         # 11/18 redecide_1118_08: 진행 방향 오차 약 0.21 m로 상한 0.15에 걸림. 큰 오차는 가까운 카메라 재보정이 담당.
         # 상한은 칸 간격 절반(0.257) 미만 필수: 0.30이면 옆면 하나만 보일 때 한 칸 밀린 해가 같은 점수 (재생 확인)
         # 깊이 방향은 물체 차로 쪽 끝이 입구선 밖일 때만 이동(한쪽 벌점). 옆면 u_min = -LIMO 폭/2 가정
-        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .20,
+        # 11/19 A/B: 진행 방향 보정 ±0.05로 결정 (위 template_start_to_row 참고)
+        'template_lidar_offset': [0.,0.], 'template_fusion_max_offset': .05,
         # 11/18 track_test_1118_04·05: 둘째 줄 물체를 담으려 칸을 0.14 m 깊게 밀어 가운데 칸 OCCUPIED → 칸 안쪽 이동은
         # max_deeper_offset 0.05까지만 (차로 쪽은 입구 밖으로 나온 물체용으로 normal_offset 0.15 유지).
         # 차 쪽 면이 칸 입구에서 max_face_depth(m)보다 깊은 군집(둘째 줄)은 정렬 점수에서 제외. 빈 칸 판정은 앞쪽 occupancy_depth(m)만
@@ -507,7 +510,8 @@ ANSWER_CONFIG = {
         'auto_start': True, 'auto_start_distance': 3.0, 'auto_start_placed': 0.2, 'auto_start_after_traffic': 0.9,
         'command_deadline': .65, 'scan_speed': .12, 'turn_speed': .12, 'turn_steering': -.35,
         # 최초 표지판부터 탐색. 목표 감속 거리에서 서행, 표지판 통과만으로 감속 제외
-        'cruise_search_enabled': True, 'cruise_max_speed': .4, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
+        # 11/19 cruise_max_speed 0.4 → 0.6 (사용자 지시, 시험). 시작선 뒤는 template_cruise_max_speed 0.30이 그대로 상한
+        'cruise_search_enabled': True, 'cruise_max_speed': .6, 'trial_cruise_max_speed': .2, 'cruise_timeout': 30., 'cruise_distance_limit': 8.,
         'slow_on_sign_passed': False, 'no_target_cruise_seconds': 1.0, 'no_target_cruise_distance': .35,
         'sign_near_area': .012, 'sign_exit_center': .90, 'sign_exit_min_area': .006,
         'sign_gone_frames': 3, 'sign_gone_seconds': .35,
@@ -799,19 +803,18 @@ ANSWER_CONFIG = {
     },
 }
 
-# 주차 A/B 시험 (11/19 추추). 실행: driver.launch.py parking_profile:=a|b (기본 a)
-#   a: 지금 값 = 83b0474(3283a8d 되돌림) 기준. 시작선→줄 0.45, LiDAR 진행 방향 보정 ±0.20
-#   b: 3283a8d의 두 숫자만 다시 켬 (0.54, ±0.05). 목표 고정·첫 칸 밀기 유지 로직은 되돌림으로 빠져 b에도 없음
-#   b는 회전을 약 2~7 cm 일찍 시작. 같은 칸에서 번갈아 달리고 /debug의 parking.profile·reason을 비교
+# 주차 A/B 시험 (11/19 추추). 실행: driver.launch.py parking_profile:=a|b (기본 b)
+#   b(기본, 11/19 결정): 위 parking 값 그대로. 시작선→줄 0.54, LiDAR 진행 방향 보정 ±0.05
+#   a: 3283a8d 되돌림 때 값 (0.45, ±0.20). 비교용. 3번 칸에서 회전 경로 막힘 2회 실패(breakfastv3_1119_14_a)
 PARKING_PROFILES = {
-    'a': {},
-    'b': {'template_start_to_row': .54, 'template_fusion_max_offset': .05},
+    'a': {'template_start_to_row': .45, 'template_fusion_max_offset': .20},
+    'b': {},
 }
 
 
 def apply_parking_profile(parking, name):
     """parking 설정 dict에 A/B 값을 덮어씀. 알 수 없는 이름이면 시작 시 종료"""
-    name = (name or 'a').lower()
+    name = (name or 'b').lower()
     if name not in PARKING_PROFILES:
         raise SystemExit(f'parking_profile "{name}"는 {list(PARKING_PROFILES)} 중 하나여야 합니다')
     parking.update(PARKING_PROFILES[name])

@@ -116,7 +116,8 @@ def test_row_start_comes_from_start_line_when_close():
     assert not p.template_slots                      # 시작선을 3번 보기 전
     _feed(p,[near]*3)
     assert len(p.template_slots)==3
-    assert np.allclose(p.template_slots[0]['entrance'],[.60+.45+.25,-.24],atol=.02),p.template_slots[0]['entrance']
+    row=c['answer']['parking']['template_start_to_row']  # 11/19 경기장 0.54 (A/B 결정)
+    assert np.allclose(p.template_slots[0]['entrance'],[.60+row+.25,-.24],atol=.02),p.template_slots[0]['entrance']
     assert p.template_debug['anchors'][0]['confidence']=='START_LINE_OFFSET' if p.template_debug['anchors'] else True
 
 

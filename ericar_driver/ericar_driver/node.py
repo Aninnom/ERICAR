@@ -250,7 +250,7 @@ class DriverNode(Node):
 def parse_args(argv):
     """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false] [--parking-profile a|b]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'a'}
+    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'b'}
     for flag in options:
         if flag in args:
             i = args.index(flag)

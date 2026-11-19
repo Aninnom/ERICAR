@@ -84,7 +84,7 @@ class Parking:
                         parking_grid=self.grid_debug,
                         parking_template=self.template_debug,
                         parking_fusion=self.fusion_debug,
-                        selected_gap=self.selected,profile=self.c.get('profile','a'),approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
+                        selected_gap=self.selected,profile=self.c.get('profile','b'),approach=self.approach_debug,feedback=feedback,sign=self.sign.debug(),
                         turn_path=self.path_debug,
                         cruise_distance_m=self.cruise_distance,slow_reason=self.slow_reason,
                         braking_distance_m=self.braking_distance,no_target_distance_m=self.no_target_distance,
