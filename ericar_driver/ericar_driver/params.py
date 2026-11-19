@@ -638,7 +638,8 @@ ANSWER_CONFIG = {
         # 11/17 혁준: short_arc_margin 0.06 → 0.10 → 0.08. 실차 도착 오차: 0.06은 0.10~0.13 m 지나침(2회, back_1117_0249·
         # rev_1117_0212), 0.10은 0.05~0.13 m 못 미침(4회, bend·tight_0405·hard_0409: 못 미친 채 시작한 두 칸 요청 이동이
         # 오른쪽 노란 선을 넘음). 보통 이동(arc_margin 0.08)은 ±0.04 m 안(8회) → 같은 0.08로 맞춤
-        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.10, 'short_arc_margin': 0.08,
+        # 11/19 short_speed 0.10 -> 0.2 (사용자 지시, 시험): breakfastv3_1119_04·05 3차선 구간 60·53 s 중 짧은 S자가 37·20 s (0.10 m/s)
+        'short_front': 1.0, 'short_arc_angle': 45.0, 'short_speed': 0.2, 'short_arc_margin': 0.08,
         'short_flip_seconds': 0.3, 'short_flip_speed': 0.05,
         # 11/16 혁준(실차 전): 표지판 요청 이동은 옆 차로 점을 뒷축 앞 request_side_ahead(m)부터만 막힘으로 보고, 짧은 S자로 옮김
         # 끄기: request_side_ahead None, short_on_request False
