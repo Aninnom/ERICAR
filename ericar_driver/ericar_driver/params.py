@@ -29,7 +29,11 @@ ANSWER_CONFIG = {
     # 서행 유도선(지그재그, 규정 미션 6 "서행 통과", 서행 구간 최대 0.2 m/s): 양쪽 선이 톱니 모양인 카메라 결과가
     # confirm_frames 연속이면 speed로 제한, 마지막으로 본 뒤 hold_distance(m) 더 갈 때까지 유지
     # (톱니가 화면에서 사라질 때 구간 끝은 뒷축 앞 약 1.0 m → 앞바퀴 기준 0.8 m 남음. 11/10 skip_1110_lap1 109.5~110.5 s)
-    'zigzag': {'speed': 0.18, 'confirm_frames': 4, 'hold_distance': 1.0},
+    # section_start·section_distance (11/19): S1(1번 코너 뒤) 구간 거리 이 범위(m)에서는 톱니 판별과 무관하게 speed로 제한 (driver.update). 끄기: section_distance None
+    #   지그재그는 1번 코너 출구 흰 가로선부터 약 2 m인데 두 선 확정이 S1 1.25~1.5 m에서야 됨 → 앞쪽을 0.50~0.59 m/s로 지남
+    #   (track_test_1119_01·02·08). 흰 가로선은 앞축 기준 S1 0.49~0.58 m (02·03·04·08번 검출, 코너 출구라 1~2프레임뿐·01번 미검출
+    #   → 선 검출 대신 거리로 시작). 0.35 = 선 0.14~0.23 m 전, 2.5 = 보행자 정지선(S1 2.46~2.58 m)까지
+    'zigzag': {'speed': 0.18, 'confirm_frames': 4, 'hold_distance': 1.0, 'section_start': 0.35, 'section_distance': 2.5},
     # 차선을 lane.lost_grace 넘게 놓친 뒤: 정지 대신 speed로 가며 탐색, 조향은 straighten_distance(m) 동안 0으로
     # distance(m) 가거나 seconds(초) 지나도 못 찾으면 정지 (lane_driving.decide). 값은 실차 확인 전
     'lost_search': {'speed': 0.15, 'distance': 2.0, 'seconds': 20.0, 'straighten_distance': 0.5},

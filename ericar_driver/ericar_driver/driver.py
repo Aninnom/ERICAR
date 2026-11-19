@@ -1044,6 +1044,12 @@ class Driver:
                 and self.sections.distance < lidar_c.get('cone_approach_distance', 2.0)):
             # 라바콘 접근 서행 (11/18): 라바콘이 켜지기 전 S3 앞부분. 색 판정이 빗나가도 빠른 속도로 콘에 닿지 않게 함
             speed = min(speed, lidar_c['cone_approach_speed'])
+        zigzag_c = self.c['zigzag']
+        if (zigzag_c.get('section_distance') is not None and self.c['sections']['enabled']
+                and self.sections.index == START_SECTION['pedestrian']
+                and zigzag_c.get('section_start', 0.0) <= self.sections.distance < zigzag_c['section_distance']):
+            # 서행 유도선 구간 고정 서행 (11/19): 톱니 확정이 늦어도 시작 흰 가로선 앞부터 서행. stop_missions가 이 값 아래로만 더 줄임
+            speed = min(speed, zigzag_c['speed'])
         speed = self.stop_missions(speed, velocity, green_only, now)
         if self.c['parking'].get('test_drive_until_sign',False):
             speed=min(speed,self.c['parking']['scan_speed'])
