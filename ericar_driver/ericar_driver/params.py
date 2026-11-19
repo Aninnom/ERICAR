@@ -5,7 +5,7 @@ ANSWER_CONFIG = {
     'rate_hz': 20.0, 'debug_rate_hz': 5.0, 'sensor_timeout': 0.7, 'odometry_timeout': 0.7,
     # 11/18 유경: base_speed 0.4 -> 0.6 (랩타임). 감속 계열(slow_speed·minimum_curve_speed·zigzag·slow_zone)은 그대로
     # 규정 권고는 0.3~0.4라 육안 판정 미션(서행)에서 기본 속도가 빨라 보일 수 있음 -> 팀장 확인 필요
-    'base_speed': 0.6, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
+    'base_speed': 0.8, 'slow_speed': 0.2, 'minimum_curve_speed': 0.15,
     # 코너 속도 상한. 도면 코너 시뮬: 0.4 진입은 바깥 접촉
     # 11/18 유경: 0.2 -> 0.25 (0.4 접촉과 사이, 차로 폭 0.77 m에 여유 남김). 0.3 이상은 실차 확인 전까지 금지
     # 11/19 유경: 0.25 -> 0.4 (랩타임, 사용자 지시). 위 "0.3 이상 금지"를 넘는 값이라 실차 확인 전까지는 시험용.
@@ -47,7 +47,7 @@ ANSWER_CONFIG = {
                     #   주의: 같은 날 breakfastv3_1119_06·09·10 분석(혁준)의 코너 출구 오차는 바깥쪽 -0.17 ~ -0.27 m로
                     #   방향이 반대임. corner_speed 0.4를 그대로 둔 조합에서는 바깥선 접촉이 더 쉬워질 수 있음 →
                     #   1·2번 코너 바깥 여유부터 확인하고, 벌어지면 0.38로 되돌리거나 corner_speed를 0.3으로 내릴 것
-                    'steering': 0.33, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
+                    'steering': 0.36, 'gentle_steering': 0.31, 'sharp_curvature': 2.0,
                     # 유지 중 조향 = 시작 값 + error_gain × (시작 오차 − 현재 오차), steering_min~max_steering 제한
                     # 11/19 유경: steering_min 0.2 -> 0.14. 1118 녹화 19·20번에서 차가 코너 안쪽으로 0.09~0.15 m
                     #   치우친 순간 조향이 정확히 0.200에 멈춰 있었음 = 하한에 막혀 보정이 더 펴 주지 못함.
@@ -64,9 +64,10 @@ ANSWER_CONFIG = {
     # 수동이 min_manual(s) 넘게 이어진 뒤 자동으로 돌아오면 드라이버를 새로 만들고(미션 상태 전부 초기화),
     # 놓인 방향으로 구간을 다시 정해 그 구간의 start_stage로 시작한 것과 같게 함 (driver.restart, section.relocate)
     # 노드를 켠 뒤 첫 자동 전환은 출발로 봄: start_stage 그대로
-    # /limo_status control_mode: manual_mode(0) = 수동, 1 = 자동 (11/8 lane_1108_1618: 0인 동안 명령 0.2에도 정지, 1부터 주행)
+    # /limo_status control_mode: auto_mode(1) = 자동, 그 외 전부 수동 (11/8 lane_1108_1618: 0인 동안 명령 0.2에도 정지, 1부터 주행)
+    # 11/19 규정 변경: 재출발 이동은 SWB 중립 수동 운전 → 조종기로 몰 때 3 (check_1118_01·lane 108 s) → 0만 수동으로 보면 자동으로 오인
     # 상태가 status_timeout(s) 넘게 안 오면 자동으로 봄 (예전 동작). 약 2 Hz 토픽. 끄기: enabled False
-    'restart': {'enabled': True, 'min_manual': 1.0, 'manual_mode': 0, 'status_timeout': 3.0},
+    'restart': {'enabled': True, 'min_manual': 1.0, 'auto_mode': 1, 'status_timeout': 3.0},
     # 구간 관리자 (section.py): 누적 회전이 다음 직선 방향(−90°씩)까지 margin(°) 안으로 들어오면 구간 +1
     # margin 25 → −65°·−155°·−245°·−335°에서 전환. 갈림길 꺾임 45°·차선 변경 흔들림은 못 미침
     # odom_yaw_scale: IMU가 끊겼을 때 odom 회전에 곱하는 값 (실측 = 0.93 × odom, 11/9). imu_timeout(s) 넘게 안 오면 odom 사용
@@ -337,7 +338,7 @@ ANSWER_CONFIG = {
     },
     'missions': {
         'fork_prepare_speed': 0.18,  # S2 방향 확정 전 상한. 늦은 진입 완화
-        'fork_exit_speed': 0.3,      # 방향 확정 뒤 목적 차로에서 분기 통과 중 상한 (11/16, 실차 전)
+        'fork_exit_speed': 0.5,      # 방향 확정 뒤 목적 차로에서 분기 통과 중 상한 (11/16, 실차 전)
         # 표지판 확정 전 중앙 차로 정렬(fork.center_request). 11/16 끔: 회피 직후 장애물 1.7 m 앞 가운데 차로로 복귀하다 정지 (main_1116_1614 192.3 s)
         'fork_center_align': False,
         'sign_cooldown': 12.0, 'fork_bias': 0.55,
@@ -399,7 +400,7 @@ ANSWER_CONFIG = {
         # (driver.arrow_on_island). 차가 섬 옆 차로면 섬 쪽으로 −5~wide(°), 가운데 근처면 ±narrow(°). 끄기: False
         'fork_sign_bearing': True, 'fork_sign_fov': 71.0, 'fork_sign_bearing_wide': 40.0, 'fork_sign_bearing_narrow': 15.0,
         # 방향 확정 뒤 반대 화살표가 이 프레임 수만큼 연속이면 목적지 교체 (입구 전까지. 검출 약 3.5 Hz → 약 1.4 s)
-        # 11/19 저녁 사용자 지시: 방향 교체 연속 5 → 3 → 2 (시험 없이 반영)
+        # 11/19 저녁 사용자 지시: 방향 교체 연속 5 → 2 (시험 없이 반영)
         'fork_relock_frames': 2,
         # 분기 입구 = 흰 점선 끝 (소민 11/12, 실차 전). 점선 사이 빈칸 최대 길이(m): 점선 끝이 화면 먼 끝(far)보다
         # 이만큼 넘게 가까우면 '늦음' → 새 차선 변경 금지. 점선이 끝나고 entrance_confirm(m) 더 가면 입구 도착
@@ -746,7 +747,7 @@ ANSWER_CONFIG = {
         # entry_line_start: 앞축이 흰 선 이 거리(m) 전에 오면 허용 (차선 변경은 시작 뒤 약 0.4 m를 가야 차로 가장자리를 넘음)
         # entry_min_distance: 흰 선을 못 봤을 때 S2 주행 거리 기준(m). entry_max_distance: 이 거리부터는 무조건 허용
         'entry_gate': True, 'entry_line_start': 0.30, 'entry_line_range': 1.3,
-        'entry_min_distance': 0.25, 'entry_max_distance': 1.0,
+        'entry_min_distance': 0.5, 'entry_max_distance': 1.0,
         # 이동 중 재판단 (11/18 혁준, lane_change.redecide, 합성 시험만·실차 전). 끄기: redecide False
         # 일반 회피로 한 칸 옮기는 중 도착할 차로 앞 빈 거리가 redecide_front(m) 미만이면 다음 차로까지 그대로 가로지름
         # 출발 판단에서도 옆 차로 한 칸이 안 되면 두 칸 직선 가로지르기(lane_change.cross_two, 각도 redecide_angles °)를 봄

@@ -18,7 +18,7 @@ robot:
   wheelbase: 0.2  # 제조사 표기 200 mm
   width: 0.225  # 사용자 실측 22.5 cm
   length: 0.330  # 사용자 실측 33 cm
-  max_speed: 0.6
+  max_speed: 0.8
   max_steering: 0.42  # 실차 한계 약 ±0.42 rad (시뮬 0.52)
   steering_offset: -0.015  # 조향 영점 보정 rad. 02번 차량 왼쪽 쏠림, 11/8 바닥 직진 0.5 m 시험으로 결정
   front_axle_x: 0.2  # base_link(뒷바퀴 축) → 앞바퀴 축

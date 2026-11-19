@@ -149,10 +149,11 @@ class DriverNode(Node):
         self.status_stamp = self.now()   # 헤더 시각 비정상(sec: 1)이라 수신 시각 사용
 
     def is_auto(self):
-        """수동으로 확인된 때만 False. 상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
+        """자동 값(1)이 아닌 것이 확인된 때만 False (SWB 아래 0·중립 조종기 운전 3 모두 수동).
+        상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
         r = self.c['restart']
         fresh = self.now() - self.status_stamp < r['status_timeout']
-        return not (fresh and self.control_mode == r['manual_mode'])
+        return not (fresh and self.control_mode is not None and self.control_mode != r['auto_mode'])
 
     @staticmethod
     def detector_paused(state):

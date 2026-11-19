@@ -127,7 +127,10 @@ class Driver:
         if line is not None and 0.0 < line <= lc.get('entry_line_range', 1.3):
             # 선까지 남은 거리로 '열릴 지점'을 계속 갱신 (선을 놓쳐도 마지막 추정으로 엶)
             gate['line'], gate['open_at'] = round(float(line), 3), travelled+float(line)-lc.get('entry_line_start', .30)
-        open_at = gate['open_at'] if gate['open_at'] is not None else lc.get('entry_min_distance', .25)
+        # 11/20 사용자 지시: 흰 선을 봤어도 entry_min_distance 전에는 열지 않음 (선 뒤 벌어지는 사선 구간에서 일찍 꺾어 선 밟음.
+        #   track_testv3_1119_16: 선을 0.12 m 앞에서 잡아 S2 0.24 m에 이동 시작). 이전: 선 기준 지점만 사용
+        floor = lc.get('entry_min_distance', .25)
+        open_at = max(gate['open_at'], floor) if gate['open_at'] is not None else floor
         if travelled >= min(open_at, lc.get('entry_max_distance', 1.0)):
             gate['open'] = True
         return gate['open']
