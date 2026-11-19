@@ -498,6 +498,12 @@ ANSWER_CONFIG = {
         # 표지판 화면 소실 / 칸 회전점이 감속 거리 안 / 시작선 뒤 armed_distance(m) 중 먼저. 서행 속도 search_speed
         # 0.30 근거: 표지판은 첫 칸 회전점 약 0.4 m 앞에서 화면을 벗어남, 0.4 m/s 감속 거리 0.49 m·0.30은 0.35 m
         'template_cruise_max_speed': .30, 'template_slow_on_sign_passed': True,
+        # 칸별 상한 (11/19 parking_1119_2, 시험): 칸을 고른 뒤 시작선 뒤 상한을 칸 번호로 [0번, 1번, 2번] m/s.
+        #   감속 거리(반응 0.25 s·0.30 m/s²·여유 0.10): 0.30 → 0.33 m, 0.40 → 0.47 m, 0.45 → 0.55 m
+        #   첫 칸은 표지판 소실 ~ 회전점 약 0.4 m라 0.30 유지. 2·3번 칸은 회전점이 0.51·1.03 m 뒤라 여유 있음
+        #   칸을 고른 뒤에는 표지판 통과 서행(0.12 m/s 고정) 생략, 감속 거리에서 거리 비례 감속만
+        #   11/19 breakfastv3_1119_12_b~17: 2·3번 칸은 표지판 통과 서행으로 접근 단계 약 8 s·0.12 m/s. 끄기: by_slot None, without_target_only False
+        'template_cruise_max_speed_by_slot': [.30, .40, .45], 'template_sign_slow_without_target_only': True,
         'template_cruise_armed_distance': 2.5, 'search_speed': .18,
         # 신호등을 끝내지 않았으면 S4 진입 뒤 이 거리(m)부터 주차 표지판 수용. 도면 추정(횡단보도 끝 약 3.5 m, 주차 시작선 약 5.1 m) → 실차 조정
         'after_traffic_distance': 4.0,

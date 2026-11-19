@@ -273,8 +273,26 @@ class Parking:
         cap=self.c['cruise_max_speed']
         # 시작선 이후 주차 구간: 첫 칸 회전점까지 감속 거리 확보용 상한 (0.4 → 0.49 m 필요, 0.3 → 0.35 m)
         if self.c.get('template_enabled',False) and self.template_armed:
-            cap=min(cap,self.c.get('template_cruise_max_speed',cap))
+            cap=min(cap,self._template_slot_cap())
         return cap
+
+    def _template_slot_cap(self):
+        """시작선 뒤 상한. 칸을 골랐으면 template_cruise_max_speed_by_slot[칸 번호] (11/19 parking_1119_2),
+        아직 못 골랐거나 목록이 없으면 template_cruise_max_speed (첫 칸 감속 거리 기준 0.30)"""
+        base=self.c.get('template_cruise_max_speed',self.c['cruise_max_speed'])
+        by_slot=self.c.get('template_cruise_max_speed_by_slot')
+        slot=None if self.selected is None else self.selected.get('slot_index')
+        if by_slot and slot is not None and 0<=slot<len(by_slot):return float(by_slot[slot])
+        return base
+
+    def _sign_slow(self):
+        """표지판 통과 서행. template_sign_slow_without_target_only면 칸을 이미 골랐을 때는 생략하고
+        감속 거리(TARGET_BRAKING_DISTANCE, 거리 비례 감속)로만 줄임 (11/19: 2·3번 칸이 0.12 m/s로 약 1 m·8 s)"""
+        slow=self.sign.passed and (self.c['slow_on_sign_passed'] or
+            (self.c.get('template_enabled',False) and self.c.get('template_slow_on_sign_passed',False)))
+        if slow and self.selected is not None and self.c.get('template_sign_slow_without_target_only',False):
+            return False
+        return slow
 
     def _template_nearest_start(self):
         evaluations=self.template_debug.get('evaluations') or []
@@ -302,7 +320,7 @@ class Parking:
         allowed=math.sqrt(self.c['scan_speed']**2+
                           2*self.c['cruise_braking_acceleration']*usable)
         requested=max(0.,float(requested))
-        candidate=min(requested,self.c['cruise_max_speed'],allowed)
+        candidate=min(requested,self._cruise_cap(),allowed)
         if self.approach_speed_cap is None:
             self.approach_speed_cap=candidate
         else:
@@ -679,8 +697,7 @@ class Parking:
             else:self.no_target_since=None;self.no_target_distance=0.
             fallback=missing and (now-self.no_target_since>=self.c['no_target_cruise_seconds'] or
                                   self.no_target_distance>=self.c['no_target_cruise_distance'])
-            sign_slow=self.sign.passed and (self.c['slow_on_sign_passed'] or
-                (self.c.get('template_enabled',False) and self.c.get('template_slow_on_sign_passed',False)))
+            sign_slow=self._sign_slow()
             # 안전장치: 시작선을 본 뒤 template_cruise_armed_distance(m) 지나도 표지판 소실·칸 감속 근거가 없으면 서행
             armed_slow=(self.c.get('template_enabled',False) and self.template_armed and
                         self.armed_distance>=self.c.get('template_cruise_armed_distance',float('inf')))

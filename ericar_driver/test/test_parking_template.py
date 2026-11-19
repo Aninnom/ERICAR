@@ -261,3 +261,26 @@ def test_white_loss_before_minimum_angle_does_not_stop_turn():
         assert not p.line_seen_armed  # 69°: 템플릿 모드 정지 각도(80°) 전에 보인 선은 정지 근거 아님 (track_test_1118_02 71° 정지)
         p.turn_angle=1.45;p._white(np.zeros((4,4,3),np.uint8),1.1)
     assert p.line_seen_armed and p.loss_frames==0  # 80° 뒤에 다시 보임 → 이후 소실은 정지 근거
+
+
+def test_slot_cap_uses_selected_slot_index():
+    """11/19 parking_1119_2: 칸을 고르면 시작선 뒤 상한을 칸 번호별로, 못 골랐으면 기존 0.30"""
+    c=config();cfg=c['answer']['parking'];cfg['template_enabled']=True;p=Parking(c);p.start(0.)
+    p.template_armed=True
+    assert p._cruise_cap()==cfg['template_cruise_max_speed']
+    for slot,cap in enumerate(cfg['template_cruise_max_speed_by_slot']):
+        p.selected=dict(slot_index=slot)
+        assert p._cruise_cap()==min(cap,cfg['cruise_max_speed'])
+    cfg['template_cruise_max_speed_by_slot']=None
+    assert p._cruise_cap()==cfg['template_cruise_max_speed']
+
+
+def test_sign_passed_slow_skipped_once_slot_selected():
+    """11/19: 칸을 골랐으면 표지판 통과 서행 대신 감속 거리 감속 (2·3번 칸 0.12 m/s 약 8 s)"""
+    c=config();cfg=c['answer']['parking'];cfg['template_enabled']=True;p=Parking(c);p.start(0.)
+    p.sign.passed=True
+    assert p._sign_slow()
+    p.selected=dict(slot_index=1)
+    assert not p._sign_slow()
+    cfg['template_sign_slow_without_target_only']=False
+    assert p._sign_slow()
