@@ -274,7 +274,11 @@ class ConeDriving:
            진행 방향은 정면에서 시작 (문이 보이면 문 중점). 통과 중 조향은 drive가 문·한쪽 콘으로 정함.
            11/13 사진(red_1113_000127): 화면 전체 붉은색만 보면 코너 도는 중 한쪽 콘 줄·관중석 의자로 일찍 켜짐
            11/12 문 중점 0.3 m 기준은 실차에서 안 켜짐: 차가 차로 중앙, 문 중점이 옆으로 비켜 있으면 0.3 m 안에 안 들어옴
-        B. 붉은색이 아예 없음 (카메라 끊김 대비): 라이다만으로 문을 찾음. 붉은색은 보이지만 양쪽이 아니면 켜지 않음
+        B. corridor가 아닐 때 (카메라 끊김·붉은 비율 미달): 라이다만으로 문을 찾음
+           11/18 유경: 예전에는 "붉은색은 보이는데 비율 미달"이면 B까지 막았음 → run_1118_1931에서 5.3 s 동안
+           (123.2~128.5 s) 아무 진입도 못 하고 콘 0.24 m 앞까지 가서 추돌. 조금 보이는 상태가 아예 안 보이는
+           상태보다 위험해지는 구조라 막지 않기로 함 (cone_red_lidar_entry False면 예전처럼 막음).
+           아래 1)~4)는 그대로라 한쪽 콘 줄·표지판 기둥에는 안 켜짐
            1) 차 정면 좌우 small_object_half_width 안 기둥 2개가 문 (간격 cone_gate_min~max)
            2) 문 중점 방위·문 방향이 차 정면에서 cone_start_angle 이내 (코너 도는 중에는 안 켬)
            3) 문 중점이 라이다 앞 cone_enter_distance(앞 방향 거리) 안
@@ -283,24 +287,36 @@ class ConeDriving:
         """
         c = self.c
         lidar_x = self.robot['lidar']['x']
-        if self.red and not self.corridor:
+        if self.red and not self.corridor and not c.get('cone_red_lidar_entry', True):
             return None
+        hold_half = c.get('cone_hold_half_width', .2)
         if holding:
             # 코너 유지 중 (11/15): 유지가 코너를 끝까지 돌게 둠. 차가 지나갈 폭(cone_hold_half_width) 안에 콘이
             # cone_enter_distance 앞까지 온 경우에만 넘겨받음 (콘이 코너 안에서 시작하는 배치, 11/14 lap3)
+            # 11/18 유경 완화: 그래도 콘이 안 들어왔고 붉은색이 화면에 찼으면(corridor) 아래 "문 정면" 미리 인계로
+            # 넘김 (cone_hold_face_distance, 유지가 아닐 때의 cone_face_distance보다 짧음). 폭·방위 조건은 그대로라
+            # 콘 한 줄이나 비스듬한 문에는 안 켜짐. 근거 run_1118_1931 재생: 정면 문이 124.4 s에 0.51 m 앞으로
+            # 들어왔는데 유지 중이라 못 받고 유지가 끝나기를 기다림. 그 구간은 driver 접근 서행(state=='lane')도
+            # 안 걸려 corner_speed로 다가감. 이 녹화에서 되찾는 시간은 0.1 s뿐 (123.7~124.3 s는 문이 정면 방위 밖),
+            # 코너 안에서 콘이 시작하는 배치일수록 효과가 커짐
             ahead = posts[(posts[:, 0] > 0) & (posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
-                          (np.abs(posts[:, 1]) < c.get('cone_hold_half_width', .2))]
-            if not len(ahead):
+                          (np.abs(posts[:, 1]) < hold_half)]
+            if not len(ahead) and not (self.corridor and c.get('cone_hold_face_distance')):
                 return None
         if self.corridor:
+            # 코너 유지 중에는 "콘이 바로 앞" 판정 폭을 진행 폭으로 좁힘 (11/18 유경): 0.9 m까지 보면 아직 돌아야 하는데
+            # 코너 바깥 콘 줄에 켜짐. 문(쌍) 판단은 콘이 좌우 ±gap/2에 있어야 하므로 예전 폭 그대로 씀
+            near_half = min(c['cone_red_half_width'], hold_half) if holding else c['cone_red_half_width']
             near = posts[(posts[:, 0]-lidar_x <= c['cone_enter_distance']) &
-                         (np.abs(posts[:, 1]) < c['cone_red_half_width'])]
+                         (np.abs(posts[:, 1]) < near_half)]
             if not len(near):
                 # 문을 정면으로 봄 (11/15): 콘이 0.3 m 앞에 올 때까지 기다리면 비스듬히 다가간 경우 피할 공간이 없음
                 # (fix2_1115_2017 207.6 s: 안쪽 콘 0.2 m 앞에서 켜져 정지). 문 중점이 cone_face_distance 안·옆 cone_face_lateral 안,
                 # 문 방향·방위가 cone_face_angle 안, 간격이 일반 문(cone_gate_max) 이내면 미리 넘겨받음
-                face = c.get('cone_face_distance')
-                if not face or holding:
+                # 11/18 유경: 코너 유지 중에는 같은 판단을 더 가까운 거리(cone_hold_face_distance)로만 허용.
+                # 예전에는 유지 중 미리 인계를 통째로 막아 코너가 끝날 때까지 기다렸음 (run_1118_1931)
+                face = c.get('cone_hold_face_distance') if holding else c.get('cone_face_distance')
+                if not face:
                     return None
                 gates = gate_pairs(posts[np.abs(posts[:, 1]) < c['cone_red_half_width']], c, c['cone_gate_max'])
                 angle = c.get('cone_face_angle', .35)

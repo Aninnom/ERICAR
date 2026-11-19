@@ -41,12 +41,13 @@ def test_close_horizontal_line_does_not_add_a_new_stop_rule():
     a=picture();cv2.line(a,(50,450),(590,450),(255,255,255),8)
     assert frame(p,c,image=a)[0]==.12
     assert p.state=='parking_turn'
+    p.turn_angle=p.c['white_loss_min_angle']
     assert frame(p,c,1.1,present=False)==(0.,0.,'parked')
 
 
 def test_turn_geometry_and_stop_reference_remain_unchanged():
     c,p=setup()
-    assert p._turn_lead()==.615
+    assert p._turn_lead()==.55  # 11/18 IMU 실측 반경 0.539~0.574 (redecide_1118_23·34·35)
     assert p.c['approach_start_offset']==0.
     assert p.c['turn_speed']==.12 and p.c['turn_steering']==-.35
     assert p.c['white_loss_frames']==1 and not p.c['pd']['enabled']

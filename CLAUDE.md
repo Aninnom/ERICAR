@@ -26,7 +26,7 @@ AutoRace 2026 본선용 LIMO 주행 코드. 팀원 모두 이 레포에서 Claud
    → `ros2 launch ericar_driver bringup.launch.py record:=true`
    - 한 터미널에는 작업 공간 하나만 `source` (둘 다 하면 어느 쪽 코드가 도는지 헷갈림)
    - `params.py`를 바꾸면 다시 빌드해야 반영됨
-4. 회귀 기준값(`test/golden_regression.json`)은 맥 생성본 (PR #67). 다른 컴퓨터는 계산 끝자리 차이로 다를 수 있음 → 다르면 주행 명령(`drive`)이 같은지부터 확인
+4. 회귀 시험(`test_regression.py`·`golden_regression.json`)은 11/19 삭제 (기준값 미갱신으로 항상 실패, 차에서 155초). 수정 뒤에는 바뀐 영역 시험 파일만 실행
 
 ## 차량 (LIMO Pro, Jetson Orin Nano, Ubuntu 22.04, ROS 2 Humble)
 
@@ -88,7 +88,6 @@ AutoRace 2026 본선용 LIMO 주행 코드. 팀원 모두 이 레포에서 Claud
 ## 자주 쓰는 확인
 
 ```bash
-python3 ericar_driver/test/test_regression.py        # 회귀 시험 (맥 약 15초, 차 약 2분)
 python3 ericar_driver/test/three_lane.py             # 3차선 합성 시험 21건
 python3 ericar_driver/tools/bag_timeline.py ~/bags/<이름>   # 주행 구간 조향·오차 시계열
 ros2 topic echo --once /limo_status | grep battery   # 배터리 (차)

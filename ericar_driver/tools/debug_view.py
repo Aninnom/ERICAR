@@ -18,6 +18,9 @@
 실행 (차, 터미널 환경 1, 주행 노드 실행 중):
   python3 debug_view.py [포트]
 보기: 맥 http://<차 IP>:8080 / 차 http://localhost:8080
+전송량: 기본 초당 5장·화질 50·크기 0.8배 = 약 1.7 Mbit/s (11/19, 이전 8장·70·1배 = 5.4 Mbit/s)
+        ssh -L 포트 전달은 밀린 화면을 버리지 않고 쌓음(약 7.5 MB) → 망이 전송량을 못 받으면 과거 화면이 보임
+        주소 뒤 선택값: 망이 좋으면 /?fps=8&q=70&scale=1, 더 느리면 /?fps=3&q=30&scale=0.6
 """
 import json
 import math
@@ -28,11 +31,14 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import cv2
 import numpy as np
 
-MAX_FPS = 8
+MAX_FPS = 5            # 기본 전송값 (주소 선택값 fps·q·scale로 창마다 변경). 상태·BEV 갱신은 텔레메트리 주기(약 4 Hz)
+JPEG_QUALITY = 50
+STREAM_SCALE = 0.8
 PANEL_H = 360          # 위 패널 높이
 INFO_H = 236           # 아래 글자 패널 높이
 LIDAR_W, PX_M = 400, 115.0   # 라이다 패널 폭(px), 1 m = PX_M px
@@ -383,6 +389,22 @@ def draw_parking(img, control, live=None):
             polygon(candidate['polygon'], colors.get(state, GREY), 2)
             put(img, f"{state} {evidence.get('covered_samples', 0)}/12", *lp(*candidate['entrance']),
                 colors.get(state, GREY), 0.4)
+        template=park.get('parking_template') or {}
+        fusion=park.get('parking_fusion') or {}
+        for box in fusion.get('clusters',[]):
+            polygon(box.get('points',[]),CYAN,1)
+            centre=box.get('centroid',[0.,0.]);slot=box.get('slot_index')
+            put(img,f"L{box.get('id','?')} -> S{'-' if slot is None else slot+1}",
+                *lp(*centre),CYAN,.35)
+        for result in template.get('evaluations', []):
+            state=result.get('state','UNKNOWN');slot=result.get('slot_index','?')
+            color=colors.get(state,GREY);states.append(state)
+            polygon(result.get('polygon',[]),color,2)
+            evidence=result.get('evidence') or {};hits=evidence.get('interior_hits',0)
+            label=f"S{slot+1 if isinstance(slot,int) else slot} {state} p={hits}"
+            put(img,label,*lp(*result.get('entrance',[0.,0.])),color,.38)
+        for point in (park.get('turn_path') or {}).get('points',[]):
+            cv2.circle(img,lp(point[0],point[1]),2,CYAN,-1)
         if park.get('selected_gap'):
             polygon(park['selected_gap']['polygon'], YELLOW, 2)
             approach=park.get('approach') or {}
@@ -390,13 +412,17 @@ def draw_parking(img, control, live=None):
                 target=lp(approach['remaining_m'],0.)
                 cv2.drawMarker(img,target,CYAN,cv2.MARKER_CROSS,12,2)
                 put(img,f"TURN IN {approach['remaining_m']:+.2f}m",target[0]+5,target[1]-8,CYAN,.45)
+                path=approach.get('turn_path') or []
+                if len(path)>1:
+                    cv2.polylines(img,[np.array([lp(item[0],item[1]) for item in path],np.int32)],False,CYAN,1)
     except Exception:
         pass
     if not park:
         return f"PARK live (driver off) {','.join(states) or 'no gap'}"[:64]
     if park.get('state')=='parking_cruise':
         sign=park.get('sign') or {}
-        return f"PARK CRUISE LiDAR ON near {sign.get('near_seen')} missing {sign.get('missing_results',0)}"
+        offset=(park.get('parking_fusion') or {}).get('offset',[0.,0.])
+        return f"PARK CRUISE fusion {offset[0]:+.2f},{offset[1]:+.2f} near {sign.get('near_seen')}"
     if park.get('state')=='parking_approach':
         approach=park.get('approach') or {}
         return f"PARK APPROACH turn in {approach.get('remaining_m',0):+.2f}m travel {approach.get('travel_m',0):.2f}m"
@@ -749,24 +775,38 @@ class State:
 state = State()
 
 
+def stream_options(query):
+    """주소 선택값 → (초당 장수, JPEG 화질, 크기 배율). 없거나 잘못된 값은 기본값, 범위 밖은 잘라 씀"""
+    given = parse_qs(query)
+
+    def pick(key, default, low, high):
+        try:
+            return min(max(float(given[key][0]), low), high)
+        except (KeyError, ValueError):
+            return default
+    return pick('fps', MAX_FPS, 1, 15), int(pick('q', JPEG_QUALITY, 10, 95)), pick('scale', STREAM_SCALE, 0.3, 1.0)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
     def do_GET(self):
-        if self.path == '/':
+        url = urlsplit(self.path)
+        if url.path == '/':
+            query = '?' + url.query if url.query and all(c.isalnum() or c in '=&.' for c in url.query) else ''
             page = ('<!doctype html><meta charset="utf-8"><title>ERICAR debug</title>'
-                    '<body style="margin:0;background:#111"><img src="/stream.mjpg" style="max-width:100%">')
+                    f'<body style="margin:0;background:#111"><img src="/stream.mjpg{query}" style="width:100%">')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(page.encode())
-        elif self.path == '/stream.mjpg':
-            self.stream()
+        elif url.path == '/stream.mjpg':
+            self.stream(*stream_options(url.query))
         else:
             self.send_error(404)
 
-    def stream(self):
+    def stream(self, fps=MAX_FPS, quality=JPEG_QUALITY, scale=STREAM_SCALE):
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
         self.send_response(200)
         self.send_header('Cache-Control', 'no-store')
@@ -780,14 +820,16 @@ class Handler(BaseHTTPRequestHandler):
                     seen = state.seq
                     camera, mask, telemetry, scan = state.camera, state.mask, state.telemetry, state.scan
                     events = list(state.events)
-                if time.time() - last < 1.0 / MAX_FPS:
+                if time.time() - last < 1.0 / fps:
                     continue
                 last = time.time()
                 try:
                     frame = compose(camera, mask, telemetry, scan, events)
                 except Exception as error:   # 그리기 오류로 중계가 끊기지 않게: 오류 내용을 화면에 표시
                     frame = blank(900, f'debug_view draw error: {error!r}'[:110])
-                ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if scale < 1.0:
+                    frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
                 if ok:
                     data = jpeg.tobytes()
                     self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '

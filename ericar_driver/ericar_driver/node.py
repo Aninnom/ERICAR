@@ -4,11 +4,12 @@ from pathlib import Path
 import sys
 import json
 import cv2
+import numpy as np
 import threading
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from ackermann_msgs.msg import AckermannDrive
 from sensor_msgs.msg import Image, Imu, LaserScan
@@ -17,11 +18,16 @@ from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
+try:
+    from limo_msgs.msg import LimoStatus
+except ImportError:   # 맥 시험 등 limo_msgs 없는 환경: SWB 재출발만 꺼짐
+    LimoStatus = None
+
 from .common import clip
-from .traffic_lamp import NAMES as LAMP_NAMES, lamp_name
+from .traffic_lamp import box_name, image_size, predict_confidence
 from .lidar import scan_sectors
 from .loop import ControlLoop, Sensors, load_config
-from .params import YOLO_CLASSES
+from .params import YOLO_CLASSES, apply_parking_profile
 from .section import START_SECTION
 
 
@@ -70,6 +76,8 @@ class DriverNode(Node):
         self.yaw_rate = 0.0
         self.tilt_rate = (0.0, 0.0)
         self.imu_stamp = -1e9
+        self.control_mode = None
+        self.status_stamp = -1e9
         self.detector_failures = 0
         self.detections = []
         self.detection_stamp = -1e9
@@ -81,12 +89,20 @@ class DriverNode(Node):
         self.status = self.create_publisher(String, topics.get('status', '/answer/status'), 10)
         self.debug = self.create_publisher(Image, topics.get('debug_image', '/answer/debug_image'), qos_profile_sensor_data)
         self.detection_output = self.create_publisher(String, topics.get('detections', '/answer/detections'), 10)
-        self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
+        # 영상 구독 대기열 1장: 밀리면 오래된 장을 버리고 최신 장만 받음 (11/19: 30 Hz에서 기본 5장이 차서 화면이 0.17 s 늦음
+        # → max_image_travel 속도 제한이 주기마다 달리 걸려 주행 끊김. 차 재생 비교: 느린 주기 31 % → 10 %)
+        self.create_subscription(Image, topics['image'], self.on_image,
+                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
         # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
         self.create_subscription(Imu, topics.get('imu', '/imu'), self.on_imu, qos_profile_sensor_data)
         self.create_subscription(Bool, '/parking/cancel', self.on_parking_cancel, 10)
+        # 조종기 SWB 상태(수동·자동). 수동 → 자동 전환을 재출발로 처리 (loop.py, params.py restart)
+        if LimoStatus is not None and self.c['restart']['enabled']:
+            self.create_subscription(LimoStatus, topics.get('limo_status', '/limo_status'), self.on_status, 10)
+        else:
+            self.get_logger().warn('SWB 재출발 꺼짐 (limo_msgs 없음 또는 restart.enabled False)')
         self.timer = self.create_timer(1.0 / self.c['rate_hz'], self.control)
         if detector is not None:
             self.worker = threading.Thread(target=self.detect, daemon=True)
@@ -128,6 +144,16 @@ class DriverNode(Node):
         self.tilt_rate = (getattr(message.angular_velocity, 'x', 0.0), getattr(message.angular_velocity, 'y', 0.0))
         self.imu_stamp = self.now()   # 헤더 시각이 비어 있는 드라이버가 있어 수신 시각 사용
 
+    def on_status(self, message):
+        self.control_mode = message.control_mode
+        self.status_stamp = self.now()   # 헤더 시각 비정상(sec: 1)이라 수신 시각 사용
+
+    def is_auto(self):
+        """수동으로 확인된 때만 False. 상태를 못 받거나 오래됐으면 자동으로 봄 (예전 동작)"""
+        r = self.c['restart']
+        fresh = self.now() - self.status_stamp < r['status_timeout']
+        return not (fresh and self.control_mode == r['manual_mode'])
+
     @staticmethod
     def detector_paused(state):
         return (state.startswith('parking_') and state!='parking_cruise') or state=='parked'
@@ -136,6 +162,9 @@ class DriverNode(Node):
         import torch
         c = self.c
         last_stamp = None
+        # YOLO 입력 밝기 보정표 (detector.gamma, 1.0이면 없음). 램프 색 재확인(lamp_name)은 원본 frame 사용
+        gamma = float(c['detector'].get('gamma', 1.0))
+        lut = None if abs(gamma-1.0) < 1e-3 else np.clip(np.linspace(0, 1, 256)**gamma*255, 0, 255).astype(np.uint8)
         while not self.stop_event.is_set():
             if self.detector_paused(self.loop.driver.state):
                 self.stop_event.wait(.2)
@@ -146,8 +175,8 @@ class DriverNode(Node):
             if frame is not None and stamp != last_stamp:
                 last_stamp = stamp
                 try:
-                    results = self.detector.predict(frame, conf=c['detector']['confidence'],
-                                                    imgsz=c['detector']['image_size'],
+                    results = self.detector.predict(frame if lut is None else cv2.LUT(frame, lut), conf=predict_confidence(c['detector']),
+                                                    imgsz=image_size(c['detector'], self.loop.driver.state),
                                                     device=c['detector']['device'], verbose=False)[0]
                     torch.set_num_threads(self.threads)
                     objects = []
@@ -156,14 +185,11 @@ class DriverNode(Node):
                         x0, y0, x1, y1 = box.xyxy[0].cpu().tolist()
                         margin = c['detector'].get('edge_margin', .01)
                         truncated = x0 <= margin*w or x1 >= (1-margin)*w or y0 <= margin*h or y1 >= (1-margin)*h
-                        name = results.names[int(box.cls[0])]
-                        extra = {}
-                        if (name in LAMP_NAMES and c['detector'].get('lamp_check', True) and
-                                (x1-x0)*(y1-y0)/(w*h) >= c['detector'].get('lamp_min_area', .005)):
-                            # 같은 프레임에서 켜진 램프 위치로 색 재확인. 판정되면 YOLO 이름 대신 사용 (traffic_lamp.py)
-                            lamp = lamp_name(frame, (x0, y0, x1, y1), c['detector'])
-                            if lamp is not None and lamp != name:
-                                extra, name = dict(yolo_name=name), lamp
+                        # 같은 프레임에서 켜진 램프 위치로 색 재확인, 낮은 신뢰도 신호등 박스는 램프 판정이 확실할 때만 인정 (traffic_lamp.box_name)
+                        name, extra = box_name(frame, (x0, y0, x1, y1), results.names[int(box.cls[0])],
+                                               float(box.conf[0]), c['detector'])
+                        if name is None:
+                            continue
                         objects.append(dict(name=name, **extra,
                                             bbox=[x0/w, y0/h, x1/w, y1/h], truncated=truncated,
                                             confidence=float(box.conf[0]),
@@ -199,7 +225,7 @@ class DriverNode(Node):
                               scan=self.scan, scan_stamp=self.scan_stamp, velocity=self.velocity,
                               angular_velocity=self.angular_velocity, odom_stamp=self.odom_stamp,
                               yaw_rate=self.yaw_rate, imu_stamp=self.imu_stamp,
-                              tilt_rate=self.tilt_rate)
+                              tilt_rate=self.tilt_rate, auto=self.is_auto())
         out = self.loop.step(sensors)
         elapsed=self.now()-sensors.now
         fresh=0<=elapsed<self.c['parking']['command_deadline']
@@ -225,9 +251,9 @@ class DriverNode(Node):
 
 
 def parse_args(argv):
-    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false]. --ros-args 이후는 ROS 몫"""
+    """인자: [설정 yaml] [모델 .pt] [--yolo true|false] [--start-stage 미션] [--parking-test true|false] [--parking-profile a|b]. --ros-args 이후는 ROS 몫"""
     args = argv[1:argv.index('--ros-args')] if '--ros-args' in argv else argv[1:]
-    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false'}
+    options = {'--yolo': 'true', '--start-stage': '', '--parking-test': 'false', '--parking-profile': 'b'}
     for flag in options:
         if flag in args:
             i = args.index(flag)
@@ -237,12 +263,12 @@ def parse_args(argv):
             args = args[:i] + args[i + 2:]
     yolo = options['--yolo'].lower() not in ('false', '0', 'no', 'off')
     parking_test=options['--parking-test'].lower() not in ('false','0','no','off')
-    return args, yolo, options['--start-stage'], parking_test
+    return args, yolo, options['--start-stage'], parking_test, options['--parking-profile']
 
 
 def main(config_path=None):
     # 생략 시 패키지 config/robot.yaml, ~/models/best.pt, YOLO 사용, 첫 구간(S0)부터 시작
-    args, yolo, start_stage, parking_test = parse_args(sys.argv)
+    args, yolo, start_stage, parking_test, parking_profile = parse_args(sys.argv)
     if config_path is None:
         config_path = args[0] if args else str(Path(get_package_share_directory('ericar_driver')) / 'config' / 'robot.yaml')
     config = load_config(config_path)
@@ -251,6 +277,9 @@ def main(config_path=None):
         if start_stage not in START_SECTION:
             raise SystemExit(f'start_stage "{start_stage}"는 {list(START_SECTION)} 중 하나여야 합니다')
         c['missions']['start_stage'] = start_stage
+    apply_parking_profile(c['parking'], parking_profile)
+    print(f"[parking] profile={c['parking']['profile']} start_to_row={c['parking']['template_start_to_row']} "
+          f"fusion_max_offset={c['parking']['template_fusion_max_offset']}", flush=True)
     c['parking']['test_wait_for_sign']=parking_test
     c['parking']['test_drive_until_sign']=parking_test
     if parking_test:

@@ -27,19 +27,25 @@ def frame(p,c,t=1.,present=True,image_stamp=None,image=None,rate=0.):
                   laser(c,boxes=[]),t,None,-100.,[],.12,dict(valid=True),angular_velocity=rate)
 
 
-@pytest.mark.parametrize('angle',[0.,.4,1.0,1.4])
-def test_first_missing_line_stops_without_angle_or_entry_requirements(angle):
+@pytest.mark.parametrize('angle',[0.,.4,1.0])
+def test_first_missing_line_below_gate_keeps_turning(angle):
     c,p=turning(angle=angle)
     command=frame(p,c)
     assert command[0]>0 and p.line_seen
     assert p.debug['feedback']['steering_rad']==command[1]
+    assert frame(p,c,1.1,False)[2]=='parking_turn'
+    assert not p.debug['white_line']['stop_armed']
+
+
+def test_first_missing_line_after_gate_stops():
+    c,p=turning(angle=1.4);frame(p,c)
     assert frame(p,c,1.1,False)==(0.,0.,'parked')
     assert p.reason=='WHITE_STRAIGHT_LINE_DISAPPEARED_STOP'
-    assert frame(p,c,1.2,True)==(0.,0.,'parked')
 
 
 def test_line_loss_precedes_timeout_distance_orientation_and_pd():
     c,p=turning();frame(p,c)
+    p.turn_angle=p.c['white_loss_min_angle']
     p.turn_distance=p.c['turn_distance_limit']+1.
     p.selected['normal']=[1.,0.]  # 방향 보조 정지보다도 선 소실 사유가 우선
     def forbidden(*args,**kwargs):raise AssertionError('controller must not run after white loss')
@@ -50,6 +56,7 @@ def test_line_loss_precedes_timeout_distance_orientation_and_pd():
 
 def test_same_camera_frame_is_not_falsely_treated_as_line_loss():
     c,p=turning();frame(p,c)
+    p.turn_angle=p.c['white_loss_min_angle']
     assert frame(p,c,1.1,False,image_stamp=1.)[2]=='parking_turn'
     assert frame(p,c,1.2,False)==(0.,0.,'parked')
 
@@ -74,7 +81,7 @@ def test_visual_pd_cannot_weaken_nominal_turn_even_when_enabled(phase,offset):
 
 def test_latest_main_calibration_and_defaults_are_preserved():
     c=config();p=Parking(c)
-    assert p._turn_lead()==pytest.approx(.615)
+    assert p._turn_lead()==pytest.approx(.55)  # 11/18 IMU 실측 반경 (redecide_1118_23·34·35)
     assert p.c['pd']['enabled'] is False
     assert p.c['turn_done_heading']==.05
     assert p.c['cruise_search_enabled'] is True
@@ -101,6 +108,7 @@ def test_main_motor_publisher_stops_on_loss_and_never_restarts():
         node.loop.lane_stamp=1.;node.scan=laser(c,boxes=[]);node.velocity=.12
         commands=[]
         for t,present in ((1.,True),(1.1,False),(1.2,True)):
+            if not present:p.turn_angle=p.c['white_loss_min_angle']
             fake_ros.Clock.now_s=t;node.image=picture(present)
             node.image_stamp=node.scan_stamp=node.odom_stamp=node.detection_stamp=t
             node.control()

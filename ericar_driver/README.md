@@ -17,6 +17,7 @@
 | `cones.py` | 라바콘: 좌·우 콘 쌍(문) 사이로 조향 | 유경 |
 | `lane_change.py` | 3차선 정적 장애물: 라이다 감지 → 좌·우 판단 → 원호–직선–원호 이동, 표지판 요청 이동 경로 계획 | 유경, 소민, 혁준 |
 | `fork.py` | 갈림길 상태: 방향 기억, 목표 차로, 입구 판단 | 소민, 혁준 |
+| `dash_lane.py` | 3차선 점선 추종 (3lane_chu_js 시제품): 흰 점선 위 주행 + 라이다로 비는 옆 위치 골라 살짝 비켜 감. 끄기 `params.py` `dash_lane.enabled` False. 설명 `docs/three_lane.md` "점선 추종" | 추추 |
 | `traffic_lamp.py` | 신호등 박스 안 램프 위치로 색 재확인 | 혁준 |
 | `node.py` | ROS 입출력: 센서 수신, YOLO, `/limo/ack_cmd` 발행 | 공통 |
 | `loop.py` | 제어 주기 1회 계산 (센서 상태 → 차선 → 판단), 설정 검사. ROS 의존 없음 | 공통 |
@@ -74,15 +75,9 @@
 ros2 launch ericar_driver bringup.launch.py yolo:=false
 ```
 
-## 회귀 시험 (맥·차, ROS 불필요)
+## 시험 (맥·차, ROS 불필요)
 
-공통 파일 수정 후 동작이 바뀌지 않았는지 확인. 도면 치수로 합성한 3차로 영상·라이다·표지판으로 보행자 → 차선 변경 → 신호등 → 주차까지 노드 전체 실행 후 기준값과 비교 (약 15초)
-
-```bash
-python3 ericar_driver/test/test_regression.py
-```
-
-numpy, opencv, pyyaml 필요. 시험 장면의 노면 색은 `params.py` 차선 색 범위 중앙값이라 색 설정이 바뀌어도 장면이 따라감. 동작을 의도적으로 바꾼 PR은 `python3 test/scenario.py --write`로 기준값 갱신 후 이유를 PR에 기록. 지금 기준값은 맥 생성본 (PR #67).
+수정 뒤에는 바뀐 영역 시험 파일만 실행 (`python3 -m pytest test/<파일>`). 회귀 시험(`test_regression.py`·`golden_regression.json`)은 11/19 삭제: 기준값을 갱신하지 않아 항상 실패했고 차에서 155초 소요. 합성 장면 `test/scenario.py`는 `test_sections.py`·`three_lane.py`가 써서 유지
 
 3차선·갈림길을 바꿨으면 아래도 실행 (맥)
 
@@ -97,7 +92,7 @@ python3 ericar_driver/test/test_lane_change_heading.py
 - `three_lane.py`: 합성 사례 21건 (실차 실패 재현 사례 포함). 11/17 기준 21/21
 - `tools/lc_random_eval.py`: 임의 배치 50건. 11/17 기준 46/50 (실패 시드 18·21·27·44)
 - 합성 시험은 '나빠지지 않음' 정도의 근거. 11/17 새벽 실차 실패 중 합성으로 재현된 것은 1건
-- 알려진 실패 2건 (기능 문제 아님, 기준 정리 필요): `test_sections.py` 주차 표지판 누락 1건, `test_lidar_missions.py` 임의 3차선
+- 알려진 실패 2건 (기능 문제 아님, 기준 정리 필요): `test_sections.py` 주차 표지판 누락 1건, `test_lidar_missions.py` 임의 3차선(11/19 시험에서 삭제, 점수는 `three_lane.py`·`tools/lc_random_eval.py`로 확인)
 
 ## 원본 대비 실차 수정
 
@@ -150,7 +145,7 @@ ros2 launch ericar_driver bringup.launch.py
 
 예: 차선만 + 녹화 `ros2 launch ericar_driver bringup.launch.py yolo:=false record:=true`
 
-- 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`
+- 디버그 화면: 맥에서 `ssh -L 8080:localhost:8080 wego@<차 IP>` 후 `http://localhost:8080`. 전송 기본 초당 5장·화질 50·크기 0.8배(약 1.7 Mbit/s). 화면이 늦게 따라오면 창을 하나만 열고 `/?fps=3&q=30&scale=0.6`, 망이 좋으면 `/?fps=8&q=70&scale=1`. 포트 전달은 밀린 화면을 쌓아 지연이 커짐 → 같은 망이면 `http://<차 IP>:8080` 직접 접속이 덜 밀림
 - 시작 로그에 `[bringup] 카메라 노출: data=600` 확인
 - 카메라 `Failed to setup devices` 오류 한 줄은 단독 실행 때도 나오는 메시지, 영상은 정상
 - wego `teleop_launch.py`와 같이 켜지 말 것 (차동 모드 드라이버라 바퀴 드라이버 중복)
@@ -201,6 +196,26 @@ ros2 launch ericar_driver bringup.launch.py record:=true start_stage:=fork
 | 주차 | `parking` | S4 |
 
 예전과 다른 점: 라바콘은 `traffic`이 아니라 `cones`, 서행 유도선은 `pedestrian`.
+
+#### 노드 켜 둔 채 재출발 (조종기 SWB, 실차 미확인)
+
+주최 답변(11/18): 재출발 때 프로그램 종료 후 재실행 불가, 실행 중인 상태에서 차만 미션 구간 시작 지점으로 옮김.
+
+1. SWB 아래(수동) → 차를 미션 시작 지점에 진행 방향으로 놓음 (들어서 옮겨도, 조종기로 몰아도 됨)
+2. SWB 위(자동) → 바로 출발
+
+- 수동인 동안: 판단 멈춤, IMU 회전만 적분 (들어서 돌려도 측정됨). 상태 표시 `manual (SWB)`
+- 자동으로 돌아오면: 드라이버를 새로 만들어 미션 상태 전부 초기화, 놓인 방향으로 구간 재결정 후 그 구간의 `start_stage`로 시작한 것과 같은 상태 (구간 거리 0)
+  - 직선 4개 방향이 모두 달라 방향 = 구간. 후보는 지금·다음·이전 구간 (S0과 S4는 방향이 같아 지금 구간 유지)
+  - 가장 가까운 후보와 `sections.restart_tolerance`(40°) 넘게 다르면 지금 구간 유지
+  - S4는 미션이 둘: 신호등을 끝낸 뒤(통과·포기)였으면 주차 지점(`parking`), 아니면 신호등 지점(`traffic`) 재출발로 봄
+- 수동이 `restart.min_manual`(1초)보다 짧으면 무시 (조종기 신호 튐)
+- 노드를 켠 뒤 첫 자동 전환은 출발로 봄: `start_stage` 그대로, 그 전에 차를 들고 돌린 회전은 버림
+- 수동·자동은 `/limo_status` `control_mode` (0 = 수동, 1 = 자동, 약 2 Hz). 상태가 3초 넘게 안 오면 자동으로 봄
+- 확인: `/answer/detections` `control.restarts`(재출발 횟수)·`restart_error`(놓인 방향과 구간 방향의 차 °)·`section`
+- 주의: 차를 반대 방향으로 놓거나 옮기는 중 크게 기울이면 구간 판단이 틀릴 수 있음. 같은 방향을 유지하며 옮김
+- 주의: 신호등을 통과한 뒤 신호등 지점부터 다시 하면 신호등을 지난 것으로 봄 → 이 경우는 노트북 재시작 불가이므로 운영진 확인 필요
+- 시험: `python3 test/test_restart.py`
 
 ### 3차선·갈림길 설정 (11/17, PR #67)
 

@@ -14,9 +14,10 @@ from ericar_driver.params import ANSWER_CONFIG
 from ericar_driver.lane_vision import LaneVision
 
 
-def driver():
+def driver(decision_distance=None):
     c = copy.deepcopy(ANSWER_CONFIG)
     c['missions']['start_stage'] = 'fork'
+    c['missions']['fork_decision_distance'] = decision_distance
     robot = yaml.safe_load((HERE.parent / 'config/robot.yaml').read_text(encoding='utf-8'))['robot']
     return Driver({'answer': c, 'robot': robot})
 
@@ -31,6 +32,16 @@ def test_conflicting_arrows():
     for t in (0., .1, .2):
         signs(d, ['left', 'right'], t)
     assert 'fork' not in d.done, '동시 화살표로 방향 확정'
+
+
+def test_decision_waits_for_course_distance():
+    d = driver(decision_distance=3.0)
+    for stamp in (0., .1, .2):
+        signs(d, ['left'], stamp)
+    assert d.fork_goal == 0
+    d.sections.distance = 3.0
+    signs(d, [], .3)
+    assert d.fork_goal == 1 and d.fork_sign == 'left'
 
 
 def test_both_directions():
@@ -154,6 +165,99 @@ def test_blocked_target_keeps_avoidance():
     assert result is not None
 
 
+def test_yellow_boundary_holds_until_fork_route_opens():
+    d = driver()
+    for stamp in (0., .1, .2):
+        signs(d, ['left'], stamp)
+    d.c['sections']['lane_change_max_distance'] = None
+    d.c['lane_change']['entry_gate'] = False
+    d.sections.distance = 5.1
+    d.lane_driver.update = lambda *args, **kwargs: (.18, 0.)
+    lane = dict(valid=True, heading=0., error=0., stop_distance=None,
+                colors={'left': 'yellow', 'right': 'yellow'}, solid={}, stamp=1.)
+    d.lane_change.anchor_front, d.lane_change.fork_dir = .54, 1
+    assert d.lane_change.choose_direction({0: .58, 1: 3., -1: 3.}, lane, requested=1, preferred=1) == 0
+    d.lane_change.anchor_front = None
+    x = d.robot['lidar']['x']
+    scan = dict(points=[[.58-x, 0.0]], wide_objects=0, front=.58, rear=3., valid_fraction=1.)
+    speed, _, mode = d.update(lane, scan, [], 1., 0., 1.)
+    assert speed == 0. and mode == 'fork_hold: target boundary', d.debug
+    assert not d.lane_change.active and d.fork.destination == 2
+    # 늦은 요청이 막혀도 차선 추종으로 넘어가지 않음
+    d.fork.dash_seen, d.fork.dash_left = True, 1.0
+    d.stall_time = d.c['stall']['seconds']
+    speed, _, mode = d.update(dict(lane, stamp=2., colors={'left': 'yellow'}),
+                              dict(scan, front=.1), [], 2., 0., 2.)
+    assert speed == 0. and mode == 'fork_hold: target boundary' and d.lane_change_off == 0., d.debug
+    # 목표 쪽 경계가 열리면 남은 고정 거리 추정과 별개로 라이다 경로 검사 후 출발
+    lane = dict(lane, stamp=3., colors={'right': 'yellow'}, dash_end=1.7)
+    open_scan = dict(scan, points=[], front=3.)
+    speed, steering, _ = d.update(lane, open_scan, [], 3., 0., 3.)
+    assert speed > 0. and steering > 0. and d.lane_change.direction == 1, d.debug
+
+
+def test_fork_detour_prefers_return_and_checks_alternate():
+    cases = ((.12, 3., 'return', False), (0., 3., 'alternate_exit', False),
+             (.30, 0., None, False), (0., 3., None, True))
+    for curvature, limit, expected, obstacle in cases:
+        d = driver()
+        for stamp in (0., .1, .2):
+            signs(d, ['left'], stamp)
+        d.c['lane_change']['entry_gate'] = False
+        d.request_limit = lambda: limit
+        d.lane_driver.update = lambda *args, **kwargs: (.18, 0.)
+        v = d.c['lane']
+        x = np.poly1d([-(v['far']-v['near'])/(v['height_px']-1), v['far']])
+        scale = v['width_px']/v['view_width']
+        left = (np.poly1d([v['width_px']/2])-scale*(.17+curvature*x*x)).c.tolist()
+        right = [v['width_px']/2+scale*.85]
+        lane = dict(valid=True, heading=0., error=0., stop_distance=None, stamp=1.,
+                    colors={'left': 'yellow', 'right': 'yellow'}, solid={},
+                    fits={'left': left, 'right': right},
+                    fit_spans={side: [0, v['height_px']-1] for side in ('left', 'right')})
+        points = [[.52-d.robot['lidar']['x'], -.25]] if obstacle else []
+        scan = dict(points=points, wide_objects=0, front=3., rear=3., valid_fraction=1.)
+        speed, steering, mode = d.update(lane, scan, [], 1., 0., 1.)
+        if expected is None:
+            assert speed == 0. and mode == 'fork_hold: target boundary', d.debug
+            assert d.fork.destination == 2
+        else:
+            assert speed > 0. and steering < 0. and d.lane_change.plan['fork_detour'] == expected, d.debug
+            assert d.fork.destination == (2 if expected == 'return' else 0)
+            assert d.fork.sign == 'left'
+            # 우회 첫 구간 종료 후: 복귀 후보는 원래 목적 차로로 이동, 대체 출구 후보는 도착 차로 추종
+            d.lane_change.active, d.lane_change.index = False, 0
+            lane = dict(lane, stamp=2., colors={'left': 'white', 'right': 'yellow'})
+            speed, steering, _ = d.update(lane, scan, [], 2., 0., 2.)
+            if expected == 'return':
+                assert speed > 0. and steering > 0. and d.lane_change.span == 2, d.debug
+            else:
+                assert d.fork.phase == 'follow' and not d.lane_change.active, d.debug
+
+
+def test_fork_can_enter_between_two_yellow_boundaries():
+    for requested, sign in ((1, 'left'), (-1, 'right')):
+        d = driver()
+        for stamp in (0., .1, .2):
+            signs(d, [sign], stamp)
+        d.c['lane_change']['entry_gate'] = False
+        d.lane_driver.update = lambda *args, **kwargs: (.18, 0.)
+        v = d.c['lane']
+        scale = v['width_px']/v['view_width']
+        lane = dict(valid=True, heading=0., error=0., stop_distance=None, stamp=1.,
+                    colors={'left': 'yellow', 'right': 'yellow'}, solid={},
+                    fits={'left': [v['width_px']/2-scale*.83], 'right': [v['width_px']/2+scale*.83]},
+                    fit_spans={side: [0, v['height_px']-1] for side in ('left', 'right')})
+        scan = dict(points=[], wide_objects=0, front=3., rear=3., valid_fraction=1.)
+        speed, steering, _ = d.update(lane, scan, [], 1., 0., 1.)
+        assert speed > 0. and steering*requested > 0., d.debug
+        assert d.lane_change.plan['fork_direct'] and d.lane_change.direction == requested, d.debug
+        assert d.fork.destination == 1+requested
+        blocker = np.array([[.69, requested*.40]])
+        plan = d.lane_change.plan_fork_boundary_route(lane, blocker, 0., requested, 3.)
+        assert plan is None or not plan.get('fork_direct'), d.lane_change.debug
+
+
 def arrive_after_diagonal(d, area):
     """right 확정(왼쪽 끝 차로) → 두 칸을 비스듬히 건너는 동안(40° 틀어짐) 표지판을 area로 봄 → 오른쪽 끝 차로 도착"""
     d.lane_change.index = 2
@@ -207,12 +311,16 @@ def test_follow_enter_distance():
 
 if __name__ == '__main__':
     test_conflicting_arrows()
+    test_decision_waits_for_course_distance()
     test_both_directions()
     test_immediate_and_memory()
     test_fork_boundaries()
     test_requested_uses_current_heading()
     test_fork_keeps_tracked_inner_boundary()
     test_blocked_target_keeps_avoidance()
+    test_yellow_boundary_holds_until_fork_route_opens()
+    test_fork_detour_prefers_return_and_checks_alternate()
+    test_fork_can_enter_between_two_yellow_boundaries()
     test_sign_near_recorded_off_axis()
     test_follow_enter_distance()
     print('YOLO 좌·우 분기 상태 시험 통과')

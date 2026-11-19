@@ -93,7 +93,9 @@ def install(spin_hook):
     module('rclpy', init=lambda **kw: None, ok=lambda: state['ok'],
            shutdown=lambda: state.update(ok=False), spin=spin_hook)
     module('rclpy.node', Node=Node)
-    module('rclpy.qos', qos_profile_sensor_data='sensor_data')
+    # QoSProfile·ReliabilityPolicy: node.py 영상 구독 대기열 1장 설정용 (값은 시험에서 안 씀)
+    module('rclpy.qos', qos_profile_sensor_data='sensor_data', QoSProfile=lambda **kw: dict(kw),
+           ReliabilityPolicy=types.SimpleNamespace(BEST_EFFORT='best_effort'))
     module('rclpy.signals', SignalHandlerOptions=types.SimpleNamespace(NO=0))
     module('rclpy.parameter', Parameter=lambda *a, **k: None)
     for pkg, names in {'ackermann_msgs': ['AckermannDrive', 'AckermannDriveStamped'],

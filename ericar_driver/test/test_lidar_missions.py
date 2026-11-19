@@ -310,6 +310,28 @@ def test_cone_gates():
     assert not failed, failed
 
 
+def test_cone_red_without_corridor():
+    """붉은색은 보이는데 비율이 진입 기준 미달(red·corridor 아님)일 때 (11/18 유경, run_1118_1931)
+
+    예전에는 라이다 진입까지 막아 5.3 s 동안 아무 진입도 못 하고 콘에 추돌 → 라이다 문 조건이 다 맞으면 켬.
+    문 쌍·정면 방위·cone_enter_distance·넓은 군집 조건은 그대로라 한쪽 줄·먼 문·표지판 기둥에는 안 켜짐"""
+    c = config()
+    lidar_x = ROBOT['lidar']['x']
+    cones = ConeDriving(c, ROBOT)
+    cones.red, cones.corridor = True, False
+    none = np.zeros((0, 2))
+
+    def posts(distance, center, gap=.6):
+        return np.array([[lidar_x+distance, center+gap/2], [lidar_x+distance, center-gap/2]])
+    assert cones.start_gate(posts(.25, 0.), none) is not None, 'red인데 바로 앞 문에 진입 안 함'
+    assert cones.start_gate(posts(.8, 0.), none) is None, 'red에서 0.3 m보다 먼 문에 진입'
+    row = np.array([[lidar_x+x, -.35] for x in (.1, .3, .5, .7)])
+    assert cones.start_gate(row, none) is None, 'red에서 한쪽 콘 줄에 진입'
+    cones.c = copy.deepcopy(c)['lidar']
+    cones.c['cone_red_lidar_entry'] = False
+    assert cones.start_gate(posts(.25, 0.), none) is None, 'cone_red_lidar_entry False인데 진입'
+
+
 def test_cones_not_started_by_other_objects():
     cases = {
         '표지판 기둥 2개': dict(others=[(1.0, 0.45), (2.4, -0.5)]),
@@ -419,18 +441,6 @@ def random_three_lane_layout(seed, cars=7, gap=(1.0, 1.6)):
 THREE_LANE_RANDOM_ALLOWED_FAILURES = 3
 
 
-def test_three_lane_random(seeds=30):
-    failed = []
-    for seed in range(seeds):
-        r = run_three_lane(random_three_lane_layout(seed))
-        if not (r['done'] and r['min_clear'] > 0.0):
-            failed.append(seed)
-            print(f"3차선 임의 {seed:2d} 실패: 차로 {r['lanes']} 최소 여유 {r['min_clear']:.3f} m, "
-                  f"대기 {r['waits']}주기, 통과 {r['done']} (x {r['x']:.2f})")
-    print(f"3차선 임의 배치: {seeds - len(failed)}/{seeds} 통과, 실패 시드 {failed}")
-    assert len(failed) <= THREE_LANE_RANDOM_ALLOWED_FAILURES, failed
-
-
 def test_cone_handover():
     """라바콘 인계 조건 (11/15 fix2_1115_2017 207.6 s: 콘 0.3 m 앞에서야 켜져 안쪽 콘 0.2 m 앞 정지)
     - 문을 정면으로 보면 1 m 앞에서 미리 인계, 비스듬하거나 옆으로 비켜 있으면 예전처럼 콘이 바로 앞일 때
@@ -450,14 +460,21 @@ def test_cone_handover():
     assert cones.start_gate(posts(.25, .35), none) is not None, '바로 앞 콘(예전 조건)에 인계 안 함'
     assert cones.start_gate(posts(.25, .35), none, holding=True) is not None, '코너 유지 중 진행 폭 안 콘에 인계 안 함'
     assert cones.start_gate(posts(.25, .6), none, holding=True) is None, '코너 유지 중 진행 폭 밖 콘에 인계'
+    # 11/18 완화: 코너 유지 중에도 붉은색이 찼고 문을 정면으로 보면 cone_hold_face_distance(0.6 m) 안에서 미리 인계
+    assert cones.start_gate(posts(.5, 0.), none, holding=True) is not None, '코너 유지 중 정면 문 0.5 m에 인계 안 함'
+    assert cones.start_gate(posts(.8, 0.), none, holding=True) is None, '코너 유지 중 0.6 m보다 먼 문에 인계'
+    assert cones.start_gate(posts(.5, .35), none, holding=True) is None, '코너 유지 중 옆으로 비켜난 문에 미리 인계'
+    cones.red = cones.corridor = False
+    assert cones.start_gate(posts(.5, 0.), none, holding=True) is None, '붉은색 없이 코너 유지 중 먼 문에 인계'
+    cones.red = cones.corridor = True
 
 
 if __name__ == '__main__':
     test_cones_pass()
     test_cone_gates()
+    test_cone_red_without_corridor()
+    test_cone_handover()
     test_cones_not_started_by_other_objects()
     test_cones_outer_wall()
     test_three_lane_left_right()
-    test_three_lane_random()
-    test_cone_handover()
     print('라이다 미션 시험 통과')

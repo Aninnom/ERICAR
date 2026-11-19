@@ -38,6 +38,7 @@ def test_different_obstacle_positions_reach_same_relative_turn_start(offset):
             assert command==(.12,0.,'parking_scan')
     assert seen_approach and turn_travel is not None
     assert abs(turn_travel-(.675+offset-lead))<=.032
+    p.turn_angle=p.c['white_loss_min_angle']
     assert tick(p,laser(c,boxes=[]),t+.1,present=False)==(0.,0.,'parked')
 
 
@@ -129,6 +130,7 @@ def test_main_motor_publishes_approach_then_turn_then_stop():
                 break
             travel+=.012
         assert seen_approach and seen_turn
+        node.loop.driver.parking.turn_angle=node.loop.driver.parking.c['white_loss_min_angle']
         now=round(now+.1,6);fake_ros.Clock.now_s=now
         node.image=picture(False);node.image_stamp=node.scan_stamp=node.odom_stamp=now
         node.control()

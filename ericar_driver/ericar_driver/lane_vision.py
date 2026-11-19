@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from .common import clip
+from .dash_lane import measure_dashes
 
 
 class LaneVision:
@@ -40,6 +41,8 @@ class LaneVision:
         self.outer_yellow = None
         self.fork_direction = 0  # 끝 차로 정렬 후 선택 출구. +1=A(왼쪽), -1=B(오른쪽)
         self.double_left = False      # 마지막 코너 뒤 왼쪽에 옆 차로 선이 나란한 구간이면 True (loop가 설정). find_starts·label_sides
+        self.yellow_level = None      # 도로 위 노란 선 밝기(V) 느린 평균. 정지선 흰색 하한을 조명에 맞추는 기준 (stop_white_ratio)
+        self.stop_white_level = None  # 이번 프레임에 쓴 정지선 흰색 V 하한 (디버그)
 
     # ---------- 2. 버드아이뷰 ----------
     def ground_maps(self, image_shape):
@@ -77,7 +80,40 @@ class LaneVision:
         bird = cv2.remap(color, map_x, map_y, cv2.INTER_NEAREST,           # 2. 버드아이뷰
                          borderMode=cv2.BORDER_CONSTANT)
         white_bird = cv2.remap(white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
-        return self.analyze_bird(bird, fork_bias, white_bird)
+        # 정지선·횡단보도 전용 흰색 하한 (stop_white_min, 없으면 white_min 그대로). 3차선 점선은 white_min 유지
+        stop_bird = None
+        if self.c.get('stop_white_min'):
+            # 조명에 맞춘 하한 (11/18 redecide_1118_26·28, 밝은 연습장): 하한을 85로 고정하니 바닥 반사·'천천히' 글씨가 흰색으로 잡혀
+            # 첫 선 구간 94프레임 중 91프레임이 가짜 횡단보도 선 → 마름모 앞 선에 정지. 어두운 경기장은 85가 있어야 블록 판정이 됨.
+            # 화면 아래쪽 노란 선 밝기(V 가운데값)의 stop_white_ratio배를 하한으로 쓰되 stop_white_min ~ white_min 사이로 제한
+            level = int(self.c['stop_white_min'][2])
+            ratio = self.c.get('stop_white_ratio')
+            if ratio:
+                top = int(bgr.shape[0]*0.45)
+                values = hsv[top:, :, 2][color[top:] > 0]
+                if values.size >= self.c.get('stop_white_min_pixels', 300):
+                    now_level = float(np.median(values))
+                    self.yellow_level = now_level if self.yellow_level is None else 0.7*self.yellow_level+0.3*now_level
+                if self.yellow_level is not None:
+                    level = int(np.clip(ratio*self.yellow_level, self.c['stop_white_min'][2], self.c['white_min'][2]))
+            self.stop_white_level = level
+            low = [self.c['stop_white_min'][0], self.c['stop_white_min'][1], level]
+            stop_white = cv2.inRange(hsv, np.array(low), np.array(self.c['white_max']))
+            stop_bird = cv2.remap(stop_white, map_x, map_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT)
+        return self.analyze_bird(self.drop_thick(bird), fork_bias, white_bird, stop_bird)
+
+    def drop_thick(self, bird):
+        """차선보다 두꺼운 노란 덩어리(방지턱 줄) 제거. 가로·세로 모두 yellow_max_thickness(m) 넘는 부분과 그 둘레만 지움"""
+        limit = self.c.get('yellow_max_thickness')
+        if not limit:
+            return bird
+        size = (max(3, round(limit * self.scale)), max(3, round(limit / self.row_m)))   # (가로 px, 세로 px)
+        thick = cv2.morphologyEx(bird, cv2.MORPH_OPEN, np.ones(size[::-1], np.uint8))
+        if not thick.any():
+            return bird
+        margin = self.c.get('yellow_thick_margin', 0.035)
+        around = np.ones((2 * round(margin / self.row_m) + 1, 2 * round(margin * self.scale) + 1), np.uint8)
+        return cv2.bitwise_and(bird, cv2.bitwise_not(cv2.dilate(thick, around)))
 
     def drop_beyond_yellow(self, white, yellow):
         """노란 선 너머(차 반대쪽) 흰색 제거 → 트랙 밖 흰 테두리를 점선으로 오인하지 않음
@@ -152,9 +188,12 @@ class LaneVision:
                 keep[y:y + bh, x:x + bw][box] = 255
         return keep
 
-    def analyze_bird(self, bird, fork_bias=0.0, white_bird=None):
+    def analyze_bird(self, bird, fork_bias=0.0, white_bird=None, stop_bird=None):
         """ROS 없이 테스트할 수 있도록 버드아이뷰 이후 처리를 분리.
-        white_bird: 흰색 BEV (정지선용). None이면 예전처럼 노란 가로선에서 정지선 탐색"""
+        white_bird: 흰색 BEV (정지선·점선용). None이면 예전처럼 노란 가로선에서 정지선 탐색
+        stop_bird: 정지선·횡단보도 전용 흰색 BEV (stop_white_min). None이면 white_bird 사용"""
+        if stop_bird is None:
+            stop_bird = white_bird
         c = self.c
         h, w = bird.shape
         lane_px = c['lane_width'] * self.scale   # 차로 폭(픽셀)
@@ -164,7 +203,13 @@ class LaneVision:
         horizontal = cv2.morphologyEx(bird, cv2.MORPH_OPEN, kernel)
         lane_mask = cv2.subtract(bird, horizontal)
         # 정지선은 흰 페인트의 가로선에서 찾음. 차선(lane_mask)은 노랑 그대로
-        stop_lines = horizontal if white_bird is None else cv2.morphologyEx(white_bird, cv2.MORPH_OPEN, kernel)
+        # 바닥판 이음매 메움 (11/18 경기장 redecide_1118_17·20): 이음매가 차로 가운데를 지나며 흰 선을 둘로 끊음(반쪽 약 0.25 m)
+        # → 아래 가로 열기(stop_min_width 0.32 m 연속)에서 통째로 사라져 신호등 앞 정지선 0프레임. 정지선 탐색에 쓰는 마스크만
+        # 가로로 stop_seam_close(m) 닫아 틈을 이음. 점선·횡단보도 블록 판정은 원래 마스크 그대로 (블록 틈 약 0.05 m는 안 메워짐)
+        seam = max(0, int(round(c.get('stop_seam_close', 0.0) * self.scale)))
+        seam_kernel = np.ones((1, seam), np.uint8) if seam >= 2 else None
+        stop_source = stop_bird if stop_bird is None or seam_kernel is None else cv2.morphologyEx(stop_bird, cv2.MORPH_CLOSE, seam_kernel)
+        stop_lines = horizontal if stop_bird is None else cv2.morphologyEx(stop_source, cv2.MORPH_OPEN, kernel)
         # 3차선: 차로 구분선 = 흰 점선, 바깥 경계 = 노랑. 가운데 차로는 양쪽이 모두 점선
         # 점선이 보이면 항상 차선 후보에 추가 (노란 선 너머 흰색은 제거 → 트랙 밖 흰 테두리 제외)
         # 점선이 없으면(흰 그림 없음 포함) 아래 처리 전부 기존과 동일
@@ -234,6 +279,8 @@ class LaneVision:
                       fits={s: f.tolist() for s, f in fits.items()}, fit_spans=spans, solid=solid,
                       # 가장 먼 흰 점선까지 앞 거리(m). 없으면 None. 분기 입구(점선 끝) 판단용 (fork.py, 소민)
                       dash_end=float(self.meters_at(np.flatnonzero(dashes.any(axis=1)).min())) if white_lane else None,
+                      # 흰 점선 직선 목록 (3lane_chu_js 점선 추종 dash_lane.py 전용, 다른 판단에는 안 씀)
+                      dash_lines=measure_dashes(dashes, self.scale, self.row_m, c['far'], c['near']) if white_lane else [],
                       colors=line_colors,
                       # 선별 가까운 끝 앞 거리(m)·가까운 끝 기울기(rad, + 왼쪽). 교통섬 노란 선 구분용 (lane_change.trusted_colors, 소민 11/14)
                       near_ends={s: float(self.meters_at(spans[s][1])) for s in spans},
@@ -271,16 +318,18 @@ class LaneVision:
                           curvature=max(float(self.line_curvature(fits[sd], np.arange(spans[sd][0], spans[sd][1] + 1, 3.0)).max())
                                         for sd in fits))
             # ---------- 6. 목표점 ---------- 두 선이면 평균이라 코너에서 차로가 넓어져도(0.52 → 0.78 m) 중앙
-            targets = [t for t in (self.pursuit_target(sd, fits[sd], spans[sd]) for sd in fits) if t is not None]
+            targets = {sd: target for sd in fits
+                       if (target := self.pursuit_target(sd, fits[sd], spans[sd])) is not None}
+            result['dash_targets'] = {sd: target for sd, target in targets.items() if line_colors[sd] == 'white'}
             if targets:
-                forward, lateral = np.mean(targets, axis=0)
+                forward, lateral = np.mean(list(targets.values()), axis=0)
                 result.update(error=float(lateral), forward=float(forward), pursuit=True)
 
         # ---------- 정지선 ----------
         # 차가 차로 방향에서 틀어져 있으면 BEV에서 정지선이 기울어 가로 열림(1행 × stop_min_width)에 통째로 지워짐
         # (11/16 main_1116_arc1 244.5~250.6 s: 4번 코너 뒤 7° 틀어진 채 접근 → 신호등 정지선 후보 0개 → 빨강 면적 예비 정지로
         #  선 약 0.6 m 앞 '천천히' 위 정지). 차선 방향으로 흰 마스크를 세로 밀기(shear)해 수평으로 편 뒤 탐색. 차로 중심 열은 그대로라 거리 불변
-        white_source = bird if white_bird is None else white_bird
+        white_source = bird if stop_bird is None else stop_bird
         self.find_stop_line(result, stop_lines, lane_px, white_source)
         # 원래 탐색이 우선. 횡단보도 앞 선을 못 찾았을 때만 편 마스크로 다시 찾아 보탬 (원래 찾던 선은 그대로 → 보행자 등 기존 동작 유지)
         level = self.stop_level(fits, spans, result['center_px'], w, h) if result['valid'] else None
@@ -290,7 +339,8 @@ class LaneVision:
             valid = self.valid_bird
             if valid is not None and valid.shape == leveled.shape:
                 self.valid_bird = cv2.warpAffine(valid.astype(np.uint8), level, (w, h), flags=cv2.INTER_NEAREST) > 0
-            self.find_stop_line(extra, cv2.morphologyEx(leveled, cv2.MORPH_OPEN, kernel), lane_px, leveled)
+            leveled_source = leveled if seam_kernel is None else cv2.morphologyEx(leveled, cv2.MORPH_CLOSE, seam_kernel)
+            self.find_stop_line(extra, cv2.morphologyEx(leveled_source, cv2.MORPH_OPEN, kernel), lane_px, leveled)
             self.valid_bird = valid
             result['crosswalk_distance'] = extra['crosswalk_distance']
             if result['stop_distance'] is None:
