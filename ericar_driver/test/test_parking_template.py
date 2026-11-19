@@ -284,3 +284,37 @@ def test_sign_passed_slow_skipped_once_slot_selected():
     assert not p._sign_slow()
     cfg['template_sign_slow_without_target_only']=False
     assert p._sign_slow()
+
+
+def test_sign_slow_deferred_while_unoccupied_slot_ahead():
+    """11/19 parking_1119_3: 칸을 못 골랐어도 비점유 칸 회전점이 남아 있으면 표지판 통과 서행 대신 감속 거리로"""
+    c=config();cfg=c['answer']['parking'];cfg['template_enabled']=True;p=Parking(c);p.start(0.)
+    p.sign.passed=True
+    p.nearest_start=1.4
+    assert not p._sign_slow()
+    p.nearest_start=None
+    assert p._sign_slow()
+    cfg['template_sign_slow_defer_to_nearest']=False;p.nearest_start=1.4
+    assert p._sign_slow()
+
+
+def test_sign_passed_with_far_unknown_slot_keeps_cruise():
+    """표지판 통과 + 칸 2 UNKNOWN 1.5 m 앞: 서행하지 않고 차선 주행(상한 0.30) 유지"""
+    c=config();cfg=c['answer']['parking'];cfg['template_enabled']=True;p=Parking(c);p.start(0.)
+    p.sign.passed=True
+    ev=[dict(slot_index=0,state='OCCUPIED',turn_start_remaining_m=.5),
+        dict(slot_index=1,state='OCCUPIED',turn_start_remaining_m=1.0),
+        dict(slot_index=2,state='UNKNOWN',turn_start_remaining_m=1.5)]
+    speed,_,state=_cruise(p,evaluations=ev)
+    assert state=='parking_cruise' and speed==cfg['template_cruise_max_speed']
+
+
+def test_smooth_start_cap_never_above_current_speed():
+    """거리 비례 감속 시작 상한 = 그때 속도 (다시 빨라지지 않음)"""
+    c=config();cfg=c['answer']['parking'];cfg['template_enabled']=True;p=Parking(c);p.start(0.)
+    p.template_armed=True;p.selected=dict(slot_index=1,entrance=[1.5,-.26],normal=[0.,-1.],tangent=[1.,0.])
+    p.last_velocity=.30
+    p._slow(0.,'NEAR_SIGN_PASSED')
+    assert p.smooth_approach and p.approach_speed_cap==.30
+    p.approach_debug=dict(remaining_m=.95)
+    assert p._approach_speed(.6)<=.30+1e-9
