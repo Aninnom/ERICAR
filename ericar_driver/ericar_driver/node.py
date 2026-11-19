@@ -9,7 +9,7 @@ import threading
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from ackermann_msgs.msg import AckermannDrive
 from sensor_msgs.msg import Image, Imu, LaserScan
@@ -89,7 +89,10 @@ class DriverNode(Node):
         self.status = self.create_publisher(String, topics.get('status', '/answer/status'), 10)
         self.debug = self.create_publisher(Image, topics.get('debug_image', '/answer/debug_image'), qos_profile_sensor_data)
         self.detection_output = self.create_publisher(String, topics.get('detections', '/answer/detections'), 10)
-        self.create_subscription(Image, topics['image'], self.on_image, qos_profile_sensor_data)
+        # 영상 구독 대기열 1장: 밀리면 오래된 장을 버리고 최신 장만 받음 (11/19: 30 Hz에서 기본 5장이 차서 화면이 0.17 s 늦음
+        # → max_image_travel 속도 제한이 주기마다 달리 걸려 주행 끊김. 차 재생 비교: 느린 주기 31 % → 10 %)
+        self.create_subscription(Image, topics['image'], self.on_image,
+                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(LaserScan, topics['scan'], self.on_scan, qos_profile_sensor_data)
         self.create_subscription(Odometry, topics['odometry'], self.on_odometry, qos_profile_sensor_data)
         # 실측 회전(자이로). /odom 회전은 조향 명령으로 계산한 값이라 구간 판단·차선 변경·라바콘 방향에는 IMU 사용
