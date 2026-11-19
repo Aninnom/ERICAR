@@ -573,7 +573,8 @@ ANSWER_CONFIG = {
     # 3차선 점선 추종 (3lane_chu_js 시제품, 11/19 추추, dash_lane.py). 합성 시험만, 실차 전. 끄기: enabled False → 기존 lane_change 그대로
     # 차로 사이 흰 점선(±0.26)에 차 중심을 두고 달림. 장애물은 라이다로 비는 옆 위치를 골라 몇 cm만 비켜 감
     'dash_lane': {
-        'enabled': True,
+        # 11/19 09:22 끔 (사용자 지시, 시험 주행용): breakfastv3_1119_02에서 넘겨줄 때 차로 번호가 한 칸 틀려 두 칸 가로지르기가 바깥선 너머로 감
+        'enabled': False,
         'default_side': 1,           # 표지판 전에 탈 점선: +1 왼쪽(1|2 사이, A 쪽), −1 오른쪽(0|1 사이, B 쪽)
         'speed': 0.30,               # 점선 위 유지 속도 (m/s). 기존 S2 상한 fork_prepare_speed 0.18 대신 적용
         'shift_speed': 0.22,         # 목표 옆 위치까지 settle(m) 넘게 남았을 때
