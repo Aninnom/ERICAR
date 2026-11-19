@@ -692,7 +692,9 @@ ANSWER_CONFIG = {
         # 11/18 저녁 다시 끔 (사용자 지시, redecide_1118_33): 반대쪽 45°를 본 자세에서 되돌리면 방향만 펴고 끝남(arc_steering 복귀 판정이
         #   차 방향 부호를 안 봄) → 차로 번호만 바뀐 채 가운데 차로에 남아 기둥을 반대쪽으로 피함, right인데 A 진입.
         #   같은 상황(redecide_1118_19·20)은 소민 줄이기(request_shrink, 아래)로 대신함. 줄이기는 되돌리기와 같이 켜면 되돌리기로 넘어감
-        'request_reverse': False, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
+        # 11/19 다시 켬 (사용자 지시: 갈림길 판단 최우선, 연속 차선 변경 중에도 표지판 쪽으로). 위 결함(방향만 펴고 끝남)은 미수정,
+        #   줄이기(request_shrink)가 먼저 보고 못 하는 경우만 되돌리기로 넘어옴. 시험·실차 미확인
+        'request_reverse': True, 'request_reverse_tail': 1.1, 'request_blocked_escape': False,
         # safe_flip_block: 이동 시작 직후(safe_flip_travel m 안) 안전 조향이 목표 반대쪽이고 차이가 safe_flip_max(rad) 넘으면 따르지 않고 정지 (11/17)
         'safe_flip_block': False, 'safe_flip_max': 0.4, 'safe_flip_travel': 0.15, 'safe_flip_offset': 0.08,
         'request_extend_slack': 0.5,   # 넓히기: 기둥을 못 본 채 어림한 한계는 이만큼(m) 넘어도 허용
@@ -745,7 +747,7 @@ ANSWER_CONFIG = {
         # 11/18 통합 시험 브랜치(test/3lane-parking-1118): 실차 시험용으로 켬. main 반영 때는 실차 결과 보고 결정
         # 11/19 다시 켬 (사용자 지시): 끈 상태로는 점선 추종이 넘겨준 뒤 기존 방식이 경기장 배치(합성 venue 6건)에서 75 s 멈춤,
         #   켜면 5/6 통과. 소민 test/dashed-line-avoidance(점선 쪽 당김·갈림길 우회)도 켬 전제
-        'redecide': True, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
+        'redecide': False, 'redecide_front': 1.0, 'redecide_angles': [36.0, 45.0],
         # redecide_tail (11/18, track_test_1118_01~05): cross_two arrival must leave this much free distance ahead (m).
         # 0.2 -> 0.6: all five runs arrived 0.37 m behind an obstacle, then a 0.10 m/s short S (11~16 s).
         # synthetic 100 layouts: 0.2/0.6/1.0 identical (67/100). real car unverified. revert: remove key (falls back to avoid_plan_tail)
