@@ -395,8 +395,16 @@ class Driver:
         → 신호등을 끝냈거나(포기 포함) 꺼져 있을 때, 또는 신호등을 못 본 경우에 대비해 S4에서 일정 거리 간 뒤에만 허용"""
         if self.c['parking'].get('test_wait_for_sign', False):
             return True
-        if 'traffic' in self.done or not self.sections.allows('traffic'):
+        if not self.sections.allows('traffic'):
             return True
+        if 'traffic' in self.done:
+            # 11/20 test_1120_06·08·09: 신호등 정지 중 P 표지판이 최소 면적을 넘겨 녹색 직후 주차 시작
+            #   → 횡단보도 뒷선(정지 + 0.77~0.97 m)을 시작선으로 잡아 칸 3 m 앞 차로에서 회전. 진짜 시작선은 정지 + 2.6~2.9 m
+            #   → 신호등을 끝낸 뒤 auto_start_after_traffic(m) 간 뒤에만 표지판 수용 (성공 29회 시작 지점 정지 + 0.64~1.35 m)
+            #   신호등 끝낸 위치 기록이 없으면(주차 지점 재출발 등) 예전처럼 바로 수용
+            if self.traffic_done_at is None:
+                return True
+            return self.sections.distance - self.traffic_done_at >= self.c['parking'].get('auto_start_after_traffic', .9)
         return self.sections.distance >= self.c['parking'].get('after_traffic_distance', 4.0)
 
     def advance(self, mission):
