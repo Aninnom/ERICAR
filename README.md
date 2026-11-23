@@ -2,17 +2,24 @@
 
 LIMO Pro(Ackermann) 자율주행 코드. Ubuntu 22.04 + ROS 2 Humble, 실차 전용.
 
+## 결과
+
+- 2026 AutoRace 본선(11/19~20, 광주): **주행 99점, 2분 21초 28**
+- 본선 최종 코드: 태그 [`race-2026-final`](https://github.com/Aninnom/ERICAR/releases/tag/race-2026-final) (`2a3afca`)
+- main에 넣지 않은 dev 전용 변경: 태그 `dev-only-1120`
+- 대회 종료로 개발 중단. 아래 실행·Git 규칙은 대회 당시 기준 기록
+
 ## 구조
 
 | 경로 | 내용 |
 |---|---|
 | `ericar_driver/` | 주행 노드 하나. 멘토 ORDA `answer.py` 기반, 역할별 파일 분리. 파일별 담당은 [`ericar_driver/README.md`](ericar_driver/README.md) |
-| `docs/` | 계획(`plan.md`), 차선 설계(`lane.md`), 3차선·갈림길(`three_lane.md`), 토픽, 실차 체크리스트, 결정 기록 |
+| `docs/` | 계획(`plan.md`), 차선 설계(`lane.md`), 3차선·갈림길(`three_lane.md`), 토픽, 실차 체크리스트, 결정 기록. 옛 주차 판본 문서는 `docs/archive/` |
 | `CLAUDE.md` | 팀 작업 안내 (작업 흐름, 차량, 규정 핵심, 현재 상태) |
 
 담당: 혁준·소민 차선 주행, 정윤 주차, 유경 라이다(라바콘·3차선).
 
-현재 상태(11/17, main `2365b70`): 8개 미션 실차 동작 확인(방지턱은 연습 트랙에 없어 미검증), 완주 기록 있음. 미션별 상태와 남은 문제는 [`CLAUDE.md`](CLAUDE.md) "현재 상태", 이슈 #68·#61.
+최종 상태(11/20, main `2a3afca`): 8개 미션 실차 동작, 본선 완주. 주행 기록과 수정 내역은 닫힌 이슈 #68(11/17 3차선·갈림길)·#61(11/15~16 통합 주행).
 
 센서·차량 드라이버는 차량 기본 탑재 패키지 사용. 실행 순서는 [`docs/car_checklist.md`](docs/car_checklist.md).
 

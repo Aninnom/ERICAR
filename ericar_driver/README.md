@@ -1,4 +1,4 @@
-> **parking_auto2:** 최신 main 통합·일반속도 LiDAR 탐색 유지·기본 우회전 유지·흰 선 소실 첫 새 영상 즉시 정지. [업데이트·실행·검증](../docs/parking_auto2.md).
+> **parking_auto2:** 최신 main 통합·일반속도 LiDAR 탐색 유지·기본 우회전 유지·흰 선 소실 첫 새 영상 즉시 정지. [업데이트·실행·검증](../docs/archive/parking_auto2.md).
 
 
 # ericar_driver
